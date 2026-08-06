@@ -1,0 +1,30 @@
+"""会员升级订单模型。"""
+
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database import Base
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"order-{uuid.uuid4().hex[:12]}"
+    )
+    user_id: Mapped[str] = mapped_column(String(50), ForeignKey("users.id"), nullable=False, index=True)
+    membership_id: Mapped[str] = mapped_column(String(50), ForeignKey("memberships.id"), nullable=False)
+    membership_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    billing_cycle: Mapped[str] = mapped_column(String(20), default="monthly")
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    pay_url: Mapped[str] = mapped_column(String(2000), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)

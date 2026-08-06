@@ -1,0 +1,46 @@
+# ── Web 框架 ──
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# ── 数据库 ──
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+pgvector==0.3.6
+
+# ── 鉴权 ──
+pyjwt==2.10.1
+passlib[bcrypt]==1.7.4
+
+# ── 任务队列 ──
+celery==5.4.0
+redis==5.2.1
+
+# ── 对象存储 ──
+minio==7.2.12
+
+# ── 媒体处理 ──
+ffmpeg-python==0.2.0
+Pillow==12.2.0
+
+# ── AI / LLM ──
+openai==1.58.1
+httpx==0.28.1
+
+# ── 短信服务（阿里云）──
+# 未安装时降级为 httpx 直接调用 REST API
+alibabacloud-dysmsapi20170525==3.0.0
+
+# ── 支付服务（支付宝）──
+# 未安装时 billing 模块返回占位支付链接
+python-alipay-sdk==3.1.0
+
+# ── 工具 ──
+pydantic[email]==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+openpyxl==3.1.5
+
+# ── WebSocket ──
+websockets==14.1

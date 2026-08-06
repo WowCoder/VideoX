@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+*.log
+celerybeat-schedule*
+.env
+.env.*
+.git/
+.gitignore

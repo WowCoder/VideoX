@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── 设计令牌（CSS 变量，与 Tailwind 配置互补）── */
+:root {
+  --ink: #0c1730;
+  --ink-2: #132143;
+  --blue: #2865ed;
+  --blue-2: #1e53d5;
+  --blue-soft: #eaf1ff;
+  --teal: #17a890;
+  --amber: #d98a14;
+  --red: #d75151;
+  --text: #172036;
+  --muted: #68738a;
+  --line: #e2e7f0;
+  --surface: #ffffff;
+  --canvas: #f3f6fb;
+  --shadow-soft: 0 8px 24px rgba(23, 35, 63, 0.07);
+}
+
+/* ── 全局重置 ── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  outline: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ── 滚动条 ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(104, 115, 138, 0.3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

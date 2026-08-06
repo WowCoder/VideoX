@@ -1,0 +1,327 @@
+services:
+  # ── PostgreSQL + pgvector ──
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: openvma-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: openvma
+      POSTGRES_PASSWORD: openvma_dev
+      POSTGRES_DB: openvma
+    ports:
+      - "5432:5432"
+    volumes:
+      - openvma_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openvma"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis（Celery broker + WebSocket）──
+  redis:
+    image: redis:7-alpine
+    container_name: openvma-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - openvma_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── MinIO（S3 兼容对象存储）──
+  minio:
+    image: minio/minio:latest
+    container_name: openvma-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: openvma
+      MINIO_ROOT_PASSWORD: openvma_dev
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - openvma_miniodata:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 本地 Embedding：BGE-M3（首次启动会下载真实模型权重）──
+  local-embedding:
+    profiles: ["local-ai"]
+    build:
+      context: ./local-ai/embedding
+    container_name: openvma-local-embedding
+    restart: unless-stopped
+    environment:
+      EMBEDDING_MODEL: BAAI/bge-m3
+      EMBEDDING_DIMENSIONS: 1024
+      MODEL_DEVICE: ${LOCAL_AI_DEVICE:-cpu}
+      LOCAL_AI_API_KEY: ${LOCAL_AI_API_KEY:-}
+      HF_HOME: /models/huggingface
+      MODEL_SOURCE: ${LOCAL_MODEL_SOURCE:-modelscope}
+      MODELSCOPE_CACHE: /models/modelscope
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - openvma_huggingface_models:/models/huggingface
+      - openvma_modelscope_models:/models/modelscope
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  # ── 本地 Reranker：BGE Reranker ──
+  local-reranker:
+    profiles: ["local-ai"]
+    build:
+      context: ./local-ai/reranker
+    container_name: openvma-local-reranker
+    restart: unless-stopped
+    environment:
+      RERANK_MODEL: BAAI/bge-reranker-v2-m3
+      MODEL_DEVICE: ${LOCAL_AI_DEVICE:-cpu}
+      LOCAL_AI_API_KEY: ${LOCAL_AI_API_KEY:-}
+      HF_HOME: /models/huggingface
+      MODEL_SOURCE: ${LOCAL_MODEL_SOURCE:-modelscope}
+      MODELSCOPE_CACHE: /models/modelscope
+    ports:
+      - "127.0.0.1:8002:8000"
+    volumes:
+      - openvma_huggingface_models:/models/huggingface
+      - openvma_modelscope_models:/models/modelscope
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  # ── 本地 ASR：FunASR Paraformer + VAD + 标点 ──
+  local-asr:
+    profiles: ["local-ai"]
+    build:
+      context: ./local-ai/asr
+    container_name: openvma-local-asr
+    restart: unless-stopped
+    environment:
+      MODEL_DEVICE: ${LOCAL_AI_DEVICE:-cpu}
+      LOCAL_AI_API_KEY: ${LOCAL_AI_API_KEY:-}
+      MODELSCOPE_CACHE: /models/modelscope
+    ports:
+      - "127.0.0.1:8003:8000"
+    volumes:
+      - openvma_modelscope_models:/models/modelscope
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 240s
+
+  # ── 本地 OCR：PP-OCR ONNX（兼容 Apple Silicon）──
+  local-ocr:
+    profiles: ["local-ai"]
+    build:
+      context: ./local-ai/ocr
+    container_name: openvma-local-ocr
+    restart: unless-stopped
+    environment:
+      OCR_MODEL: PP-OCRv4-ONNX
+      LOCAL_AI_API_KEY: ${LOCAL_AI_API_KEY:-}
+    ports:
+      - "127.0.0.1:8004:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ── 后端 API ──
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openvma-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: postgresql+asyncpg://openvma:openvma_dev@db:5432/openvma
+      REDIS_URL: redis://redis:6379/0
+      CELERY_TASK_DEFAULT_QUEUE: openvma-docker
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
+      MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-false}
+      MINIO_ACCESS_KEY: openvma
+      MINIO_SECRET_KEY: openvma_dev
+      MINIO_BUCKET: openvma-media
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5273,http://localhost:3000}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,testserver}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-false}
+      # ── 本地基础 AI ──
+      AI_EMBEDDING_PROVIDER: ${AI_EMBEDDING_PROVIDER:-local}
+      AI_RERANK_PROVIDER: ${AI_RERANK_PROVIDER:-local}
+      AI_ASR_PROVIDER: ${AI_ASR_PROVIDER:-local}
+      AI_OCR_PROVIDER: ${AI_OCR_PROVIDER:-local}
+      LOCAL_AI_API_KEY: ${LOCAL_AI_API_KEY:-}
+      LOCAL_EMBEDDING_URL: http://local-embedding:8000
+      LOCAL_RERANK_URL: http://local-reranker:8000
+      LOCAL_ASR_URL: http://local-asr:8000
+      LOCAL_OCR_URL: http://local-ocr:8000
+      AI_EMBEDDING_MODEL: BAAI/bge-m3
+      AI_EMBEDDING_DIMENSIONS: 1024
+      AI_RERANK_MODEL: BAAI/bge-reranker-v2-m3
+      AI_ASR_MODEL: paraformer-zh
+      AI_OCR_MODEL: PP-OCRv4-ONNX
+      # ── 阿里千问 DashScope（线上生成式 AI）──
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      DASHSCOPE_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      DASHSCOPE_API_URL: https://dashscope.aliyuncs.com/api/v1
+      DASHSCOPE_POLL_INTERVAL_SECONDS: ${DASHSCOPE_POLL_INTERVAL_SECONDS:-2}
+      DASHSCOPE_GENERATION_TIMEOUT_SECONDS: ${DASHSCOPE_GENERATION_TIMEOUT_SECONDS:-600}
+      AI_TEXT_PROVIDER: ${AI_TEXT_PROVIDER:-dashscope}
+      AI_TEXT_MODEL: ${AI_TEXT_MODEL:-qwen-plus}
+      AI_IMAGE_PROVIDER: ${AI_IMAGE_PROVIDER:-dashscope}
+      AI_IMAGE_MODEL: ${AI_IMAGE_MODEL:-wanx2.1-t2i-turbo}
+      AI_TEXT_TO_VIDEO_PROVIDER: ${AI_TEXT_TO_VIDEO_PROVIDER:-dashscope}
+      AI_TEXT_TO_VIDEO_MODEL: ${AI_TEXT_TO_VIDEO_MODEL:-wanx2.1-t2v-turbo}
+      AI_IMAGE_TO_VIDEO_PROVIDER: ${AI_IMAGE_TO_VIDEO_PROVIDER:-dashscope}
+      AI_IMAGE_TO_VIDEO_MODEL: ${AI_IMAGE_TO_VIDEO_MODEL:-wan2.7-i2v-2026-04-25}
+      AI_EFFECT_VIDEO_PROVIDER: ${AI_EFFECT_VIDEO_PROVIDER:-dashscope}
+      AI_EFFECT_VIDEO_MODEL: ${AI_EFFECT_VIDEO_MODEL:-wan2.7-i2v-2026-04-25}
+      AI_VIDEO_RESOLUTION: ${AI_VIDEO_RESOLUTION:-720P}
+      AI_VIDEO_DURATION_SECONDS: ${AI_VIDEO_DURATION_SECONDS:-5}
+      AI_VIDEO_PROMPT_EXTEND: ${AI_VIDEO_PROMPT_EXTEND:-true}
+      AI_VIDEO_WATERMARK: ${AI_VIDEO_WATERMARK:-false}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  # ── Celery Worker ──
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openvma-celery
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://openvma:openvma_dev@db:5432/openvma
+      REDIS_URL: redis://redis:6379/0
+      CELERY_TASK_DEFAULT_QUEUE: openvma-docker
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
+      MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-false}
+      MINIO_ACCESS_KEY: openvma
+      MINIO_SECRET_KEY: openvma_dev
+      MINIO_BUCKET: openvma-media
+      AI_EMBEDDING_PROVIDER: ${AI_EMBEDDING_PROVIDER:-local}
+      AI_RERANK_PROVIDER: ${AI_RERANK_PROVIDER:-local}
+      AI_ASR_PROVIDER: ${AI_ASR_PROVIDER:-local}
+      AI_OCR_PROVIDER: ${AI_OCR_PROVIDER:-local}
+      LOCAL_AI_API_KEY: ${LOCAL_AI_API_KEY:-}
+      LOCAL_EMBEDDING_URL: http://local-embedding:8000
+      LOCAL_RERANK_URL: http://local-reranker:8000
+      LOCAL_ASR_URL: http://local-asr:8000
+      LOCAL_OCR_URL: http://local-ocr:8000
+      AI_EMBEDDING_MODEL: BAAI/bge-m3
+      AI_EMBEDDING_DIMENSIONS: 1024
+      AI_RERANK_MODEL: BAAI/bge-reranker-v2-m3
+      AI_ASR_MODEL: paraformer-zh
+      AI_OCR_MODEL: PP-OCRv4-ONNX
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      DASHSCOPE_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      DASHSCOPE_API_URL: https://dashscope.aliyuncs.com/api/v1
+      DASHSCOPE_POLL_INTERVAL_SECONDS: ${DASHSCOPE_POLL_INTERVAL_SECONDS:-2}
+      DASHSCOPE_GENERATION_TIMEOUT_SECONDS: ${DASHSCOPE_GENERATION_TIMEOUT_SECONDS:-600}
+      AI_TEXT_PROVIDER: ${AI_TEXT_PROVIDER:-dashscope}
+      AI_TEXT_MODEL: ${AI_TEXT_MODEL:-qwen-plus}
+      AI_IMAGE_PROVIDER: ${AI_IMAGE_PROVIDER:-dashscope}
+      AI_IMAGE_MODEL: ${AI_IMAGE_MODEL:-wanx2.1-t2i-turbo}
+      AI_TEXT_TO_VIDEO_PROVIDER: ${AI_TEXT_TO_VIDEO_PROVIDER:-dashscope}
+      AI_TEXT_TO_VIDEO_MODEL: ${AI_TEXT_TO_VIDEO_MODEL:-wanx2.1-t2v-turbo}
+      AI_IMAGE_TO_VIDEO_PROVIDER: ${AI_IMAGE_TO_VIDEO_PROVIDER:-dashscope}
+      AI_IMAGE_TO_VIDEO_MODEL: ${AI_IMAGE_TO_VIDEO_MODEL:-wan2.7-i2v-2026-04-25}
+      AI_EFFECT_VIDEO_PROVIDER: ${AI_EFFECT_VIDEO_PROVIDER:-dashscope}
+      AI_EFFECT_VIDEO_MODEL: ${AI_EFFECT_VIDEO_MODEL:-wan2.7-i2v-2026-04-25}
+      AI_VIDEO_RESOLUTION: ${AI_VIDEO_RESOLUTION:-720P}
+      AI_VIDEO_DURATION_SECONDS: ${AI_VIDEO_DURATION_SECONDS:-5}
+      AI_VIDEO_PROMPT_EXTEND: ${AI_VIDEO_PROMPT_EXTEND:-true}
+      AI_VIDEO_WATERMARK: ${AI_VIDEO_WATERMARK:-false}
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 --queues=openvma-docker
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openvma-celery-beat
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://openvma:openvma_dev@db:5432/openvma
+      REDIS_URL: redis://redis:6379/0
+      CELERY_TASK_DEFAULT_QUEUE: openvma-docker
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
+      MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-false}
+      MINIO_ACCESS_KEY: openvma
+      MINIO_SECRET_KEY: openvma_dev
+      MINIO_BUCKET: openvma-media
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule=/tmp/openvma-celerybeat-schedule
+
+  # ── 前端 dev server ──
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: openvma-frontend
+    restart: unless-stopped
+    ports:
+      - "5273:5273"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --force
+
+volumes:
+  openvma_pgdata:
+  openvma_redisdata:
+  openvma_miniodata:
+  openvma_huggingface_models:
+  openvma_modelscope_models:
