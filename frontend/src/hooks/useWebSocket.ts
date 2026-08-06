@@ -5,11 +5,12 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getAccessToken } from "@/api/client";
+import { mapJob, type RawJob } from "@/api/jobs";
 import { useJobStore } from "@/stores/jobStore";
 import type { Job } from "@/types/models";
 
 type WSMessage =
-  | { type: "job_update"; job: Job }
+  | { type: "job_update"; job: RawJob }
   | { type: "job_progress"; jobId: string; progress: number; stage: string; stageIndex: number }
   | { type: "job_completed"; jobId: string; job: Job }
   | { type: "auth_ok" }
@@ -61,7 +62,7 @@ export function useWebSocket(options?: UseWebSocketOptions): UseWebSocketReturn 
         const msg: WSMessage = JSON.parse(event.data);
         switch (msg.type) {
           case "job_update": {
-            upsertJob(msg.job);
+            upsertJob(mapJob(msg.job));
             break;
           }
           case "job_completed": {

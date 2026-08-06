@@ -16,7 +16,7 @@ export interface JobListParams {
 
 /* ── 后端原始类型（snake_case）── */
 
-interface RawJob {
+export interface RawJob {
   id: string;
   project_id: string;
   name: string;
@@ -44,7 +44,7 @@ interface RawJobList {
 
 /* ── 映射函数 ── */
 
-function mapJob(raw: RawJob): Job {
+export function mapJob(raw: RawJob): Job {
   return {
     id: raw.id,
     projectId: raw.project_id,

@@ -172,6 +172,7 @@ services:
       MINIO_ACCESS_KEY: openvma
       MINIO_SECRET_KEY: openvma_dev
       MINIO_BUCKET: openvma-media
+      MAX_UPLOAD_SIZE_GB: ${MAX_UPLOAD_SIZE_GB:-1}
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5273,http://localhost:3000}
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,testserver}

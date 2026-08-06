@@ -33,7 +33,8 @@ interface UploadItem {
 }
 
 const acceptedTypes = ".mp4,.mov,.m4v,.avi,.mkv,.webm,.mp3,.wav,.m4a,.aac,.flac,.ogg,.oga,.opus";
-const maxUploadBytes = 5 * 1024 * 1024 * 1024;
+const maxUploadSizeGiB = 1;
+const maxUploadBytes = maxUploadSizeGiB * 1024 * 1024 * 1024;
 const acceptedExtensions = new Set([
   "mp4", "mov", "m4v", "avi", "mkv", "webm",
   "mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus",
@@ -48,7 +49,7 @@ function validateFile(file: File): string | undefined {
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
   if (!acceptedExtensions.has(extension)) return "不支持该文件扩展名";
   if (file.size <= 0) return "不能上传空文件";
-  if (file.size > maxUploadBytes) return "单个文件不能超过 5GB";
+  if (file.size > maxUploadBytes) return `单个文件不能超过 ${maxUploadSizeGiB} GiB`;
   return undefined;
 }
 
@@ -369,7 +370,7 @@ export function UploadDrawer() {
             <p className="mt-4 text-sm font-medium text-text">
               拖拽视频或音频文件到这里，或<span className="text-blue">点击选择</span>
             </p>
-            <p className="mt-1 text-xs text-muted">单个文件最大 5GB，可同时选择多个文件</p>
+            <p className="mt-1 text-xs text-muted">单个文件最大 {maxUploadSizeGiB} GiB，可同时选择多个文件</p>
             <input
               ref={fileInputRef}
               type="file"

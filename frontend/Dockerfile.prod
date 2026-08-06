@@ -1,0 +1,27 @@
+FROM node:22-alpine AS build
+
+WORKDIR /app
+
+ENV npm_config_audit=false \
+    npm_config_fund=false \
+    npm_config_fetch_retries=2 \
+    npm_config_fetch_retry_maxtimeout=30000 \
+    npm_config_fetch_timeout=60000
+
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY . .
+RUN npm run build
+
+
+FROM nginxinc/nginx-unprivileged:1.27-alpine
+
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+
+ENV APP_DOMAIN=app.example.com \
+    MEDIA_DOMAIN=media.example.com \
+    NGINX_ENVSUBST_FILTER='^(APP_DOMAIN|MEDIA_DOMAIN)$'
+
+EXPOSE 8080

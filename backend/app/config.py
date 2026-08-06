@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     environment: str = "development"
     # ── 数据库 ──
     database_url: str = "postgresql+asyncpg://openvma:openvma_dev@localhost:5432/openvma"
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
 
     # ── Redis ──
     redis_url: str = "redis://localhost:6379/0"
@@ -27,7 +29,7 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_public_endpoint: str = ""
     minio_public_secure: bool = False
-    max_upload_size_gb: int = 5
+    max_upload_size_gb: int = 1
     minio_upload_part_size_mb: int = 16
 
     # ── JWT ──
@@ -162,6 +164,12 @@ class Settings(BaseSettings):
                 raise ValueError(f"{name} 必须是：{', '.join(sorted(allowed))}")
         if self.ai_embedding_dimensions != 1024:
             raise ValueError("当前数据库向量字段固定为 1024 维，AI_EMBEDDING_DIMENSIONS 必须为 1024")
+        if self.db_pool_size < 1:
+            raise ValueError("DB_POOL_SIZE 必须大于等于 1")
+        if self.db_max_overflow < 0:
+            raise ValueError("DB_MAX_OVERFLOW 不能小于 0")
+        if self.max_upload_size_gb < 1:
+            raise ValueError("MAX_UPLOAD_SIZE_GB 必须大于等于 1")
         if self.ai_match_result_limit > self.ai_match_candidate_limit:
             raise ValueError("AI_MATCH_RESULT_LIMIT 不能大于 AI_MATCH_CANDIDATE_LIMIT")
         if self.dashscope_poll_interval_seconds < 0.2:
@@ -287,6 +295,9 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        # 同一个生产 env 文件也供 Compose、PostgreSQL、Redis 和 Nginx 使用。
+        # 应用只读取自己声明的配置项，第三方服务变量由对应容器消费。
+        extra = "ignore"
 
 
 @lru_cache

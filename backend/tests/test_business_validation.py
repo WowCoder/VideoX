@@ -2,7 +2,9 @@ import unittest
 from types import SimpleNamespace
 
 from pydantic import ValidationError
+from fastapi import HTTPException
 
+from app.api.assets import _validate_upload_size
 from app.api.billing import InvoiceCreateRequest
 from app.api.scripts import router as scripts_router
 from app.api.projects import router as projects_router
@@ -30,6 +32,25 @@ class CollaborationRoleTests(unittest.TestCase):
     def test_role_order_is_read_edit_manage(self):
         self.assertLess(ROLE_LEVEL["viewer"], ROLE_LEVEL["editor"])
         self.assertLess(ROLE_LEVEL["editor"], ROLE_LEVEL["owner"])
+
+
+class UploadSizeValidationTests(unittest.TestCase):
+    def test_empty_file_is_rejected(self):
+        with self.assertRaises(HTTPException) as context:
+            _validate_upload_size(0, max_size_gb=1)
+        self.assertEqual(context.exception.status_code, 400)
+
+    def test_non_empty_file_is_accepted(self):
+        _validate_upload_size(1, max_size_gb=1)
+
+    def test_exactly_one_gib_is_accepted(self):
+        _validate_upload_size(1024 * 1024 * 1024, max_size_gb=1)
+
+    def test_one_byte_over_one_gib_is_rejected(self):
+        with self.assertRaises(HTTPException) as context:
+            _validate_upload_size(1024 * 1024 * 1024 + 1, max_size_gb=1)
+        self.assertEqual(context.exception.status_code, 413)
+        self.assertIn("1 GiB", context.exception.detail)
 
 
 class TestAccountManagementTests(unittest.TestCase):

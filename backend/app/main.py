@@ -1,24 +1,84 @@
 """FastAPI 应用入口。"""
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from sqlalchemy import text
+
 from app.middleware.security import RateLimitMiddleware
 
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+async def _check_database() -> None:
+    from app.database import engine
+
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))
+
+
+async def _check_redis() -> None:
+    import redis.asyncio as aioredis
+
+    client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await client.ping()
+    finally:
+        await client.aclose()
+
+
+async def _check_minio() -> None:
+    from app.utils.storage import get_minio_client
+
+    client = await asyncio.to_thread(get_minio_client)
+    exists = await asyncio.to_thread(client.bucket_exists, settings.minio_bucket)
+    if not exists:
+        raise RuntimeError("MinIO bucket is unavailable")
+
+
+async def _readiness_status() -> tuple[bool, dict[str, str]]:
+    checks = {
+        "database": _check_database(),
+        "redis": _check_redis(),
+        "minio": _check_minio(),
+    }
+    results = await asyncio.gather(
+        *(asyncio.wait_for(check, timeout=5) for check in checks.values()),
+        return_exceptions=True,
+    )
+    status: dict[str, str] = {}
+    ready = True
+    for name, result in zip(checks, results):
+        if isinstance(result, BaseException):
+            ready = False
+            status[name] = "unavailable"
+            logger.warning("Readiness check failed for %s: %s", name, result)
+        else:
+            status[name] = "ok"
+    return ready, status
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时初始化，关闭时清理。"""
-    # 启动
-    yield
-    # 关闭
+    from app.api.ws import start_job_update_subscriber, stop_job_update_subscriber
     from app.database import engine
-    await engine.dispose()
+    from app.middleware.security import close_rate_limit_redis
+
+    await start_job_update_subscriber()
+    try:
+        yield
+    finally:
+        await stop_job_update_subscriber()
+        await close_rate_limit_redis()
+        await engine.dispose()
 
 
 app = FastAPI(
@@ -26,6 +86,9 @@ app = FastAPI(
     description="把脚本和素材交给 AI，几分钟得到一版可改的初剪。",
     version="3.0.0",
     lifespan=lifespan,
+    docs_url=None if settings.environment.lower() == "production" else "/docs",
+    redoc_url=None if settings.environment.lower() == "production" else "/redoc",
+    openapi_url=None if settings.environment.lower() == "production" else "/openapi.json",
 )
 
 app.add_middleware(
@@ -58,3 +121,21 @@ app.include_router(collaboration.router, prefix="/api/projects", tags=["项目�
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "version": "3.0.0"}
+
+
+@app.get("/api/health/live")
+async def health_live():
+    return {"status": "ok", "version": "3.0.0"}
+
+
+@app.get("/api/health/ready")
+async def health_ready():
+    ready, checks = await _readiness_status()
+    payload = {
+        "status": "ready" if ready else "unavailable",
+        "version": "3.0.0",
+        "checks": checks,
+    }
+    if not ready:
+        return JSONResponse(status_code=503, content=payload)
+    return payload

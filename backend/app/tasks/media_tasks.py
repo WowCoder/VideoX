@@ -55,15 +55,17 @@ async def _get_job_project_owner(job_id: str) -> Optional[str]:
 
 async def _broadcast_ws(user_id: str, job_data: dict):
     """通过 Redis pub/sub 广播 WebSocket 消息（Celery worker 无法直接访问 FastAPI 内存）。"""
+    if not user_id:
+        return
     import redis.asyncio as aioredis
-    redis = aioredis.from_url(settings.redis_url)
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
         await redis.publish(
             f"ws:job_updates:{user_id}",
             json.dumps(job_data, ensure_ascii=False),
         )
     finally:
-        await redis.close()
+        await redis.aclose()
 
 
 # ────────────────────────────────────────────

@@ -68,7 +68,7 @@ const helpArticles: HelpArticle[] = [
     category: "upload",
     icon: "upload",
     title: "上传素材的格式与限制",
-    summary: "支持 MP4 / MOV / MKV 等常见格式，单文件最大 5GB。",
+    summary: "支持 MP4 / MOV / MKV 等常见格式，单文件最大 1 GiB。",
     steps: [
       "在素材库或工作台点击「上传素材」。",
       "拖拽文件到上传区，或点击选择文件。",

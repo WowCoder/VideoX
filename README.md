@@ -101,6 +101,8 @@ OpenVMA/
 │   ├── asr/                 FunASR 服务
 │   └── ocr/                 PP-OCR ONNX 服务
 ├── docker-compose.yml
+├── compose.prod.yml          生产 Compose（雷池后的内部网关）
+├── deploy/                   发布、备份、回滚与雷池配置手册
 ├── Makefile                 常用开发、检查和维护命令
 └── .env.example
 ```
@@ -128,6 +130,8 @@ Backend、Celery Worker 与 Celery Beat 的 Docker 进程默认使用非 root �
 ## 快速启动
 
 > 根目录的 `docker-compose.yml` 面向本地开发和测试：包含源码挂载、Vite 开发服务器、Uvicorn reload、固定开发凭证及本机端口映射，不应直接作为公网生产部署模板。
+
+生产部署请使用 `compose.prod.yml`，并从 `deploy/README.md` 开始。推荐公网入口为雷池 SafeLine，仓库内 Nginx 只作为受保护的内部上游。
 
 ### 1. 创建环境配置
 

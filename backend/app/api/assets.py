@@ -97,6 +97,19 @@ def _file_size(upload: UploadFile) -> int:
     return size
 
 
+def _validate_upload_size(file_size: int, max_size_gb: int | None = None) -> None:
+    """校验单文件大小；GiB 使用 1024³ 字节精确定义。"""
+    if file_size <= 0:
+        raise HTTPException(status_code=400, detail="不能上传空文件")
+    size_limit_gb = settings.max_upload_size_gb if max_size_gb is None else max_size_gb
+    max_size_bytes = size_limit_gb * 1024 * 1024 * 1024
+    if file_size > max_size_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"单个文件不能超过 {size_limit_gb} GiB",
+        )
+
+
 def _probe_upload_stream(upload: UploadFile) -> dict:
     """直接探测 Starlette 的临时文件，不把完整媒体读入内存。"""
     stream = upload.file
@@ -298,14 +311,7 @@ async def upload_asset(
 
     safe_name = _safe_filename(file.filename)
     file_size = await asyncio.to_thread(_file_size, file)
-    if file_size <= 0:
-        raise HTTPException(status_code=400, detail="不能上传空文件")
-    max_size = settings.max_upload_size_gb * 1024 * 1024 * 1024
-    if file_size > max_size:
-        raise HTTPException(
-            status_code=413,
-            detail=f"单个文件不能超过 {settings.max_upload_size_gb}GB",
-        )
+    _validate_upload_size(file_size)
 
     await file.seek(0)
     header = await file.read(64)

@@ -5,6 +5,7 @@ from unittest.mock import patch
 from pydantic import ValidationError
 
 from app.config import Settings
+from app.main import _readiness_status
 from app.utils.network_security import validate_external_media_url
 
 
@@ -51,6 +52,47 @@ class ProductionSettingsTests(unittest.TestCase):
     def test_rejects_non_1024_embedding_configuration(self):
         with self.assertRaisesRegex(ValidationError, "1024"):
             Settings(_env_file=None, ai_embedding_dimensions=768)
+
+    def test_rejects_invalid_database_pool_configuration(self):
+        with self.assertRaisesRegex(ValidationError, "DB_POOL_SIZE"):
+            Settings(_env_file=None, db_pool_size=0)
+
+    def test_shared_environment_can_contain_compose_only_values(self):
+        settings = Settings(_env_file=None, compose_only_value="ignored")
+        self.assertEqual(settings.environment, "development")
+
+
+class ReadinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_all_dependencies_ready(self):
+        async def healthy():
+            return None
+
+        with (
+            patch("app.main._check_database", side_effect=healthy),
+            patch("app.main._check_redis", side_effect=healthy),
+            patch("app.main._check_minio", side_effect=healthy),
+        ):
+            ready, checks = await _readiness_status()
+
+        self.assertTrue(ready)
+        self.assertEqual(checks, {"database": "ok", "redis": "ok", "minio": "ok"})
+
+    async def test_failed_dependency_marks_service_unavailable(self):
+        async def healthy():
+            return None
+
+        async def unavailable():
+            raise RuntimeError("offline")
+
+        with (
+            patch("app.main._check_database", side_effect=healthy),
+            patch("app.main._check_redis", side_effect=unavailable),
+            patch("app.main._check_minio", side_effect=healthy),
+        ):
+            ready, checks = await _readiness_status()
+
+        self.assertFalse(ready)
+        self.assertEqual(checks["redis"], "unavailable")
 
 
 class ExternalUrlSecurityTests(unittest.TestCase):
