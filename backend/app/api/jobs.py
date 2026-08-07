@@ -44,6 +44,7 @@ def _dispatch_replay(job: Job):
             job.payload["project_id"],
             job.payload["script_id"],
             job.payload["source_project_id"],
+            job.payload.get("cut_version_id", ""),
         )
     if job.type == "导出":
         from app.tasks.export_tasks import export_project
@@ -52,6 +53,7 @@ def _dispatch_replay(job: Job):
             job.id,
             job.payload.get("format", "mp4"),
             job.payload.get("resolution", "1080p"),
+            job.payload.get("cut_version_id", ""),
         )
     if job.type == "镜头匹配":
         if job.payload.get("shot_ids"):
@@ -81,7 +83,7 @@ def _dispatch_replay(job: Job):
     if job.type == "示意图特效视频":
         from app.tasks.generate_tasks import generate_effect_shot
         return generate_effect_shot.delay(
-            job.payload["shot_id"], job.id, job.payload.get("sketch_data", "")
+            job.payload["shot_id"], job.id, job.payload.get("motion_description", "")
         )
     raise HTTPException(status_code=400, detail=f"{job.type or '该类型'}任务不支持安全重放")
 

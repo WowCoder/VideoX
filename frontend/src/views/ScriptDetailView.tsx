@@ -63,6 +63,7 @@ import type {
   CameraRhythm,
   VisualMode,
   Candidate,
+  ShotGeneration,
   Asset,
   Clip,
 } from "@/types/models";
@@ -87,7 +88,7 @@ const DEFAULT_VISUAL_CONFIG: VisualConfig = {
   cameraRhythm: "稳定推进",
   consistencyEnabled: true,
   generationPolicy:
-    "优先复用统一素材库中的角色与场景，缺失时按整体风格补齐镜头，保持跨分镜光线、色调与构图一致性。",
+    "优先复用项目统一素材中的角色与场景，缺失时按整体风格补齐镜头，保持跨分镜光线、色调与构图一致性。",
   references: { characters: [], objects: [], spaces: [] },
 };
 
@@ -100,6 +101,7 @@ function newShot(desc = "", duration = 4): Shot {
     visualMode: null,
     duration,
     notes: "",
+    generations: [],
     candidates: [],
   };
 }
@@ -218,12 +220,16 @@ export default function ScriptDetailView() {
   const [toast, setToast] = useState<string | null>(null);
   const [genStates, setGenStates] = useState<Record<string, ShotGenStates>>({});
   const [referencePicker, setReferencePicker] = useState<keyof VisualConfig["references"] | null>(null);
+  const [assetImportOpen, setAssetImportOpen] = useState(false);
   const initializedScriptId = useRef<string | null>(null);
   const editVersionRef = useRef(0);
 
   const referenceAssetsQuery = useQuery({
     queryKey: ["reference-assets", data?.projectId],
-    queryFn: () => assetApi.list({ projectId: data!.projectId }),
+    queryFn: async () => ({
+      items: await assetApi.listAll({ projectId: data!.projectId }),
+      total: 0,
+    }),
     enabled: Boolean(data?.projectId),
     retry: false,
   });
@@ -283,6 +289,10 @@ export default function ScriptDetailView() {
                   generatedImagePath: remote.generatedImagePath,
                   generatedVideoPath: remote.generatedVideoPath,
                   generatedEffectVideoPath: remote.generatedEffectVideoPath,
+                  generations: remote.generations,
+                  candidates: remote.candidates,
+                  selectedClipId: remote.selectedClipId,
+                  visualMode: remote.visualMode,
                 }
               : shot;
           }),
@@ -635,14 +645,12 @@ export default function ScriptDetailView() {
       units: ScriptUnit[];
       version: number;
     }) => {
-      const [meta, unitResult] = await Promise.all([
-        scriptApi.update(scriptId!, {
-          title: payload.title,
-          visualConfig: payload.visualConfig,
-        }),
-        scriptApi.batchUpdateUnits(scriptId!, payload.units),
-      ]);
-      return { meta, units: unitResult.units, version: payload.version };
+      const saved = await scriptApi.saveEditorState(scriptId!, {
+        title: payload.title,
+        visualConfig: payload.visualConfig,
+        units: payload.units,
+      });
+      return { saved, version: payload.version };
     },
     onMutate: () => setSaveStatus("saving"),
     onSuccess: (result) => {
@@ -651,11 +659,11 @@ export default function ScriptDetailView() {
         setToast("已保存上一版，当前还有未保存修改");
         return;
       }
-      const savedScript = { ...result.meta, units: result.units };
+      const savedScript = { ...result.saved, units: result.saved.units ?? [] };
       setCurrentScript(savedScript);
-      setScriptMeta(result.meta);
-      setDraftTitle(result.meta.title);
-      setVisualConfig(result.meta.visualConfig ?? visualConfig);
+      setScriptMeta(savedScript);
+      setDraftTitle(savedScript.title);
+      setVisualConfig(savedScript.visualConfig ?? visualConfig);
       setLastSavedAt("刚刚");
       setSaveStatus("saved");
       queryClient.setQueryData(["script", scriptId], savedScript);
@@ -675,7 +683,7 @@ export default function ScriptDetailView() {
     onSuccess: (res) => {
       setToast(`初剪任务已创建（任务 ${res.jobId}）`);
       void queryClient.invalidateQueries({ queryKey: ["linked-cuts", scriptId] });
-      navigate(`/workspace/projects/${res.project.id}`);
+      navigate(`/workspace/projects/${res.project.id}/editor?version=${encodeURIComponent(res.versionId)}`);
     },
     onError: (error) => setToast(`初剪生成失败：${errorMessage(error, "请重试")}`),
   });
@@ -829,7 +837,9 @@ export default function ScriptDetailView() {
       return;
     }
     const confirmed = window.confirm(
-      "将基于当前脚本创建一个独立初剪项目。原脚本不会被修改，系统会保存内部任务快照。是否继续？",
+      linkedCutsQuery.data?.length
+        ? "将在现有剪辑项目中创建一个新版本。原脚本和已有版本都不会被修改，是否继续？"
+        : "将基于当前脚本创建剪辑项目和 V1。原脚本不会被修改，是否继续？",
     );
     if (confirmed) roughCutMutation.mutate();
   };
@@ -921,6 +931,30 @@ export default function ScriptDetailView() {
         kind: "effect",
         error: errorMessage(error, "特效生成失败，请重试"),
       }),
+  });
+
+  const selectGenerationMutation = useMutation({
+    mutationFn: (value: { shotId: string; generationId: string }) =>
+      scriptApi.selectGeneration(scriptId!, value.shotId, value.generationId),
+    onSuccess: (savedShot) => {
+      updateCurrentUnits(draftUnits.map((unit) => ({
+        ...unit,
+        shots: unit.shots.map((shot) => shot.id === savedShot.id ? savedShot : shot),
+      })));
+      void queryClient.invalidateQueries({ queryKey: ["script", scriptId] });
+      setToast("已采用该生成结果，其他历史候选仍会保留");
+    },
+    onError: (error) => setToast(`采用失败：${errorMessage(error, "请重试")}`),
+  });
+
+  const importAssetsMutation = useMutation({
+    mutationFn: (assetIds: string[]) => projectApi.importAssets(scriptMeta!.projectId, assetIds),
+    onSuccess: (assets) => {
+      setAssetImportOpen(false);
+      void referenceAssetsQuery.refetch();
+      setToast(`已导入 ${assets.length} 个素材到当前项目`);
+    },
+    onError: (error) => setToast(`素材导入失败：${errorMessage(error, "请重试")}`),
   });
 
   const handleExport = async (format: "pdf" | "xlsx" | "json" | "csv") => {
@@ -1032,21 +1066,19 @@ export default function ScriptDetailView() {
               </>
             )}
           </div>
-          {saveStatus === "saved" ? (
-            <span className="flex min-w-[92px] items-center justify-center gap-2 rounded-xl bg-teal/10 px-3 py-2 text-xs font-medium text-teal">
-              <Check className="h-4 w-4" />
-              <span><strong className="block">已保存</strong><small className="block font-normal">{lastSavedAt}</small></span>
-            </span>
-          ) : (
-            <button
-              onClick={saveAll}
-              disabled={saveStatus === "saving" || saveMutation.isPending}
-              className="flex items-center gap-1.5 rounded-lg bg-[#171717] px-3.5 py-2 text-sm font-medium text-white transition hover:bg-black disabled:opacity-55"
-            >
-              {saveStatus === "saving" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              {saveStatus === "saving" ? "保存中…" : "保存更改"}
-            </button>
-          )}
+          <button
+            onClick={saveAll}
+            disabled={saveStatus === "saving" || saveMutation.isPending || saveStatus === "saved"}
+            className={clsx(
+              "flex min-w-[108px] items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition disabled:cursor-default",
+              saveStatus === "saved"
+                ? "bg-teal/10 text-teal"
+                : "bg-[#171717] text-white hover:bg-black disabled:opacity-55",
+            )}
+          >
+            {saveStatus === "saving" ? <Loader2 className="h-4 w-4 animate-spin" /> : saveStatus === "saved" ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+            {saveStatus === "saving" ? "保存中…" : saveStatus === "saved" ? `已保存 ${lastSavedAt}` : "保存更改"}
+          </button>
         </div>
       </header>
 
@@ -1111,7 +1143,7 @@ export default function ScriptDetailView() {
                 disabled={!allShots.length || matchMutation.isPending}
                 className="flex items-center gap-1.5 rounded-lg border border-blue px-3 py-2 text-xs font-medium text-blue transition hover:bg-blue-soft disabled:opacity-40"
               >
-                <Search className="h-4 w-4" />自动匹配素材
+                <Search className="h-4 w-4" />生成素材候选
               </button>
             </div>
           )}
@@ -1126,6 +1158,7 @@ export default function ScriptDetailView() {
           setRefTab={setRefTab}
           patchReference={patchReference}
           addReference={addReference}
+          onImportAssets={() => setAssetImportOpen(true)}
           removeReference={removeReference}
           referenceAssets={referenceAssetsQuery.data?.items ?? []}
           onRoughCut={startRoughCut}
@@ -1134,7 +1167,7 @@ export default function ScriptDetailView() {
           linkedCutsLoading={linkedCutsQuery.isLoading}
           linkedCutsError={linkedCutsQuery.error}
           onRetryLinkedCuts={() => void linkedCutsQuery.refetch()}
-          onOpenCut={(projectId) => navigate(`/workspace/projects/${projectId}/editor`)}
+          onOpenCut={(projectId, versionId) => navigate(`/workspace/projects/${projectId}/editor?version=${encodeURIComponent(versionId)}`)}
           shotCount={allShots.length}
           matchedShotCount={matchedCount}
         />
@@ -1163,11 +1196,11 @@ export default function ScriptDetailView() {
         <section className="storyboard-table-shell min-h-[260px] shrink-0 overflow-x-auto rounded-xl border border-[#dcdce0] bg-white shadow-[0_8px_28px_rgba(20,20,24,.035)]" aria-label="分镜脚本编辑表">
           <div className="storyboard-table-grid sticky top-0 z-10 border-b border-[#dedee2] bg-[#f7f7f8] text-xs font-semibold text-[#66666c]">
             <div className="storyboard-header-cell text-center">序号</div>
-            <div className="storyboard-header-cell">大纲 / 画面意图</div>
-            <div className="storyboard-header-cell">分镜描述（可多条）</div>
-            <div className="storyboard-header-cell">画面结果</div>
-            <div className="storyboard-header-cell">台词文案（共享）</div>
-            <div className="storyboard-header-cell">备注 / 时长</div>
+            <div className="storyboard-header-cell" title="概括这句脚本的内容；表达目标用于补充希望画面传达的重点">脚本句概括 / 表达目标</div>
+            <div className="storyboard-header-cell" title="逐镜头描述主体、环境、景别、动作和构图，可为一句脚本添加多个镜头">镜头画面描述（可多条）</div>
+            <div className="storyboard-header-cell" title="当前明确采用的真实素材或 AI 生成结果">已选画面</div>
+            <div className="storyboard-header-cell" title="同一句脚本下的所有分镜共用这段台词或旁白">台词 / 旁白（同句共用）</div>
+            <div className="storyboard-header-cell" title="记录制作要求，并设置该镜头期望占用的时长">制作备注 / 目标时长</div>
           </div>
           {draftUnits.length ? draftUnits.map((unit) => (
             <StoryboardSceneRow
@@ -1257,6 +1290,11 @@ export default function ScriptDetailView() {
                 visualMode: "recommend",
                 status: "已选择",
               }))}
+              onSelectGeneration={(generationId) => selectGenerationMutation.mutate({
+                shotId: selected.shot.id,
+                generationId,
+              })}
+              generationSelecting={selectGenerationMutation.isPending}
               imgLoading={imgGen.isPending}
               videoLoading={videoGen.isPending}
               effectLoading={effectGen.isPending}
@@ -1280,6 +1318,14 @@ export default function ScriptDetailView() {
           onRetry={() => void referenceAssetsQuery.refetch()}
           onClose={() => setReferencePicker(null)}
           onConfirm={(references) => confirmReferences(referencePicker, references)}
+        />
+      )}
+      {assetImportOpen && scriptMeta?.projectId && (
+        <AssetImportModal
+          targetProjectId={scriptMeta.projectId}
+          loading={importAssetsMutation.isPending}
+          onClose={() => setAssetImportOpen(false)}
+          onImport={(assetIds) => importAssetsMutation.mutate(assetIds)}
         />
       )}
       {scriptId && (
@@ -1319,6 +1365,7 @@ interface VisualConfigCardProps {
     patch: Partial<Reference>,
   ) => void;
   addReference: (key: keyof VisualConfig["references"]) => void;
+  onImportAssets: () => void;
   removeReference: (key: keyof VisualConfig["references"], refId: string) => void;
   referenceAssets: Asset[];
   onRoughCut: () => void;
@@ -1327,7 +1374,7 @@ interface VisualConfigCardProps {
   linkedCutsLoading: boolean;
   linkedCutsError: Error | null;
   onRetryLinkedCuts: () => void;
-  onOpenCut: (projectId: string) => void;
+  onOpenCut: (projectId: string, versionId: string) => void;
   shotCount: number;
   matchedShotCount: number;
 }
@@ -1342,6 +1389,7 @@ function VisualConfigCard(props: VisualConfigCardProps) {
     setRefTab,
     patchReference,
     addReference,
+    onImportAssets,
     removeReference,
     referenceAssets,
     onRoughCut,
@@ -1383,7 +1431,7 @@ function VisualConfigCard(props: VisualConfigCardProps) {
           {linkedCuts[0] && (
             <button
               type="button"
-              onClick={() => onOpenCut(linkedCuts[0].projectId)}
+              onClick={() => onOpenCut(linkedCuts[0].projectId, linkedCuts[0].versionId)}
               className="flex items-center gap-1.5 rounded-lg border border-blue/30 bg-blue-soft px-3 py-2 text-xs font-medium text-blue hover:bg-blue-soft/70"
             >
               <Film className="h-3.5 w-3.5" />
@@ -1422,9 +1470,9 @@ function VisualConfigCard(props: VisualConfigCardProps) {
             <div className="flex gap-2 overflow-x-auto pb-0.5">
               {linkedCuts.map((cut, index) => (
                 <button
-                  key={cut.projectId}
+                  key={cut.versionId}
                   type="button"
-                  onClick={() => onOpenCut(cut.projectId)}
+                  onClick={() => onOpenCut(cut.projectId, cut.versionId)}
                   className="flex min-w-[210px] items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-2 text-left hover:border-blue/30 hover:bg-blue-soft/20"
                 >
                   <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-blue-soft text-blue">
@@ -1432,7 +1480,7 @@ function VisualConfigCard(props: VisualConfigCardProps) {
                   </span>
                   <span className="min-w-0 flex-1">
                     <strong className="block truncate text-[11px] text-text">
-                      {cut.name || `剪辑版本 ${index + 1}`}
+                      {cut.name || "剪辑项目"} · {cut.versionName || `V${index + 1}`}
                     </strong>
                     <small className="mt-0.5 block truncate text-[10px] text-muted">
                       {cut.aspectRatio || "16:9"} · {cut.status} · {cut.updatedAt}
@@ -1512,14 +1560,16 @@ function VisualConfigCard(props: VisualConfigCardProps) {
 
           <section className="min-w-0 rounded-xl border border-[#e3e3e7] bg-white p-3">
             <div className="mb-2 flex items-start justify-between gap-3">
-              <div><strong className="block text-xs text-[#45454a]">统一素材库</strong><p className="mt-0.5 text-[11px] text-muted">锁定角色、关键物品和场景空间，供所有分镜共同引用。</p></div>
-              <button
-                onClick={() => addReference(refTab)}
-                className="flex shrink-0 items-center gap-1 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-text hover:border-blue hover:text-blue"
-              >
-                <Plus className="h-3 w-3" />
-                添加{REF_TABS.find((tab) => tab.key === refTab)?.label}
-              </button>
+              <div><strong className="block text-xs text-[#45454a]">项目统一素材</strong><p className="mt-0.5 text-[11px] text-muted">仅使用当前项目素材；可先从其他项目导入，再锁定角色、物品和空间。</p></div>
+              <div className="flex shrink-0 gap-1.5">
+                <button onClick={onImportAssets} className="rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-text hover:border-blue hover:text-blue">从其他项目导入</button>
+                <button
+                  onClick={() => addReference(refTab)}
+                  className="flex items-center gap-1 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-text hover:border-blue hover:text-blue"
+                >
+                  <Plus className="h-3 w-3" />添加{REF_TABS.find((tab) => tab.key === refTab)?.label}
+                </button>
+              </div>
             </div>
             <div className="mb-2 flex w-fit gap-1 rounded-lg bg-canvas p-1">
               {REF_TABS.map((t) => (
@@ -1717,8 +1767,8 @@ function ReferencePickerModal({
       <section className="relative z-10 flex max-h-[78vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-soft">
         <header className="flex items-center justify-between border-b border-line px-5 py-4">
           <div>
-            <h2 className="text-base font-semibold text-text">从真实素材库选择{label}</h2>
-            <p className="mt-0.5 text-xs text-muted">只有确认后才会写入脚本视觉配置</p>
+            <h2 className="text-base font-semibold text-text">从当前项目素材选择{label}</h2>
+            <p className="mt-0.5 text-xs text-muted">这里只展示当前项目素材；确认后才会写入脚本视觉配置</p>
           </div>
           <button type="button" onClick={onClose} aria-label="关闭" className="rounded-lg p-2 text-muted hover:bg-canvas">
             <X className="h-4 w-4" />
@@ -1787,6 +1837,70 @@ function ReferencePickerModal({
   );
 }
 
+function AssetImportModal({
+  targetProjectId,
+  loading,
+  onClose,
+  onImport,
+}: {
+  targetProjectId: string;
+  loading: boolean;
+  onClose: () => void;
+  onImport: (assetIds: string[]) => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const assetsQuery = useQuery({
+    queryKey: ["importable-assets", targetProjectId],
+    queryFn: () => assetApi.listAll(),
+  });
+  const projectsQuery = useQuery({
+    queryKey: ["projects", "asset-import"],
+    queryFn: () => projectApi.list({ pageSize: 100 }),
+  });
+  const projectNames = new Map((projectsQuery.data?.items ?? []).map((project) => [project.id, project.name]));
+  const keyword = search.trim().toLowerCase();
+  const assets = (assetsQuery.data ?? []).filter((asset) =>
+    asset.projectId !== targetProjectId
+    && (!keyword || [asset.name, projectNames.get(asset.projectId), ...(asset.tags ?? [])]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(keyword))),
+  );
+  const toggle = (assetId: string) => setSelected((previous) => {
+    const next = new Set(previous);
+    if (next.has(assetId)) next.delete(assetId);
+    else next.add(assetId);
+    return next;
+  });
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-ink/55 p-6 backdrop-blur-sm">
+      <button type="button" aria-label="关闭素材导入" className="absolute inset-0" onClick={onClose} />
+      <section className="relative z-10 flex max-h-[78vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-soft">
+        <header className="flex items-center justify-between border-b border-line px-5 py-4">
+          <div><h2 className="text-base font-semibold text-text">从其他项目导入素材</h2><p className="mt-0.5 text-xs text-muted">导入后会出现在当前项目统一素材中，不会重复占用存储空间。</p></div>
+          <button type="button" onClick={onClose} className="rounded-lg p-2 text-muted hover:bg-canvas"><X className="h-4 w-4" /></button>
+        </header>
+        <div className="border-b border-line p-4">
+          <div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索项目、素材名称或标签…" className="w-full rounded-lg border border-line bg-canvas py-2 pl-9 pr-3 text-sm" /></div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {assetsQuery.isLoading ? <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-blue" /></div> : assets.length ? (
+            <div className="grid gap-3 sm:grid-cols-2">{assets.map((asset) => (
+              <button key={asset.id} type="button" onClick={() => toggle(asset.id)} className={clsx("flex items-center gap-3 rounded-xl border p-2.5 text-left", selected.has(asset.id) ? "border-blue bg-blue-soft/40" : "border-line hover:border-blue/40")}>
+                <Thumbnail variant={asset.variant} imageUrl={asset.thumbnailUrl} className="h-16 w-24 shrink-0 rounded-lg" />
+                <span className="min-w-0 flex-1"><strong className="block truncate text-sm text-text">{asset.name}</strong><small className="mt-1 block truncate text-xs text-muted">{projectNames.get(asset.projectId) ?? "其他项目"}</small><small className="block text-[11px] text-muted">{asset.clips.length} 个可用片段</small></span>
+                <span className={clsx("grid h-5 w-5 shrink-0 place-items-center rounded border", selected.has(asset.id) ? "border-blue bg-blue text-white" : "border-line")}>{selected.has(asset.id) && <Check className="h-3.5 w-3.5" />}</span>
+              </button>
+            ))}</div>
+          ) : <div className="py-16 text-center text-sm text-muted">没有可导入的其他项目素材</div>}
+        </div>
+        <footer className="flex items-center justify-between border-t border-line px-5 py-3"><span className="text-xs text-muted">已选择 {selected.size} 个素材</span><div className="flex gap-2"><button type="button" onClick={onClose} className="rounded-lg border border-line px-4 py-2 text-sm">取消</button><button type="button" disabled={!selected.size || loading} onClick={() => onImport([...selected])} className="flex items-center gap-1.5 rounded-lg bg-blue px-4 py-2 text-sm font-medium text-white disabled:opacity-40">{loading && <Loader2 className="h-4 w-4 animate-spin" />}导入当前项目</button></div></footer>
+      </section>
+    </div>
+  );
+}
+
 /* ──────────────────────────────────────────────
    子组件：一句脚本 + 多个分镜行
    ────────────────────────────────────────────── */
@@ -1843,17 +1957,17 @@ function StoryboardSceneRow(props: StoryboardSceneRowProps) {
 
       <div className="storyboard-cell flex flex-col gap-3" style={{ ...sharedStyle, gridColumn: 2 }}>
         <label className="block">
-          <span className="mb-1.5 block text-[11px] font-medium text-muted">大纲</span>
+          <span className="mb-1.5 block text-[11px] font-medium text-muted" title="用一句话概括本句脚本的内容和拍摄主题">脚本句概括</span>
           <textarea value={unit.outline} onChange={(event) => onUpdateUnit({ outline: event.target.value })} rows={3} placeholder="概括这句脚本的拍摄内容" className="storyboard-textarea min-h-[72px] p-1.5 font-medium" />
         </label>
         <details className="rounded-lg border border-line bg-canvas/55 px-2.5 py-2">
-          <summary className="cursor-pointer text-[11px] font-medium text-muted">画面意图（高级）</summary>
-          <textarea value={unit.intent} onChange={(event) => onUpdateUnit({ intent: event.target.value })} rows={3} placeholder="补充这句脚本希望表达的画面意图" className="storyboard-textarea mt-2 min-h-[66px] bg-white p-2" />
+          <summary className="cursor-pointer text-[11px] font-medium text-muted">表达目标（选填）</summary>
+          <textarea value={unit.intent} onChange={(event) => onUpdateUnit({ intent: event.target.value })} rows={3} placeholder="补充希望画面传达的情绪、信息重点或品牌感受" className="storyboard-textarea mt-2 min-h-[66px] bg-white p-2" />
         </details>
       </div>
 
       <div className="storyboard-cell flex flex-col" style={{ ...sharedStyle, gridColumn: 5 }}>
-        <span className="mb-2 block text-[11px] font-medium text-muted">台词文案 · 同句分镜共享</span>
+        <span className="mb-2 block text-[11px] font-medium text-muted">台词 / 旁白 · 同句分镜共用</span>
         <textarea
           value={unit.text}
           onChange={(event) => onUpdateUnit({ text: event.target.value })}
@@ -1890,7 +2004,7 @@ function StoryboardSceneRow(props: StoryboardSceneRowProps) {
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <textarea value={shot.description} onChange={(event) => onUpdateShot(shot.id, { description: event.target.value })} rows={6} placeholder="描述景别、主体、动作、构图和运镜" className="storyboard-textarea min-h-[112px] flex-1 rounded-lg bg-[#fafafa] p-3" />
+              <textarea value={shot.description} onChange={(event) => onUpdateShot(shot.id, { description: event.target.value })} rows={6} placeholder="描述这个镜头的主体、环境、景别、动作、构图和运镜" className="storyboard-textarea min-h-[112px] flex-1 rounded-lg bg-[#fafafa] p-3" />
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 <button onClick={() => onAiComplete(shot.id)} disabled={aiLoading} className="flex items-center gap-1 rounded-md bg-canvas px-2 py-1.5 text-[11px] text-muted hover:text-blue disabled:opacity-45">
                   {aiLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
@@ -1927,7 +2041,7 @@ function StoryboardSceneRow(props: StoryboardSceneRowProps) {
             </div>
 
             <div className={clsx("storyboard-cell storyboard-shot-cell flex flex-col", hasNext && "has-next-shot", active && "is-active")} style={{ ...rowStyle, gridColumn: 6 }}>
-              <span className="mb-1.5 text-[11px] font-medium text-muted">备注 · 分镜 {String(shotIndex + 1).padStart(2, "0")}</span>
+              <span className="mb-1.5 text-[11px] font-medium text-muted">制作备注 · 分镜 {String(shotIndex + 1).padStart(2, "0")}</span>
               <textarea value={shot.notes} onChange={(event) => onUpdateShot(shot.id, { notes: event.target.value })} rows={5} placeholder="拍摄、特效或审核备注" className="storyboard-textarea min-h-[104px] flex-1 rounded-lg bg-[#fafafa] p-2.5" />
               <label className="mt-2 flex items-center gap-2 rounded-lg border border-line px-2.5 py-2 text-xs text-muted">
                 <Clock3 className="h-3.5 w-3.5" />
@@ -1959,6 +2073,8 @@ interface ProductionPanelProps {
   onGenerateVideo: (motion: string) => void;
   onGenerateEffect: (sketchData: string, motion: string) => void;
   onRelate: (candidateId: string) => void;
+  onSelectGeneration: (generationId: string) => void;
+  generationSelecting: boolean;
   imgLoading: boolean;
   videoLoading: boolean;
   effectLoading: boolean;
@@ -1979,6 +2095,8 @@ function ProductionPanel(props: ProductionPanelProps) {
     onGenerateVideo,
     onGenerateEffect,
     onRelate,
+    onSelectGeneration,
+    generationSelecting,
     imgLoading,
     videoLoading,
     effectLoading,
@@ -2056,6 +2174,8 @@ function ProductionPanel(props: ProductionPanelProps) {
             loading={imgLoading}
             onGenerate={onGenerateImage}
             onRefreshMedia={onRefreshMedia}
+            onSelectGeneration={onSelectGeneration}
+            generationSelecting={generationSelecting}
           />
         ) : activeTab === "video" ? (
           <VideoTab
@@ -2066,6 +2186,8 @@ function ProductionPanel(props: ProductionPanelProps) {
             onGenerate={onGenerateVideo}
             capability={capabilities?.imageToVideo}
             onRefreshMedia={onRefreshMedia}
+            onSelectGeneration={onSelectGeneration}
+            generationSelecting={generationSelecting}
           />
         ) : (
           <SketchTab
@@ -2074,6 +2196,8 @@ function ProductionPanel(props: ProductionPanelProps) {
             loading={effectLoading}
             onGenerate={onGenerateEffect}
             capability={capabilities?.effectVideo}
+            onSelectGeneration={onSelectGeneration}
+            generationSelecting={generationSelecting}
           />
         )}
       </div>
@@ -2139,7 +2263,7 @@ function RecommendTab({
           <div className="flex-1">
             <div className="text-sm font-medium text-text">素材智能匹配</div>
             <p className="mt-0.5 text-xs text-muted">
-              基于分镜描述在素材库中检索候选画面，按匹配度排序，低置信度结果会标记提示。
+              基于分镜描述在当前项目素材中生成候选画面。匹配完成后不会自动采用，请逐条预览确认。
             </p>
           </div>
         </div>
@@ -2149,13 +2273,13 @@ function RecommendTab({
           className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-2 disabled:opacity-60"
         >
           {matchLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-          重新匹配素材
+          重新生成素材候选
         </button>
       </div>
 
       {shot.candidates.length === 0 ? (
         <div className="rounded-lg border border-dashed border-line py-8 text-center text-xs text-muted">
-          暂无匹配候选，点击「重新匹配素材」
+          暂无候选，点击「重新生成素材候选」
         </div>
       ) : (
         shot.candidates.map((c) => (
@@ -2181,6 +2305,8 @@ function ImageTab({
   loading,
   onGenerate,
   onRefreshMedia,
+  onSelectGeneration,
+  generationSelecting,
 }: {
   shot: Shot;
   genState?: GenState;
@@ -2188,6 +2314,8 @@ function ImageTab({
   loading: boolean;
   onGenerate: (description: string) => void;
   onRefreshMedia: () => void;
+  onSelectGeneration: (generationId: string) => void;
+  generationSelecting: boolean;
 }) {
   const [prompt, setPrompt] = useState(shot.description);
   useEffect(() => setPrompt(shot.description), [shot.id, shot.description]);
@@ -2228,10 +2356,18 @@ function ImageTab({
           />
           <div className="flex items-center gap-1.5 bg-teal/10 px-2.5 py-1.5 text-xs text-teal">
             <CheckCircle2 className="h-3.5 w-3.5" />
-            关键帧已生成并写入分镜
+            {shot.generations.some((item) => item.kind === "image" && item.isSelected)
+              ? "当前采用的关键帧"
+              : "新关键帧已生成，等待选择"}
           </div>
         </div>
       )}
+
+      <GenerationHistory
+        generations={shot.generations.filter((item) => item.kind === "image")}
+        onSelect={onSelectGeneration}
+        selecting={generationSelecting}
+      />
 
       {genState?.status === "error" && genState?.kind === "image" && (
         <div className="flex items-center gap-1.5 rounded-lg bg-red/10 px-2.5 py-2 text-xs text-red">
@@ -2266,6 +2402,8 @@ function VideoTab({
   onGenerate,
   capability,
   onRefreshMedia,
+  onSelectGeneration,
+  generationSelecting,
 }: {
   shot: Shot;
   imageState?: GenState;
@@ -2274,9 +2412,13 @@ function VideoTab({
   onGenerate: (motion: string) => void;
   capability?: { available: boolean; reason: string };
   onRefreshMedia: () => void;
+  onSelectGeneration: (generationId: string) => void;
+  generationSelecting: boolean;
 }) {
   const [motion, setMotion] = useState("");
-  const imageUrl = shot.generatedImagePath || imageState?.resultUrl;
+  const historyImage = shot.generations.find((item) => item.kind === "image" && item.isSelected)
+    ?? shot.generations.find((item) => item.kind === "image");
+  const imageUrl = shot.generatedImagePath || historyImage?.mediaUrl || imageState?.resultUrl;
   const videoUrl = shot.generatedVideoPath || videoState?.resultUrl;
   const hasImage = Boolean(imageUrl);
   const running = videoState?.status === "running";
@@ -2321,10 +2463,18 @@ function VideoTab({
               />
               <div className="flex items-center gap-1.5 bg-teal/10 px-2.5 py-1.5 text-xs text-teal">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                视频已生成并关联到分镜
+                {shot.generations.some((item) => item.kind === "video" && item.isSelected)
+                  ? "当前采用的视频"
+                  : "新视频已生成，等待选择"}
               </div>
             </div>
           )}
+
+          <GenerationHistory
+            generations={shot.generations.filter((item) => item.kind === "video")}
+            onSelect={onSelectGeneration}
+            selecting={generationSelecting}
+          />
 
           {videoState?.status === "error" && (
             <div className="flex items-center gap-1.5 rounded-lg bg-red/10 px-2.5 py-2 text-xs text-red">
@@ -2362,12 +2512,16 @@ function SketchTab({
   loading,
   onGenerate,
   capability,
+  onSelectGeneration,
+  generationSelecting,
 }: {
   shot: Shot;
   genState?: GenState;
   loading: boolean;
   onGenerate: (sketchData: string, motion: string) => void;
   capability?: { available: boolean; reason: string };
+  onSelectGeneration: (generationId: string) => void;
+  generationSelecting: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
@@ -2506,10 +2660,18 @@ function SketchTab({
           <video src={effectVideoUrl} controls className="aspect-video w-full bg-ink" />
           <div className="flex items-center gap-1.5 bg-teal/10 px-2.5 py-1.5 text-xs text-teal">
             <CheckCircle2 className="h-3.5 w-3.5" />
-            特效视频已生成并关联到分镜
+            {shot.generations.some((item) => item.kind === "effect" && item.isSelected)
+              ? "当前采用的特效视频"
+              : "新特效已生成，等待选择"}
           </div>
         </div>
       )}
+
+      <GenerationHistory
+        generations={shot.generations.filter((item) => item.kind === "effect")}
+        onSelect={onSelectGeneration}
+        selecting={generationSelecting}
+      />
 
       {genState?.status === "error" && genState.kind === "effect" && (
         <div className="flex items-center gap-1.5 rounded-lg bg-red/10 px-2.5 py-2 text-xs text-red">
@@ -2534,6 +2696,54 @@ function SketchTab({
         生成特效视频
       </button>
     </div>
+  );
+}
+
+function GenerationHistory({
+  generations,
+  onSelect,
+  selecting,
+}: {
+  generations: ShotGeneration[];
+  onSelect: (generationId: string) => void;
+  selecting: boolean;
+}) {
+  if (!generations.length) return null;
+  return (
+    <section className="rounded-xl border border-line bg-canvas/40 p-2.5">
+      <div className="mb-2 flex items-center justify-between">
+        <strong className="text-xs text-text">生成历史</strong>
+        <span className="text-[11px] text-muted">共 {generations.length} 个结果，不会互相覆盖</span>
+      </div>
+      <div className="space-y-2">
+        {generations.map((generation, index) => (
+          <article key={generation.id} className={clsx("overflow-hidden rounded-lg border bg-white", generation.isSelected ? "border-blue" : "border-line")}>
+            {generation.kind === "image" ? (
+              <img src={generation.mediaUrl} alt={`生成结果 ${index + 1}`} className="aspect-video w-full object-cover" />
+            ) : (
+              <video src={generation.mediaUrl} controls preload="metadata" className="aspect-video w-full bg-ink" />
+            )}
+            <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+              <span className="min-w-0 text-[11px] text-muted">
+                {new Date(generation.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                {generation.prompt ? ` · ${generation.prompt}` : ""}
+              </span>
+              <button
+                type="button"
+                disabled={generation.isSelected || selecting}
+                onClick={() => onSelect(generation.id)}
+                className={clsx(
+                  "shrink-0 rounded-md px-2.5 py-1 text-[11px] font-medium",
+                  generation.isSelected ? "bg-blue-soft text-blue" : "border border-blue text-blue hover:bg-blue hover:text-white",
+                )}
+              >
+                {generation.isSelected ? "当前采用" : "采用此结果"}
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -2595,7 +2805,7 @@ function CandidateCard({
         related ? "border-blue bg-blue-soft/50" : "border-line bg-surface",
       )}
     >
-      <Thumbnail variant={candidate.variant} className="h-14 w-20 shrink-0 rounded" />
+      <Thumbnail variant={candidate.variant} imageUrl={candidate.thumbnailUrl} className="h-14 w-20 shrink-0 rounded" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate text-sm font-medium text-text">{candidate.title}</span>
@@ -2636,7 +2846,7 @@ function CandidateCard({
         )}
       >
         {related ? <Check className="h-3 w-3" /> : <Link2 className="h-3 w-3" />}
-        {related ? "已关联" : "关联"}
+        {related ? "当前采用" : "采用此素材"}
       </button>
     </div>
   );

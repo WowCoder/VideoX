@@ -11,7 +11,7 @@ from app.dependencies import get_current_user
 from app.models.user import User, Usage
 from app.models.project import Project
 from app.models.asset import Asset, Clip
-from app.models.script import Script, ScriptUnit, Shot
+from app.models.script import Script, ScriptUnit, Shot, ShotGeneration
 from app.models.job import Job
 from app.services.ai_provider import generate_script_with_ai
 from app.config import get_settings
@@ -351,7 +351,17 @@ async def generate_video_shot(
             status_code=503,
             detail="图生视频模型未配置；请在百炼确认真实模型名后设置 AI_IMAGE_TO_VIDEO_MODEL",
         )
-    if not shot.generated_image_path:
+    image_generation = (
+        await db.execute(
+            select(ShotGeneration.id)
+            .where(
+                ShotGeneration.shot_id == shot.id,
+                ShotGeneration.kind == "image",
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not shot.generated_image_path and not image_generation:
         raise HTTPException(status_code=400, detail="当前分镜没有可用于图生视频的持久化关键帧")
     if not await _check_quota(project, db, "video"):
         raise HTTPException(status_code=403, detail="项目所有者的 AI 生视频配额已用完")
@@ -457,6 +467,7 @@ async def generate_effect_shot(
 class ExportRequest(BaseModel):
     """导出请求。"""
     project_id: str
+    cut_version_id: str | None = None
     format: Literal["mp4", "mov", "prores"] = "mp4"
     resolution: Literal["480p", "720p", "1080p", "4k"] = "1080p"
 
@@ -475,9 +486,17 @@ async def export_project(
 ):
     """导出成片。"""
     project = (await require_project_access(req.project_id, user, db, "editor")).project
+    timeline = project.timeline or []
+    if req.cut_version_id:
+        from app.models.cut_version import CutVersion
+
+        cut_version = await db.get(CutVersion, req.cut_version_id)
+        if not cut_version or cut_version.project_id != project.id:
+            raise HTTPException(status_code=404, detail="剪辑版本不存在或不属于当前项目")
+        timeline = cut_version.timeline or []
 
     placeholder_clips = [
-        clip for clip in (project.timeline or [])
+        clip for clip in timeline
         if clip.get("track") == "video" and clip.get("origin") == "script_placeholder"
     ]
     if placeholder_clips:
@@ -491,7 +510,7 @@ async def export_project(
         )
 
     video_clips = [
-        clip for clip in (project.timeline or [])
+        clip for clip in timeline
         if clip.get("track") == "video"
         and (clip.get("asset_id") or clip.get("generated_media_path"))
     ]
@@ -499,7 +518,7 @@ async def export_project(
         raise HTTPException(status_code=400, detail="时间线中没有可导出的视频素材")
 
     try:
-        await validate_project_timeline(project, project.timeline or [], db, user)
+        await validate_project_timeline(project, timeline, db, user)
     except TimelineValidationError as exc:
         raise HTTPException(status_code=400, detail=f"导出前检查失败：{exc}") from exc
 
@@ -549,6 +568,7 @@ async def export_project(
         result_detail="",
         payload={
             "project_id": req.project_id,
+            "cut_version_id": req.cut_version_id,
             "format": req.format,
             "resolution": req.resolution,
         },
@@ -560,7 +580,9 @@ async def export_project(
     # 派发 Celery 任务
     from app.tasks.export_tasks import export_project as celery_export
     try:
-        task = celery_export.delay(req.project_id, job.id, req.format, req.resolution)
+        task = celery_export.delay(
+            req.project_id, job.id, req.format, req.resolution, req.cut_version_id or ""
+        )
         job.celery_task_id = task.id
         await db.commit()
     except Exception as exc:

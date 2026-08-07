@@ -69,3 +69,7 @@ class Project(Base):
         foreign_keys="ProjectMediaItem.project_id",
         cascade="all, delete-orphan",
     )
+    cut_versions: Mapped[list["CutVersion"]] = relationship(  # type: ignore
+        "CutVersion", back_populates="project", cascade="all, delete-orphan",
+        order_by="CutVersion.created_at",
+    )

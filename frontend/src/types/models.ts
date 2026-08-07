@@ -118,6 +118,7 @@ export type AssetStatus = "处理中" | "处理完成" | "AI 处理中" | "处�
 export interface Asset {
   id: string;
   projectId: string;
+  importedFromAssetId?: string;
   name: string;
   mediaType: "video" | "audio";
   hasAudio: boolean;
@@ -272,7 +273,20 @@ export interface Shot {
   generatedImagePath?: string;
   generatedVideoPath?: string;
   generatedEffectVideoPath?: string;
+  generations: ShotGeneration[];
   candidates: Candidate[];
+}
+
+export interface ShotGeneration {
+  id: string;
+  shotId: string;
+  jobId?: string;
+  kind: "image" | "video" | "effect";
+  storagePath: string;
+  mediaUrl?: string;
+  prompt: string;
+  isSelected: boolean;
+  createdAt: string;
 }
 
 export interface Candidate {
@@ -288,6 +302,7 @@ export interface Candidate {
   reason: string;
   variant: ThumbnailVariant;
   lowConfidence?: boolean;
+  thumbnailUrl?: string;
   /** 兼容字段：格式化的时间范围字符串 */
   range?: string;
 }

@@ -71,6 +71,7 @@ export interface GenerateEffectInput {
 
 export interface ExportProjectInput {
   projectId: string;
+  cutVersionId?: string;
   format?: "mp4" | "mov" | "prores";
   resolution?: "480p" | "720p" | "1080p" | "4k";
 }
@@ -162,6 +163,7 @@ export async function getCapabilities(): Promise<GenerationCapabilities> {
 export async function exportProject(data: ExportProjectInput): Promise<ExportProjectResult> {
   const raw = await http.post<RawExportProjectResult>("/generate/export", {
     project_id: data.projectId,
+    cut_version_id: data.cutVersionId,
     format: data.format ?? "mp4",
     resolution: data.resolution ?? "1080p",
   });

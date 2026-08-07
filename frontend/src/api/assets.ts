@@ -22,6 +22,8 @@ export interface AssetListParams {
   mediaType?: "video" | "audio";
   search?: string;
   status?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 /** 上传响应（对应后端 UploadResponse，snake_case） */
@@ -64,6 +66,7 @@ interface RawClip {
 export interface RawAsset {
   id: string;
   project_id: string;
+  imported_from_asset_id?: string | null;
   name: string;
   media_type: "video" | "audio";
   has_audio: boolean;
@@ -134,6 +137,7 @@ export function mapAsset(raw: RawAsset): Asset {
   return {
     id: raw.id,
     projectId: raw.project_id,
+    importedFromAssetId: raw.imported_from_asset_id ?? undefined,
     name: raw.name,
     mediaType: raw.media_type ?? "video",
     hasAudio: raw.has_audio ?? false,
@@ -183,12 +187,25 @@ export async function list(params?: AssetListParams): Promise<PaginatedResponse<
   if (params?.mediaType) query.set("media_type", params.mediaType);
   if (params?.search) query.set("search", params.search);
   if (params?.status) query.set("status", params.status);
+  if (params?.page) query.set("page", String(params.page));
+  if (params?.pageSize) query.set("page_size", String(params.pageSize));
   const qs = query.toString();
   const raw = await http.get<RawAssetList>(`/assets${qs ? `?${qs}` : ""}`);
   return {
     items: raw.items.map(mapAsset),
     total: raw.total,
   };
+}
+
+export async function listAll(params?: Omit<AssetListParams, "page" | "pageSize">): Promise<Asset[]> {
+  const items: Asset[] = [];
+  let page = 1;
+  while (true) {
+    const result = await list({ ...params, page, pageSize: 100 });
+    items.push(...result.items);
+    if (items.length >= result.total || result.items.length === 0) return items;
+    page += 1;
+  }
 }
 
 /**

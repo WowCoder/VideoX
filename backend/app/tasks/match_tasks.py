@@ -174,7 +174,7 @@ async def _match_shot_async(script_id: str, shot_id: str):
                 SELECT c.id AS clip_id, c.title, c.start_time, c.end_time, c.duration,
                        c.transcript_segment, c.ocr_segment, c.scene_type, c.shot_type,
                        c.camera_motion, c.persons, c.objects, c.variant,
-                       c.quality_score, a.name AS asset_name,
+                       c.quality_score, c.thumbnail_path, a.name AS asset_name,
                        1 - (c.embedding <=> :embedding) as similarity
                 FROM clips c
                 JOIN assets a ON c.asset_id = a.id
@@ -261,6 +261,7 @@ async def _match_shot_async(script_id: str, shot_id: str):
                 "reason": _generate_match_reason(unit, data, similarity),
                 "variant": data["variant"] or "stage",
                 "low_confidence": score < 70,
+                "thumbnail_path": data.get("thumbnail_path"),
             })
 
         shot.candidates = candidate_payloads

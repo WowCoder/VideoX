@@ -402,11 +402,24 @@ def _burn_subtitles(
 
 
 @celery_app.task(bind=True, name="app.tasks.export_project")
-def export_project(self, project_id: str, job_id: str, format: str = "mp4", resolution: str = "1080p"):
-    run_async(_export_project_async(project_id, job_id, format, resolution))
+def export_project(
+    self,
+    project_id: str,
+    job_id: str,
+    format: str = "mp4",
+    resolution: str = "1080p",
+    cut_version_id: str = "",
+):
+    run_async(_export_project_async(project_id, job_id, format, resolution, cut_version_id))
 
 
-async def _export_project_async(project_id: str, job_id: str, format: str, resolution: str):
+async def _export_project_async(
+    project_id: str,
+    job_id: str,
+    format: str,
+    resolution: str,
+    cut_version_id: str = "",
+):
     from sqlalchemy import select, update
 
     from app.config import get_settings
@@ -415,6 +428,7 @@ async def _export_project_async(project_id: str, job_id: str, format: str, resol
     from app.models.job import Job
     from app.models.notification import Notification
     from app.models.project import Project
+    from app.models.cut_version import CutVersion
     from app.models.user import Usage
     from app.utils.storage import download_file, get_file_url, upload_stream
 
@@ -439,6 +453,11 @@ async def _export_project_async(project_id: str, job_id: str, format: str, resol
                 raise RuntimeError("项目不存在")
 
             timeline = project.timeline or []
+            if cut_version_id:
+                cut_version = await session.get(CutVersion, cut_version_id)
+                if not cut_version or cut_version.project_id != project.id:
+                    raise RuntimeError("剪辑版本不存在或不属于当前项目")
+                timeline = cut_version.timeline or []
             try:
                 await validate_project_timeline(project, timeline, session)
             except TimelineValidationError as exc:

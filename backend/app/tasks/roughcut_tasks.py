@@ -187,20 +187,38 @@ def _assemble_script_timeline(script, media_by_shot: dict[str, dict]) -> tuple[l
 
 
 @celery_app.task(bind=True, name="app.tasks.run_rough_cut")
-def run_rough_cut(self, job_id: str, project_id: str, script_id: str, source_project_id: str):
+def run_rough_cut(
+    self,
+    job_id: str,
+    project_id: str,
+    script_id: str,
+    source_project_id: str,
+    cut_version_id: str = "",
+):
     """AI 初剪装配。"""
     try:
-        run_async(_run_rough_cut_async(job_id, project_id, script_id, source_project_id))
+        run_async(
+            _run_rough_cut_async(
+                job_id, project_id, script_id, source_project_id, cut_version_id
+            )
+        )
     except Exception as error:
         run_async(_mark_rough_cut_failed(job_id, error))
         raise
 
 
-async def _run_rough_cut_async(job_id: str, project_id: str, script_id: str, source_project_id: str):
+async def _run_rough_cut_async(
+    job_id: str,
+    project_id: str,
+    script_id: str,
+    source_project_id: str,
+    cut_version_id: str = "",
+):
     from app.database import async_session_factory
     from app.models.script import Script, ScriptUnit, Shot
     from app.models.asset import Asset, Clip
     from app.models.project import Project
+    from app.models.cut_version import CutVersion
     from app.models.job import Job
     from app.services.ai_provider import (
         generate_embedding,
@@ -223,6 +241,11 @@ async def _run_rough_cut_async(job_id: str, project_id: str, script_id: str, sou
         script = result.scalar_one_or_none()
         if not script:
             await _update_job_status(session, job_id, "FAILED", detail="脚本不存在")
+            if cut_version_id:
+                cut_version = await session.get(CutVersion, cut_version_id)
+                if cut_version:
+                    cut_version.status = "生成失败"
+            await session.commit()
             return
 
         # Stage 0: 创建项目（已在 API 层完成）
@@ -380,6 +403,10 @@ async def _run_rough_cut_async(job_id: str, project_id: str, script_id: str, sou
                 result=None,
                 result_detail="请先为脚本添加脚本句或分镜",
             )
+            if cut_version_id:
+                cut_version = await session.get(CutVersion, cut_version_id)
+                if cut_version:
+                    cut_version.status = "生成失败"
             await session.commit()
             return
 
@@ -401,6 +428,14 @@ async def _run_rough_cut_async(job_id: str, project_id: str, script_id: str, sou
             project.timeline = timeline
             project.timeline_version = (project.timeline_version or 0) + 1
             project.timeline_updated_at = datetime.now(timezone.utc)
+
+            cut_version = await session.get(CutVersion, cut_version_id) if cut_version_id else None
+            if cut_version and cut_version.project_id == project.id:
+                cut_version.status = "AI 初剪可编辑"
+                cut_version.timeline = timeline
+                cut_version.timeline_version = (cut_version.timeline_version or 0) + 1
+                cut_version.timeline_updated_at = project.timeline_updated_at
+                cut_version.aspect_ratio = project.aspect_ratio or cut_version.aspect_ratio
 
             from app.services.project_media import sync_project_media_items
 
@@ -451,8 +486,16 @@ def retry_rough_cut(self, job_id: str):
 
 async def _mark_rough_cut_failed(job_id: str, error: Exception):
     from app.database import async_session_factory
+    from app.models.cut_version import CutVersion
+    from app.models.job import Job
 
     async with async_session_factory() as session:
+        job = await session.get(Job, job_id)
+        version_id = (job.payload or {}).get("cut_version_id") if job else None
+        if version_id:
+            version = await session.get(CutVersion, version_id)
+            if version:
+                version.status = "生成失败"
         await _update_job_status(
             session,
             job_id,
@@ -478,12 +521,17 @@ async def _retry_rough_cut_async(job_id: str):
         if not job:
             return
 
-        # 查找关联的 AI 初剪脚本
+        # 优先使用任务创建时固定的快照，避免重试时误用其他版本的最新脚本。
         from app.models.script import Script
-        script_result = await session.execute(
-            select(Script).where(Script.project_id == job.project_id).order_by(Script.created_at.desc())
-        )
-        script = script_result.scalars().first()
+        payload = job.payload or {}
+        script = await session.get(Script, payload.get("script_id")) if payload.get("script_id") else None
+        if not script:
+            script_result = await session.execute(
+                select(Script)
+                .where(Script.project_id == job.project_id, Script.is_snapshot.is_(True))
+                .order_by(Script.created_at.desc())
+            )
+            script = script_result.scalars().first()
         if script:
             project = await session.get(Project, job.project_id)
             source_project_id = job.project_id
@@ -491,4 +539,10 @@ async def _retry_rough_cut_async(job_id: str):
                 source_script = await session.get(Script, project.source_script_id)
                 if source_script:
                     source_project_id = source_script.project_id
-            await _run_rough_cut_async(job_id, job.project_id, script.id, source_project_id)
+            await _run_rough_cut_async(
+                job_id,
+                job.project_id,
+                script.id,
+                payload.get("source_project_id", source_project_id),
+                payload.get("cut_version_id", ""),
+            )

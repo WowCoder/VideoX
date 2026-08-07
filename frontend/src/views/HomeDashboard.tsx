@@ -1,10 +1,3 @@
-// ──────────────────────────────────────────────
-// OpenVMA - 综合工作台
-// 上区两列：快速开始 / 素材概览
-// 下区三列网格：最近项目 / 活跃脚本 / 任务处理
-// 使用 @tanstack/react-query 加载数据
-// ──────────────────────────────────────────────
-
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@/router";
@@ -18,7 +11,6 @@ import {
   Pause,
   Play,
   Plus,
-  RefreshCw,
   RotateCcw,
   Sparkles,
   Upload,
@@ -34,22 +26,14 @@ import { useScriptStore } from "@/stores/scriptStore";
 import { VideoThumb } from "@/components/VideoThumb";
 import type { Job } from "@/types/models";
 
-type JobFilter = "ALL" | "ACTIVE" | "PAUSED" | "FAILED" | "SUCCEEDED";
 type JobAction = "retry" | "pause" | "resume" | "cancel";
-
-const jobActionLabels: Record<JobAction, string> = {
-  retry: "任务已重新进入队列",
-  pause: "任务已暂停",
-  resume: "任务已恢复",
-  cancel: "任务已取消",
-};
 
 const jobStatusLabels: Record<Job["status"], string> = {
   RUNNING: "处理中",
   QUEUED: "等待中",
-  PAUSED: "待继续",
+  PAUSED: "已暂停",
   SUCCEEDED: "已完成",
-  FAILED: "处理失败",
+  FAILED: "失败",
   CANCELLED: "已取消",
 };
 
@@ -62,28 +46,64 @@ const jobStatusClass: Record<Job["status"], string> = {
   CANCELLED: "bg-canvas text-muted",
 };
 
+const jobPriority: Record<Job["status"], number> = {
+  RUNNING: 0,
+  QUEUED: 1,
+  PAUSED: 2,
+  FAILED: 3,
+  SUCCEEDED: 4,
+  CANCELLED: 5,
+};
+
 export function HomeDashboard() {
   const navigate = useNavigate();
   const { openUploadDrawer, openScriptCreate, openAIScript, openProjectCreate, notify } = useUIStore();
-  const { setCurrentProject } = useProjectStore();
-  const setCurrentScriptId = useScriptStore((s) => s.setCurrentScriptId);
+  const setCurrentProject = useProjectStore((state) => state.setCurrentProject);
+  const setCurrentScriptId = useScriptStore((state) => state.setCurrentScriptId);
   const queryClient = useQueryClient();
-  const [jobFilter, setJobFilter] = useState<JobFilter>("ALL");
   const [downloadingJobId, setDownloadingJobId] = useState<string | null>(null);
-  const jobActionMutation = useMutation({
+
+  const projectsQuery = useQuery({ queryKey: ["projects", "dashboard"], queryFn: () => projectApi.list({ pageSize: 8 }), retry: false });
+  const scriptsQuery = useQuery({ queryKey: ["scripts", "dashboard"], queryFn: () => scriptApi.list(), retry: false });
+  const summaryQuery = useQuery({ queryKey: ["dashboard-summary"], queryFn: projectApi.getDashboardSummary, retry: false });
+  const jobsQuery = useQuery({
+    queryKey: ["jobs", "dashboard"],
+    queryFn: () => jobApi.list({ pageSize: 30 }),
+    retry: false,
+    refetchInterval: (query) => query.state.data?.items.some((job) => ["QUEUED", "RUNNING"].includes(job.status)) ? 5_000 : false,
+  });
+
+  const actionMutation = useMutation({
     mutationFn: ({ id, action }: { id: string; action: JobAction }) => {
       if (action === "retry") return jobApi.retry(id);
       if (action === "pause") return jobApi.pause(id);
       if (action === "resume") return jobApi.resume(id);
       return jobApi.cancel(id);
     },
-    onSuccess: (_job, variables) => {
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
-      notify(jobActionLabels[variables.action]);
+      notify("任务状态已更新");
     },
     onError: (error) => notify(error instanceof Error ? error.message : "任务操作失败", "error"),
   });
+
+  const projects = projectsQuery.data?.items ?? [];
+  const scripts = scriptsQuery.data?.items ?? [];
+  const summary = summaryQuery.data;
+  const taskSummary = [...(jobsQuery.data?.items ?? [])]
+    .sort((left, right) => jobPriority[left.status] - jobPriority[right.status])
+    .slice(0, 3);
+  const loadError = [projectsQuery, scriptsQuery, summaryQuery, jobsQuery].find((query) => query.isError)?.error;
+
+  const openProject = (id: string) => {
+    setCurrentProject(id);
+    navigate(`/workspace/projects/${id}`);
+  };
+  const openScript = (id: string) => {
+    setCurrentScriptId(id);
+    navigate(`/workspace/scripts/${id}/editor`);
+  };
   const downloadExport = async (job: Job) => {
     setDownloadingJobId(job.id);
     try {
@@ -96,66 +116,6 @@ export function HomeDashboard() {
     }
   };
 
-  // react-query 加载真实数据
-  const projectsQuery = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => projectApi.list(),
-    retry: false,
-  });
-  const scriptsQuery = useQuery({
-    queryKey: ["scripts"],
-    queryFn: () => scriptApi.list(),
-    retry: false,
-  });
-  const summaryQuery = useQuery({
-    queryKey: ["dashboard-summary"],
-    queryFn: projectApi.getDashboardSummary,
-    retry: false,
-  });
-  const jobsQuery = useQuery({
-    queryKey: ["jobs"],
-    queryFn: () => jobApi.list({ pageSize: 100 }),
-    retry: false,
-    refetchInterval: (query) =>
-      query.state.data?.items.some((job) => ["QUEUED", "RUNNING"].includes(job.status))
-        ? 5_000
-        : false,
-  });
-
-  const projects = projectsQuery.data?.items ?? [];
-  const scripts = scriptsQuery.data?.items ?? [];
-  const jobs = jobsQuery.data?.items ?? [];
-  const summary = summaryQuery.data;
-  const loadingProjects = projectsQuery.isLoading;
-
-  const activeScripts = scripts.filter((s) => s.status !== "已完成").slice(0, 4);
-  const recentProjects = projects.slice(0, 4);
-  const processingCount = summary
-    ? summary.runningJobCount + summary.queuedJobCount + summary.pausedJobCount
-    : 0;
-  const activeCount = summary ? summary.runningJobCount + summary.queuedJobCount : 0;
-  const failedCount = summary?.failedJobCount ?? 0;
-  const completedCount = summary?.completedJobCount ?? 0;
-  const pausedCount = summary?.pausedJobCount ?? 0;
-  const activity = jobs.filter((job) => {
-    if (jobFilter === "ACTIVE") return job.status === "RUNNING" || job.status === "QUEUED";
-    if (jobFilter === "PAUSED") return job.status === "PAUSED";
-    if (jobFilter === "FAILED") return job.status === "FAILED";
-    if (jobFilter === "SUCCEEDED") return job.status === "SUCCEEDED";
-    return true;
-  });
-  const loadError = [projectsQuery, scriptsQuery, summaryQuery, jobsQuery].find((query) => query.isError)?.error;
-
-  function openProject(projectId: string) {
-    setCurrentProject(projectId);
-    navigate(`/workspace/projects/${projectId}`);
-  }
-
-  function openScript(scriptId: string) {
-    setCurrentScriptId(scriptId);
-    navigate(`/workspace/scripts/${scriptId}/editor`);
-  }
-
   if (loadError) {
     return (
       <div className="mx-auto max-w-7xl px-6 py-8">
@@ -163,364 +123,109 @@ export function HomeDashboard() {
         <div className="mt-6 rounded-2xl border border-red/20 bg-red/5 py-16 text-center">
           <p className="text-sm font-medium text-red">工作台数据加载失败</p>
           <p className="mt-1 text-xs text-muted">{loadError instanceof Error ? loadError.message : "请检查后端服务"}</p>
-          <button
-            type="button"
-            onClick={() => {
-              void projectsQuery.refetch();
-              void scriptsQuery.refetch();
-              void summaryQuery.refetch();
-              void jobsQuery.refetch();
-            }}
-            className="mt-4 rounded-lg bg-blue px-3 py-2 text-sm text-white"
-          >
-            重试
-          </button>
         </div>
       </div>
     );
   }
 
+  const quickActions = [
+    { label: "上传素材", copy: "导入视频并理解镜头", Icon: Upload, action: openUploadDrawer },
+    { label: "AI 生成脚本", copy: "根据创作目标生成脚本", Icon: WandSparkles, action: () => openAIScript() },
+    { label: "新建脚本", copy: "粘贴、表格或空白开始", Icon: Plus, action: openScriptCreate },
+    { label: "新建项目", copy: "建立独立创作空间", Icon: FolderKanban, action: openProjectCreate },
+  ];
+  const materialMetrics: Array<{ label: string; count: number; Icon: typeof Library }> = [
+    { label: "素材总数", count: summary?.assetCount ?? 0, Icon: Library },
+    { label: "可搜索片段", count: summary?.clipCount ?? 0, Icon: Sparkles },
+    { label: "处理中素材", count: summary?.processingAssetCount ?? 0, Icon: Clock3 },
+  ];
+
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">
-      {/* 页头 */}
-      <section className="mb-8">
+      <section className="mb-7">
         <h1 className="text-2xl font-bold text-text">综合工作台</h1>
-        <p className="mt-1.5 text-sm text-muted">
-          把脚本和素材交给 AI，快速得到一版可继续替换镜头、细化剪辑并导出的初剪。
-        </p>
+        <p className="mt-1.5 text-sm text-muted">从创作入口开始，并只关注当前最需要处理的任务。</p>
       </section>
 
-      {/* 上区：快速开始 + 素材概览 */}
-      <div className="mb-6 grid gap-4 lg:grid-cols-[1.5fr_1fr]">
-        {/* 快速开始 */}
-        <section className="rounded-2xl border border-line bg-surface p-5 shadow-soft">
+      <div className="mb-6 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <section className="min-w-0 rounded-2xl border border-line bg-surface p-5 shadow-soft">
           <header className="mb-4">
             <h2 className="text-base font-semibold text-text">快速开始</h2>
-            <p className="text-xs text-muted">从脚本和素材开始生成第一版初剪</p>
+            <p className="text-xs text-muted">选择一个入口开始创作</p>
           </header>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={openUploadDrawer}
-              className="group flex flex-col items-start gap-2 rounded-xl border border-line bg-canvas/40 p-4 text-left transition hover:border-blue/40 hover:bg-blue-soft/30"
-              type="button"
-            >
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-soft text-blue transition group-hover:bg-blue group-hover:text-white">
-                <Upload size={20} />
-              </span>
-              <strong className="text-sm text-text">上传素材</strong>
-              <small className="text-xs text-muted">导入视频并自动理解镜头</small>
-            </button>
-            <button
-              onClick={() => openAIScript()}
-              className="group flex flex-col items-start gap-2 rounded-xl border border-line bg-canvas/40 p-4 text-left transition hover:border-blue/40 hover:bg-blue-soft/30"
-              type="button"
-            >
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue to-teal text-white">
-                <WandSparkles size={20} />
-              </span>
-              <strong className="text-sm text-text">AI 生成脚本</strong>
-              <small className="text-xs text-muted">根据创作目标生成可编辑脚本</small>
-            </button>
-            <button
-              onClick={openScriptCreate}
-              className="group flex flex-col items-start gap-2 rounded-xl border border-line bg-canvas/40 p-4 text-left transition hover:border-blue/40 hover:bg-blue-soft/30"
-              type="button"
-            >
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-soft text-blue transition group-hover:bg-blue group-hover:text-white">
-                <Plus size={20} />
-              </span>
-              <strong className="text-sm text-text">新建脚本</strong>
-              <small className="text-xs text-muted">粘贴、上传表格或从空白开始</small>
-            </button>
-            <button
-              onClick={openProjectCreate}
-              className="group flex flex-col items-start gap-2 rounded-xl border border-line bg-canvas/40 p-4 text-left transition hover:border-blue/40 hover:bg-blue-soft/30"
-              type="button"
-            >
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-soft text-blue transition group-hover:bg-blue group-hover:text-white">
-                <FolderKanban size={20} />
-              </span>
-              <strong className="text-sm text-text">新建项目</strong>
-              <small className="text-xs text-muted">创建独立的素材、脚本与任务空间</small>
-            </button>
-          </div>
-        </section>
-
-        {/* 素材概览 */}
-        <section className="rounded-2xl border border-line bg-surface p-5 shadow-soft">
-          <header className="mb-4 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-text">素材概览</h2>
-            <button
-              onClick={() => navigate("/workspace/library")}
-              className="flex items-center gap-1 text-xs text-blue transition hover:underline"
-              type="button"
-            >
-              查看全部<ArrowUpRight size={13} />
-            </button>
-          </header>
-          <div className="space-y-2.5">
-            <div className="flex w-full items-center gap-3 rounded-xl border border-line bg-canvas/40 px-3.5 py-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-soft text-blue">
-                <Library size={17} />
-              </span>
-              <span className="flex-1 text-sm text-text">视频素材</span>
-              <strong className="text-lg font-semibold text-text">{summary?.assetCount ?? 0}</strong>
-            </div>
-            <div className="flex w-full items-center gap-3 rounded-xl border border-line bg-canvas/40 px-3.5 py-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal/10 text-teal">
-                <Sparkles size={17} />
-              </span>
-              <span className="flex-1 text-sm text-text">可搜索片段</span>
-              <strong className="text-lg font-semibold text-text">{summary?.clipCount ?? 0}</strong>
-            </div>
-            <div className="flex w-full items-center gap-3 rounded-xl border border-line bg-canvas/40 px-3.5 py-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber/10 text-amber">
-                <Clock3 size={17} />
-              </span>
-              <span className="flex-1 text-sm text-text">处理中素材</span>
-              <strong className="text-lg font-semibold text-text">{summary?.processingAssetCount ?? 0}</strong>
-            </div>
-          </div>
-        </section>
-      </div>
-
-      {/* 下区三列 */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        {/* 最近项目 */}
-        <section className="rounded-2xl border border-line bg-surface p-5 shadow-soft">
-          <header className="mb-4 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-text">最近项目</h2>
-            <button
-              onClick={() => navigate("/workspace/projects")}
-              className="flex items-center gap-1 text-xs text-blue transition hover:underline"
-              type="button"
-            >
-              全部项目<ArrowUpRight size={13} />
-            </button>
-          </header>
-          {loadingProjects ? (
-            <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin text-muted" /></div>
-          ) : (
-            <ul className="space-y-2.5">
-              {recentProjects.map((project) => (
-                <li key={project.id}>
-                  <button
-                    onClick={() => openProject(project.id)}
-                    className="group flex w-full items-center gap-3 rounded-xl border border-line bg-canvas/40 p-3 text-left transition hover:border-blue/40 hover:bg-blue-soft/20"
-                    type="button"
-                  >
-                    <VideoThumb variant={project.variant} className="!h-12 !w-20" rounded="rounded-lg" showPlay={false} />
-                    <div className="min-w-0 flex-1">
-                      <strong className="block truncate text-sm text-text">{project.name}</strong>
-                      <small className="text-xs text-muted">
-                        {project.assetCount} 素材 · {project.scriptCount} 脚本
-                      </small>
-                      <span className="mt-1 inline-block rounded-full bg-canvas px-2 py-0.5 text-[11px] text-muted">
-                        {project.status}
-                      </span>
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        {/* 活跃脚本 */}
-        <section className="rounded-2xl border border-line bg-surface p-5 shadow-soft">
-          <header className="mb-4 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-text">活跃脚本</h2>
-            <button
-              onClick={() => navigate("/workspace/scripts")}
-              className="flex items-center gap-1 text-xs text-blue transition hover:underline"
-              type="button"
-            >
-              全部脚本<ArrowUpRight size={13} />
-            </button>
-          </header>
-          <ul className="max-h-[560px] space-y-2.5 overflow-y-auto pr-1">
-            {activeScripts.map((script) => (
-              <li key={script.id}>
-                <button
-                  onClick={() => openScript(script.id)}
-                  className="group flex w-full items-center gap-3 rounded-xl border border-line bg-canvas/40 p-3 text-left transition hover:border-blue/40 hover:bg-blue-soft/20"
-                  type="button"
-                >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-soft text-blue">
-                    <Sparkles size={16} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <strong className="block truncate text-sm text-text">{script.title}</strong>
-                    <small className="text-xs text-muted">
-                      {script.unitCount} 单元 · {script.matchedCount} 已匹配
-                    </small>
-                    <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-canvas">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-blue to-teal"
-                        style={{ width: `${script.progress}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-xs text-muted">{script.duration}</span>
-                </button>
-              </li>
-            ))}
-            {activeScripts.length === 0 && (
-              <li className="rounded-xl border border-dashed border-line py-8 text-center text-sm text-muted">
-                暂无活跃脚本
-              </li>
-            )}
-          </ul>
-        </section>
-
-        {/* 任务处理 */}
-        <section className="rounded-2xl border border-line bg-surface p-5 shadow-soft">
-          <header className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-base font-semibold text-text">任务处理</h2>
-              <p className="text-xs text-muted">{processingCount} 个待完成 · {failedCount} 个失败待处理</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                void Promise.all([jobsQuery.refetch(), summaryQuery.refetch()]).then((results) => {
-                  const failed = results.some((result) => result.isError);
-                  notify(failed ? "任务刷新失败，请稍后重试" : "任务状态已刷新", failed ? "error" : "info");
-                });
-              }}
-              className="flex items-center gap-1 text-xs text-muted transition hover:text-text"
-            >
-              <RefreshCw size={13} />刷新
-            </button>
-          </header>
-          <div className="mb-3 flex flex-wrap gap-1 rounded-lg bg-canvas p-1">
-            {([
-              ["ALL", "全部", jobsQuery.data?.total ?? jobs.length],
-              ["ACTIVE", "处理中", activeCount],
-              ["PAUSED", "已暂停", pausedCount],
-              ["FAILED", "失败", failedCount],
-              ["SUCCEEDED", "已完成", completedCount],
-            ] as Array<[JobFilter, string, number]>).map(([value, label, count]) => (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {quickActions.map(({ label, copy, Icon, action }) => (
               <button
-                key={value}
+                key={label}
                 type="button"
-                onClick={() => setJobFilter(value)}
-                className={`rounded-md px-2.5 py-1.5 text-[11px] font-medium transition ${
-                  jobFilter === value ? "bg-surface text-blue shadow-sm" : "text-muted hover:text-text"
-                }`}
+                onClick={action}
+                className="group flex min-w-0 items-center gap-3 rounded-xl border border-line bg-white p-4 text-left transition hover:border-blue/40 hover:bg-blue-soft/35 hover:shadow-sm"
               >
-                {label} {count}
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-blue-soft text-blue transition group-hover:bg-blue group-hover:text-white">
+                  <Icon size={19} />
+                </span>
+                <span className="min-w-0">
+                  <strong className="block truncate text-sm text-text">{label}</strong>
+                  <small className="mt-0.5 block truncate text-xs text-muted">{copy}</small>
+                </span>
               </button>
             ))}
           </div>
-          <ul className="space-y-2.5">
-            {activity.map((job) => (
-              <li
-                key={job.id}
-                className="flex items-start gap-3 rounded-xl border border-line bg-canvas/40 p-3"
-              >
-                <span
-                  className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${jobStatusClass[job.status]}`}
-                >
-                  {jobStatusLabels[job.status]}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <strong className="block truncate text-sm text-text">{job.name}</strong>
-                  <small className={`text-xs ${job.status === "FAILED" ? "text-red" : "text-muted"}`}>
-                    {job.status === "FAILED" ? job.resultDetail || job.detail : job.detail}
-                  </small>
-                  {job.status === "RUNNING" && (
-                    <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-canvas">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-blue to-teal"
-                        style={{ width: `${job.progress}%` }}
-                      />
-                    </div>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  {job.type === "导出" && job.status === "SUCCEEDED" && (
-                    <button
-                      type="button"
-                      title="下载成片"
-                      aria-label={`下载导出结果 ${job.name}`}
-                      onClick={() => void downloadExport(job)}
-                      disabled={downloadingJobId === job.id}
-                      className="rounded-lg p-1.5 text-muted transition hover:bg-blue-soft hover:text-blue disabled:opacity-40"
-                    >
-                      {downloadingJobId === job.id ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
-                    </button>
-                  )}
-                  {job.status === "FAILED" && (
-                    <button
-                      type="button"
-                      title="重试任务"
-                      aria-label={`重试任务 ${job.name}`}
-                      onClick={() => jobActionMutation.mutate({ id: job.id, action: "retry" })}
-                      disabled={jobActionMutation.isPending}
-                      className="rounded-lg p-1.5 text-muted transition hover:bg-blue-soft hover:text-blue disabled:opacity-40"
-                    >
-                      <RotateCcw size={15} />
-                    </button>
-                  )}
-                  {job.status === "RUNNING" && (
-                    <button
-                      type="button"
-                      title="暂停任务"
-                      aria-label={`暂停任务 ${job.name}`}
-                      onClick={() => jobActionMutation.mutate({ id: job.id, action: "pause" })}
-                      disabled={jobActionMutation.isPending}
-                      className="rounded-lg p-1.5 text-muted transition hover:bg-amber/10 hover:text-amber disabled:opacity-40"
-                    >
-                      <Pause size={15} />
-                    </button>
-                  )}
-                  {job.status === "PAUSED" && (
-                    <button
-                      type="button"
-                      title="继续任务"
-                      aria-label={`继续任务 ${job.name}`}
-                      onClick={() => jobActionMutation.mutate({ id: job.id, action: "resume" })}
-                      disabled={jobActionMutation.isPending}
-                      className="rounded-lg p-1.5 text-muted transition hover:bg-teal/10 hover:text-teal disabled:opacity-40"
-                    >
-                      <Play size={15} />
-                    </button>
-                  )}
-                  {(job.status === "QUEUED" || job.status === "RUNNING") && (
-                  <button
-                    type="button"
-                    title="取消任务"
-                    aria-label={`取消任务 ${job.name}`}
-                    onClick={() => {
-                      if (window.confirm(`确定取消任务「${job.name}」吗？正在执行的处理会被终止。`)) {
-                        jobActionMutation.mutate({ id: job.id, action: "cancel" });
-                      }
-                    }}
-                    disabled={jobActionMutation.isPending}
-                    className="shrink-0 rounded-lg p-1.5 text-muted transition hover:bg-red/10 hover:text-red disabled:opacity-40"
-                  >
-                    <XCircle size={16} />
-                  </button>
-                  )}
-                  <button
-                    type="button"
-                    title="进入所属项目"
-                    aria-label={`进入任务所属项目 ${job.name}`}
-                    onClick={() => openProject(job.projectId)}
-                    className="rounded-lg p-1.5 text-muted transition hover:bg-canvas hover:text-blue"
-                  >
-                    <ArrowUpRight size={15} />
-                  </button>
+        </section>
+
+        <section className="min-w-0 overflow-hidden rounded-2xl border border-line bg-surface p-5 shadow-soft">
+          <header className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-text">任务摘要</h2>
+              <p className="truncate text-xs text-muted">优先显示运行、排队、暂停和失败任务</p>
+            </div>
+            <button type="button" onClick={() => navigate("/workspace/tasks")} className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium text-blue hover:underline">查看全部<ArrowUpRight size={13} /></button>
+          </header>
+          <div className="mb-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+            {[
+              ["运行", summary?.runningJobCount ?? 0],
+              ["排队", summary?.queuedJobCount ?? 0],
+              ["暂停", summary?.pausedJobCount ?? 0],
+              ["失败", summary?.failedJobCount ?? 0],
+            ].map(([label, count]) => <div key={label} className="rounded-lg bg-canvas px-2 py-2"><strong className="block text-base text-text">{count}</strong><span className="text-[11px] text-muted">{label}</span></div>)}
+          </div>
+          <ul className="space-y-2">
+            {taskSummary.map((job) => (
+              <li key={job.id} className="flex min-w-0 items-center gap-2 rounded-lg border border-line px-2.5 py-2">
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${jobStatusClass[job.status]}`}>{jobStatusLabels[job.status]}</span>
+                <span className="min-w-0 flex-1"><strong className="block truncate text-xs text-text">{job.name}</strong><small className="block truncate text-[11px] text-muted">{job.detail}</small></span>
+                <div className="flex shrink-0">
+                  {job.type === "导出" && job.status === "SUCCEEDED" && <button type="button" onClick={() => void downloadExport(job)} className="p-1.5 text-muted hover:text-blue">{downloadingJobId === job.id ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}</button>}
+                  {job.status === "FAILED" && <button type="button" onClick={() => actionMutation.mutate({ id: job.id, action: "retry" })} className="p-1.5 text-muted hover:text-blue"><RotateCcw size={14} /></button>}
+                  {job.status === "RUNNING" && <button type="button" onClick={() => actionMutation.mutate({ id: job.id, action: "pause" })} className="p-1.5 text-muted hover:text-amber"><Pause size={14} /></button>}
+                  {job.status === "PAUSED" && <button type="button" onClick={() => actionMutation.mutate({ id: job.id, action: "resume" })} className="p-1.5 text-muted hover:text-teal"><Play size={14} /></button>}
+                  {["QUEUED", "RUNNING"].includes(job.status) && <button type="button" onClick={() => actionMutation.mutate({ id: job.id, action: "cancel" })} className="p-1.5 text-muted hover:text-red"><XCircle size={14} /></button>}
                 </div>
               </li>
             ))}
-            {activity.length === 0 && (
-              <li className="rounded-xl border border-dashed border-line py-8 text-center text-sm text-muted">
-                当前筛选下没有任务
-              </li>
-            )}
+            {!taskSummary.length && <li className="rounded-lg border border-dashed border-line py-7 text-center text-xs text-muted">暂无任务</li>}
           </ul>
+        </section>
+      </div>
+
+      <div className="grid min-w-0 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        <section className="min-w-0 rounded-2xl border border-line bg-surface p-5 shadow-soft">
+          <header className="mb-4 flex items-center justify-between"><h2 className="text-base font-semibold text-text">素材</h2><button type="button" onClick={() => navigate("/workspace/library")} className="text-xs text-blue hover:underline">全部素材</button></header>
+          <div className="space-y-3">
+            {materialMetrics.map(({ label, count, Icon }) => {
+              return <div key={label} className="flex items-center gap-3 rounded-xl border border-line bg-canvas/40 px-3.5 py-3"><span className="grid h-9 w-9 place-items-center rounded-lg bg-blue-soft text-blue"><Icon size={17} /></span><span className="flex-1 text-sm text-text">{label}</span><strong className="text-lg text-text">{count}</strong></div>;
+            })}
+          </div>
+        </section>
+
+        <section className="min-w-0 rounded-2xl border border-line bg-surface p-5 shadow-soft">
+          <header className="mb-4 flex items-center justify-between"><h2 className="text-base font-semibold text-text">脚本</h2><button type="button" onClick={() => navigate("/workspace/scripts")} className="text-xs text-blue hover:underline">全部脚本</button></header>
+          <ul className="space-y-2.5">{scripts.slice(0, 4).map((script) => <li key={script.id}><button type="button" onClick={() => openScript(script.id)} className="flex w-full items-center gap-3 rounded-xl border border-line bg-canvas/40 p-3 text-left hover:border-blue/40 hover:bg-blue-soft/20"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-blue-soft text-blue"><Sparkles size={16} /></span><span className="min-w-0 flex-1"><strong className="block truncate text-sm text-text">{script.title}</strong><small className="text-xs text-muted">已有画面 {script.matchedCount}/{script.unitCount} 个分镜</small></span><span className="text-xs text-muted">{script.duration}</span></button></li>)}{!scripts.length && <li className="rounded-xl border border-dashed border-line py-8 text-center text-sm text-muted">暂无脚本</li>}</ul>
+        </section>
+
+        <section className="min-w-0 rounded-2xl border border-line bg-surface p-5 shadow-soft">
+          <header className="mb-4 flex items-center justify-between"><h2 className="text-base font-semibold text-text">项目</h2><button type="button" onClick={() => navigate("/workspace/projects")} className="text-xs text-blue hover:underline">全部项目</button></header>
+          <ul className="space-y-2.5">{projects.slice(0, 4).map((project) => <li key={project.id}><button type="button" onClick={() => openProject(project.id)} className="flex w-full items-center gap-3 rounded-xl border border-line bg-canvas/40 p-3 text-left hover:border-blue/40 hover:bg-blue-soft/20"><VideoThumb variant={project.variant} className="!h-11 !w-16" rounded="rounded-lg" showPlay={false} /><span className="min-w-0 flex-1"><strong className="block truncate text-sm text-text">{project.name}</strong><small className="text-xs text-muted">{project.assetCount} 素材 · {project.scriptCount} 脚本</small></span><ArrowUpRight size={14} className="text-muted" /></button></li>)}{!projects.length && <li className="rounded-xl border border-dashed border-line py-8 text-center text-sm text-muted">暂无项目</li>}</ul>
         </section>
       </div>
     </div>

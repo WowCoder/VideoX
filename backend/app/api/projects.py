@@ -1,5 +1,6 @@
 """项目路由：CRUD + 列表。"""
 
+import copy
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +17,7 @@ from app.models.script import Candidate, Script, ScriptUnit, Shot
 from app.models.job import Job
 from app.models.collaboration import ProjectMember
 from app.models.project_media import ProjectMediaItem
+from app.models.cut_version import CutVersion
 from app.services.project_access import accessible_project_condition, require_project_access
 from app.services.timeline_validation import TimelineValidationError, validate_project_timeline
 from app.config import get_settings
@@ -28,7 +30,10 @@ from app.schemas.project import (
     ProjectTimelineUpdate,
     ProjectMediaItemOut,
     ProjectMediaListOut,
+    CutVersionOut,
+    AssetImportRequest,
 )
+from app.schemas.asset import AssetOut
 
 router = APIRouter()
 settings = get_settings()
@@ -52,6 +57,19 @@ def _timeline_clips_for_output(clips: list[dict] | None) -> list[dict]:
                     clip["generated_media_url"] = None
         output.append(clip)
     return output
+
+
+async def _resolve_cut_version(
+    db: AsyncSession,
+    project_id: str,
+    cut_version_id: str | None,
+) -> CutVersion | None:
+    if not cut_version_id:
+        return None
+    version = await db.get(CutVersion, cut_version_id)
+    if not version or version.project_id != project_id:
+        raise HTTPException(status_code=404, detail="剪辑版本不存在或不属于当前项目")
+    return version
 
 
 async def _project_outs(
@@ -476,20 +494,184 @@ async def get_project_stats(
     }
 
 
+@router.get("/{project_id}/versions", response_model=list[CutVersionOut])
+async def list_cut_versions(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """列出剪辑项目内的所有独立版本。"""
+    await require_project_access(project_id, user, db)
+    versions = (
+        await db.execute(
+            select(CutVersion)
+            .where(CutVersion.project_id == project_id)
+            .order_by(CutVersion.created_at)
+        )
+    ).scalars().all()
+    return [CutVersionOut.model_validate(version) for version in versions]
+
+
+@router.post("/{project_id}/assets/import", response_model=list[AssetOut])
+async def import_project_assets(
+    project_id: str,
+    req: AssetImportRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """把用户可访问的其他项目素材逻辑导入当前项目，共享底层媒体文件。"""
+    target = (await require_project_access(project_id, user, db, "editor")).project
+    requested_ids = set(req.asset_ids)
+    sources = list(
+        (
+            await db.execute(
+                select(Asset)
+                .join(Project)
+                .where(
+                    Asset.id.in_(requested_ids),
+                    Asset.project_id != project_id,
+                    accessible_project_condition(user.id),
+                )
+                .options(selectinload(Asset.clips))
+            )
+        ).scalars().unique().all()
+    )
+    if len(sources) != len(requested_ids):
+        raise HTTPException(status_code=404, detail="部分素材不存在、无权访问或已属于当前项目")
+
+    source_ids = [asset.id for asset in sources]
+    existing = {
+        asset.imported_from_asset_id: asset
+        for asset in (
+            await db.execute(
+                select(Asset)
+                .where(
+                    Asset.project_id == project_id,
+                    Asset.imported_from_asset_id.in_(source_ids),
+                )
+                .options(selectinload(Asset.clips))
+            )
+        ).scalars().all()
+    }
+    imported: list[Asset] = []
+    for source in sources:
+        clone = existing.get(source.id)
+        if clone is None:
+            clone = Asset(
+                project_id=project_id,
+                imported_from_asset_id=source.id,
+                name=source.name,
+                duration=source.duration,
+                status=source.status,
+                source="从其他项目导入",
+                variant=source.variant,
+                media_type=source.media_type,
+                has_audio=source.has_audio,
+                file_path=source.file_path,
+                preview_path=source.preview_path,
+                thumbnail_path=source.thumbnail_path,
+                file_size_mb=0.0,
+                resolution=source.resolution,
+                fps=source.fps,
+                codec=source.codec,
+                audio_codec=source.audio_codec,
+                sample_rate=source.sample_rate,
+                channels=source.channels,
+                bitrate=source.bitrate,
+                transcript=source.transcript,
+                ocr_text=source.ocr_text,
+                tags=copy.deepcopy(source.tags or []),
+            )
+            db.add(clone)
+            await db.flush()
+            for source_clip in source.clips:
+                db.add(
+                    Clip(
+                        asset_id=clone.id,
+                        start_time=source_clip.start_time,
+                        end_time=source_clip.end_time,
+                        duration=source_clip.duration,
+                        title=source_clip.title,
+                        transcript_segment=source_clip.transcript_segment,
+                        ocr_segment=source_clip.ocr_segment,
+                        scene_type=source_clip.scene_type,
+                        shot_type=source_clip.shot_type,
+                        camera_motion=source_clip.camera_motion,
+                        persons=copy.deepcopy(source_clip.persons or []),
+                        objects=copy.deepcopy(source_clip.objects or []),
+                        embedding=source_clip.embedding,
+                        embedding_model=source_clip.embedding_model,
+                        embedding_dimensions=source_clip.embedding_dimensions,
+                        embedding_version=source_clip.embedding_version,
+                        embedding_status=source_clip.embedding_status,
+                        embedding_source_hash=source_clip.embedding_source_hash,
+                        embedding_updated_at=source_clip.embedding_updated_at,
+                        thumbnail_path=source_clip.thumbnail_path,
+                        variant=source_clip.variant,
+                        quality_score=source_clip.quality_score,
+                    )
+                )
+            await db.flush()
+        imported.append(clone)
+
+    target.asset_count = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(Asset).where(Asset.project_id == project_id)
+            )
+        ).scalar()
+        or 0
+    )
+    target.clip_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Clip)
+                .join(Asset)
+                .where(
+                    Asset.project_id == project_id,
+                    Clip.embedding.is_not(None),
+                    Clip.embedding_status == "ready",
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    await db.flush()
+
+    refreshed = list(
+        (
+            await db.execute(
+                select(Asset)
+                .where(Asset.id.in_([asset.id for asset in imported]))
+                .options(selectinload(Asset.clips))
+            )
+        ).scalars().unique().all()
+    )
+    from app.api.assets import _asset_out
+
+    return [_asset_out(asset) for asset in refreshed]
+
+
 @router.get("/{project_id}/timeline", response_model=ProjectTimelineOut)
 async def get_project_timeline(
     project_id: str,
+    cut_version_id: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """读取项目剪辑时间线；未编辑过的项目返回真实空时间线。"""
     project = (await require_project_access(project_id, user, db)).project
+    cut_version = await _resolve_cut_version(db, project.id, cut_version_id)
+    timeline_owner = cut_version or project
     return ProjectTimelineOut(
         project_id=project.id,
-        version=project.timeline_version or 0,
-        aspect_ratio=project.aspect_ratio or "16:9",
-        clips=_timeline_clips_for_output(project.timeline),
-        updated_at=project.timeline_updated_at,
+        cut_version_id=cut_version.id if cut_version else None,
+        cut_version_name=cut_version.name if cut_version else None,
+        version=timeline_owner.timeline_version or 0,
+        aspect_ratio=(cut_version.aspect_ratio if cut_version else project.aspect_ratio) or "16:9",
+        clips=_timeline_clips_for_output(timeline_owner.timeline),
+        updated_at=timeline_owner.timeline_updated_at,
     )
 
 
@@ -497,12 +679,15 @@ async def get_project_timeline(
 async def save_project_timeline(
     project_id: str,
     req: ProjectTimelineUpdate,
+    cut_version_id: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """保存完整时间线，并用版本号避免多个页面互相覆盖。"""
     project = (await require_project_access(project_id, user, db, "editor")).project
-    current_version = project.timeline_version or 0
+    cut_version = await _resolve_cut_version(db, project.id, cut_version_id)
+    timeline_owner = cut_version or project
+    current_version = timeline_owner.timeline_version or 0
     if req.version != current_version:
         raise HTTPException(status_code=409, detail="时间线已在其他页面更新，请刷新后重试")
 
@@ -512,13 +697,20 @@ async def save_project_timeline(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     now = datetime.now(timezone.utc)
-    project.timeline = [
+    saved_timeline = [
         clip.model_dump(mode="json", exclude={"generated_media_url"})
         for clip in req.clips
     ]
-    project.timeline_version = current_version + 1
-    project.timeline_updated_at = now
-    project.aspect_ratio = req.aspect_ratio
+    timeline_owner.timeline = saved_timeline
+    timeline_owner.timeline_version = current_version + 1
+    timeline_owner.timeline_updated_at = now
+    timeline_owner.aspect_ratio = req.aspect_ratio
+    # 项目字段保留为最近编辑版本的兼容镜像，旧客户端和素材同步仍可工作。
+    if cut_version:
+        project.timeline = saved_timeline
+        project.timeline_version = cut_version.timeline_version
+        project.timeline_updated_at = now
+        project.aspect_ratio = req.aspect_ratio
     from app.services.project_media import sync_project_media_items
 
     await sync_project_media_items(db, project)
@@ -526,9 +718,11 @@ async def save_project_timeline(
 
     return ProjectTimelineOut(
         project_id=project.id,
-        version=project.timeline_version,
-        aspect_ratio=project.aspect_ratio,
-        clips=_timeline_clips_for_output(project.timeline),
+        cut_version_id=cut_version.id if cut_version else None,
+        cut_version_name=cut_version.name if cut_version else None,
+        version=timeline_owner.timeline_version,
+        aspect_ratio=timeline_owner.aspect_ratio,
+        clips=_timeline_clips_for_output(timeline_owner.timeline),
         updated_at=now,
     )
 
@@ -536,20 +730,28 @@ async def save_project_timeline(
 @router.post("/{project_id}/timeline/assemble-from-script", response_model=ProjectTimelineOut)
 async def assemble_project_timeline_from_script(
     project_id: str,
+    cut_version_id: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """为历史空剪辑项目按初剪快照补装完整时间线，不覆盖已有人工剪辑。"""
     project = (await require_project_access(project_id, user, db, "editor")).project
-    if project.timeline:
+    cut_version = await _resolve_cut_version(db, project.id, cut_version_id)
+    timeline_owner = cut_version or project
+    if timeline_owner.timeline:
         raise HTTPException(status_code=409, detail="当前项目已有时间线内容，不能重新装配覆盖")
     if not project.source_script_id:
         raise HTTPException(status_code=400, detail="当前项目没有关联来源脚本")
 
+    snapshot_query = select(Script).where(
+        Script.project_id == project.id,
+        Script.is_snapshot.is_(True),
+    )
+    if cut_version and cut_version.snapshot_script_id:
+        snapshot_query = snapshot_query.where(Script.id == cut_version.snapshot_script_id)
     snapshot = (
         await db.execute(
-            select(Script)
-            .where(Script.project_id == project.id, Script.is_snapshot.is_(True))
+            snapshot_query
             .options(selectinload(Script.units).selectinload(ScriptUnit.shots))
             .order_by(desc(Script.created_at))
         )
@@ -603,8 +805,11 @@ async def assemble_project_timeline_from_script(
         raise HTTPException(status_code=400, detail="脚本中没有可用于装配时间线的内容")
 
     now = datetime.now(timezone.utc)
+    timeline_owner.timeline = timeline
+    timeline_owner.timeline_version = (timeline_owner.timeline_version or 0) + 1
+    timeline_owner.timeline_updated_at = now
     project.timeline = timeline
-    project.timeline_version = (project.timeline_version or 0) + 1
+    project.timeline_version = timeline_owner.timeline_version
     project.timeline_updated_at = now
     project.ai_shot_count = stats["generated"]
     project.status = "AI 初剪可编辑"
@@ -620,8 +825,10 @@ async def assemble_project_timeline_from_script(
 
     return ProjectTimelineOut(
         project_id=project.id,
-        version=project.timeline_version,
-        aspect_ratio=project.aspect_ratio or "16:9",
-        clips=_timeline_clips_for_output(project.timeline),
+        cut_version_id=cut_version.id if cut_version else None,
+        cut_version_name=cut_version.name if cut_version else None,
+        version=timeline_owner.timeline_version,
+        aspect_ratio=(cut_version.aspect_ratio if cut_version else project.aspect_ratio) or "16:9",
+        clips=_timeline_clips_for_output(timeline_owner.timeline),
         updated_at=now,
     )

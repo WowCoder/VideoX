@@ -26,6 +26,9 @@ class Asset(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"asset-{uuid.uuid4().hex[:12]}")
     project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False, index=True)
+    imported_from_asset_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("assets.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     duration: Mapped[float] = mapped_column(Float, default=0.0)  # 秒
     status: Mapped[str] = mapped_column(String(50), default="处理中")
@@ -55,6 +58,9 @@ class Asset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     project: Mapped["Project"] = relationship("Project", back_populates="assets")  # type: ignore
+    imported_from: Mapped["Asset | None"] = relationship(
+        "Asset", remote_side=[id], foreign_keys=[imported_from_asset_id]
+    )
     clips: Mapped[list["Clip"]] = relationship("Clip", back_populates="asset", cascade="all, delete-orphan")
 
 

@@ -7,7 +7,7 @@
 
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useNavigationBlocker, useParams } from "@/router";
+import { useNavigate, useNavigationBlocker, useParams, useSearchParams } from "@/router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
@@ -230,11 +230,13 @@ function makeClip(
 
 export default function ProjectEditorView() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { projectId: routeProjectId } = useParams<{ projectId: string }>();
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const setCurrentProject = useProjectStore((s) => s.setCurrentProject);
   const openUploadDrawer = useUIStore((s) => s.openUploadDrawer);
   const projectId = routeProjectId ?? currentProjectId;
+  const requestedVersionId = searchParams.get("version") ?? undefined;
 
   /* ── 拉取项目 / 素材 / 脚本 ── */
   const projectQuery = useQuery({
@@ -242,6 +244,14 @@ export default function ProjectEditorView() {
     queryFn: () => projectApi.get(projectId!),
     enabled: !!projectId,
   });
+  const versionsQuery = useQuery({
+    queryKey: ["cut-versions", projectId],
+    queryFn: () => projectApi.listVersions(projectId!),
+    enabled: !!projectId,
+  });
+  const selectedVersion = versionsQuery.data?.find((version) => version.id === requestedVersionId)
+    ?? (requestedVersionId ? undefined : versionsQuery.data?.at(-1));
+  const selectedVersionId = selectedVersion?.id;
   const sourceScriptQuery = useQuery({
     queryKey: ["source-script", projectQuery.data?.sourceScriptId],
     queryFn: () => scriptApi.get(projectQuery.data!.sourceScriptId!),
@@ -250,12 +260,12 @@ export default function ProjectEditorView() {
   const sourceAssetProjectId = sourceScriptQuery.data?.projectId;
   const assetsQuery = useQuery({
     queryKey: ["assets", projectId],
-    queryFn: () => assetApi.list({ projectId: projectId! }),
+    queryFn: async () => ({ items: await assetApi.listAll({ projectId: projectId! }), total: 0 }),
     enabled: !!projectId,
   });
   const sourceAssetsQuery = useQuery({
     queryKey: ["assets", sourceAssetProjectId],
-    queryFn: () => assetApi.list({ projectId: sourceAssetProjectId! }),
+    queryFn: async () => ({ items: await assetApi.listAll({ projectId: sourceAssetProjectId! }), total: 0 }),
     enabled: !!sourceAssetProjectId && sourceAssetProjectId !== projectId,
   });
   const scriptsQuery = useQuery({
@@ -264,14 +274,16 @@ export default function ProjectEditorView() {
     enabled: !!projectId,
   });
   const snapshotScriptQuery = useQuery({
-    queryKey: ["snapshot-script", projectId],
-    queryFn: () => scriptApi.getSnapshot(projectId!),
+    queryKey: ["snapshot-script", projectId, selectedVersion?.snapshotScriptId],
+    queryFn: () => selectedVersion?.snapshotScriptId
+      ? scriptApi.get(selectedVersion.snapshotScriptId)
+      : scriptApi.getSnapshot(projectId!),
     enabled: !!projectId && !!projectQuery.data?.sourceScriptId,
   });
   const timelineQuery = useQuery({
-    queryKey: ["project-timeline", projectId],
-    queryFn: () => projectApi.getTimeline(projectId!),
-    enabled: !!projectId,
+    queryKey: ["project-timeline", projectId, selectedVersionId],
+    queryFn: () => projectApi.getTimeline(projectId!, selectedVersionId),
+    enabled: !!projectId && (!requestedVersionId || !!selectedVersionId),
   });
   const projectMediaQuery = useQuery({
     queryKey: ["project-media", projectId],
@@ -304,6 +316,7 @@ export default function ProjectEditorView() {
 
   const clipsRef = useRef(clips);
   const hydratedProjectRef = useRef<string | null>(null);
+  const hydrationKey = projectId ? `${projectId}:${selectedVersionId ?? "project"}` : null;
   const blockedSaveSignatureRef = useRef<string | null>(null);
   const currentSignature = useMemo(() => JSON.stringify({ clips, aspect }), [clips, aspect]);
   const currentSignatureRef = useRef(currentSignature);
@@ -327,11 +340,22 @@ export default function ProjectEditorView() {
   }, [projectId, setCurrentProject]);
 
   useEffect(() => {
-    if (!projectId || !timelineQuery.data || hydratedProjectRef.current === projectId) return;
+    if (!projectId || !versionsQuery.data) return;
+    const fallbackVersion = versionsQuery.data.at(-1)?.id;
+    if (requestedVersionId && versionsQuery.data.some((version) => version.id === requestedVersionId)) return;
+    if (!requestedVersionId && !fallbackVersion) return;
+    const next = new URLSearchParams(searchParams);
+    if (fallbackVersion) next.set("version", fallbackVersion);
+    else next.delete("version");
+    setSearchParams(next, { replace: true });
+  }, [projectId, requestedVersionId, searchParams, setSearchParams, versionsQuery.data]);
+
+  useEffect(() => {
+    if (!hydrationKey || !timelineQuery.data || hydratedProjectRef.current === hydrationKey) return;
     const nextClips = timelineQuery.data.clips;
     const nextAspect = timelineQuery.data.aspectRatio || "16:9";
     const signature = JSON.stringify({ clips: nextClips, aspect: nextAspect });
-    hydratedProjectRef.current = projectId;
+    hydratedProjectRef.current = hydrationKey;
     setLastSavedSignature(signature);
     blockedSaveSignatureRef.current = null;
     currentSignatureRef.current = signature;
@@ -342,7 +366,7 @@ export default function ProjectEditorView() {
     setPast([]);
     setFuture([]);
     setAutoSaveStatus("saved");
-  }, [projectId, timelineQuery.data]);
+  }, [hydrationKey, timelineQuery.data]);
 
   const timelineDirty = Boolean(lastSavedSignature) && currentSignature !== lastSavedSignature;
   useNavigationBlocker(
@@ -371,7 +395,7 @@ export default function ProjectEditorView() {
         version: input.version,
         aspectRatio: input.aspectRatio,
         clips: input.clips,
-      }),
+      }, selectedVersionId),
     onSuccess: (saved, variables) => {
       setTimelineVersion(saved.version);
       setLastSavedSignature(variables.signature);
@@ -399,7 +423,7 @@ export default function ProjectEditorView() {
     if (
       !projectId ||
       readOnly ||
-      hydratedProjectRef.current !== projectId ||
+      hydratedProjectRef.current !== hydrationKey ||
       currentSignature === lastSavedSignature ||
       blockedSaveSignatureRef.current === currentSignature ||
       saveTimelinePending
@@ -423,6 +447,8 @@ export default function ProjectEditorView() {
     currentSignature,
     lastSavedSignature,
     projectId,
+    hydrationKey,
+    selectedVersionId,
     saveAttempt,
     saveTimeline,
     saveTimelinePending,
@@ -449,6 +475,7 @@ export default function ProjectEditorView() {
   const exportMutation = useMutation({
     mutationFn: () => generateApi.exportProject({
       projectId: projectId!,
+      cutVersionId: selectedVersionId,
       format: exportFormat,
       resolution: exportResolution,
     }),
@@ -511,7 +538,7 @@ export default function ProjectEditorView() {
   });
 
   const assembleTimelineMutation = useMutation({
-    mutationFn: () => projectApi.assembleTimelineFromScript(projectId!),
+    mutationFn: () => projectApi.assembleTimelineFromScript(projectId!, selectedVersionId),
     onSuccess: () => {
       hydratedProjectRef.current = null;
       setEditorError(null);
@@ -878,15 +905,15 @@ export default function ProjectEditorView() {
       />
     );
   }
-  if (projectQuery.isLoading || timelineQuery.isLoading || sourceScriptQuery.isLoading) {
+  if (projectQuery.isLoading || versionsQuery.isLoading || timelineQuery.isLoading || sourceScriptQuery.isLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-canvas">
         <Loader2 className="h-8 w-8 animate-spin text-blue" />
       </div>
     );
   }
-  if (projectQuery.isError || timelineQuery.isError || sourceScriptQuery.isError) {
-    const loadError = projectQuery.error ?? timelineQuery.error ?? sourceScriptQuery.error;
+  if (projectQuery.isError || versionsQuery.isError || timelineQuery.isError || sourceScriptQuery.isError) {
+    const loadError = projectQuery.error ?? versionsQuery.error ?? timelineQuery.error ?? sourceScriptQuery.error;
     return (
       <EmptyState
         title="加载失败"
@@ -982,9 +1009,25 @@ export default function ProjectEditorView() {
           className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-muted transition hover:bg-canvas hover:text-text"
         />
         <div className="h-5 w-px bg-line" />
-        <h1 className="flex-1 truncate text-base font-semibold text-ink">
-          {project?.name ?? "剪辑工作区"}
-        </h1>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <h1 className="truncate text-base font-semibold text-ink">{project?.name ?? "剪辑工作区"}</h1>
+          {versionsQuery.data && versionsQuery.data.length > 0 && (
+            <select
+              value={selectedVersionId ?? ""}
+              onChange={(event) => {
+                const next = new URLSearchParams(searchParams);
+                next.set("version", event.target.value);
+                setSearchParams(next);
+              }}
+              className="h-8 shrink-0 rounded-lg border border-line bg-canvas px-2.5 text-xs font-medium text-text"
+              aria-label="剪辑版本"
+            >
+              {versionsQuery.data.map((version) => (
+                <option key={version.id} value={version.id}>{version.name} · {version.status}</option>
+              ))}
+            </select>
+          )}
+        </div>
 
         {readOnly && (
           <span className="rounded-full bg-amber/10 px-2.5 py-1 text-xs font-medium text-amber">

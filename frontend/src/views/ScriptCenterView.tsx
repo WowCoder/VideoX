@@ -242,7 +242,7 @@ export function ScriptCenterView() {
                   </div>
                   <div className="mt-2.5">
                     <div className="flex items-center justify-between text-[11px] text-muted">
-                      <span>{script.matchedCount}/{script.unitCount} 单元匹配</span>
+                      <span>已有画面 {script.matchedCount}/{script.unitCount} 个分镜</span>
                       <span>{script.progress}%</span>
                     </div>
                     <div className="mt-1 h-1 overflow-hidden rounded-full bg-canvas">

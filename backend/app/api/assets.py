@@ -519,6 +519,35 @@ async def delete_asset(
         + ([asset.file_path] if asset.file_path else [])
         + ([asset.preview_path] if asset.preview_path else [])
     )
+    if object_paths:
+        shared_asset_paths = {
+            value
+            for row in (
+                await db.execute(
+                    select(Asset.file_path, Asset.preview_path, Asset.thumbnail_path).where(
+                        Asset.id != asset.id,
+                        or_(
+                            Asset.file_path.in_(object_paths),
+                            Asset.preview_path.in_(object_paths),
+                            Asset.thumbnail_path.in_(object_paths),
+                        ),
+                    )
+                )
+            ).all()
+            for value in row
+            if value in object_paths
+        }
+        shared_clip_paths = set(
+            (
+                await db.execute(
+                    select(Clip.thumbnail_path).where(
+                        Clip.asset_id != asset.id,
+                        Clip.thumbnail_path.in_(object_paths),
+                    )
+                )
+            ).scalars().all()
+        )
+        object_paths -= shared_asset_paths | shared_clip_paths
 
     await db.delete(asset)
     if project:

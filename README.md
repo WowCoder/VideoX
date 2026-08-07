@@ -131,7 +131,7 @@ Backend、Celery Worker 与 Celery Beat 的 Docker 进程默认使用非 root �
 
 > 根目录的 `docker-compose.yml` 面向本地开发和测试：包含源码挂载、Vite 开发服务器、Uvicorn reload、固定开发凭证及本机端口映射，不应直接作为公网生产部署模板。
 
-生产部署请使用 `compose.prod.yml`，并从 `deploy/README.md` 开始。推荐公网入口为雷池 SafeLine，仓库内 Nginx 只作为受保护的内部上游。
+生产部署请使用 `compose.prod.yml`，并从 `deploy/README.md` 开始；首次上线后的日常发布与回滚参见 `deploy/release.md`。推荐公网入口为雷池 SafeLine，仓库内 Nginx 只作为受保护的内部上游。
 
 ### 1. 创建环境配置
 

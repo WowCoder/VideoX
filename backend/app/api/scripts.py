@@ -19,13 +19,14 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.project import Project
-from app.models.script import Script, ScriptUnit, Shot, Candidate
+from app.models.script import Script, ScriptUnit, Shot, Candidate, ShotGeneration
+from app.models.cut_version import CutVersion
 from app.models.job import Job
 from app.models.asset import Asset, Clip
 from app.services.project_access import accessible_project_condition, require_project_access
 from app.schemas.script import (
     ScriptCreate, ScriptUpdate, ScriptOut, ScriptListOut,
-    ScriptUnitBatchUpdate, LinkedCutOut,
+    ScriptUnitBatchUpdate, ScriptEditorSave, LinkedCutOut, ShotOut,
 )
 from app.utils.script_parser import parse_script_text
 from app.utils.duration import format_duration
@@ -51,23 +52,33 @@ class CompleteShotsRequest(BaseModel):
 
 
 def _compute_metrics(units: list[ScriptUnit]) -> dict:
-    """计算脚本指标。"""
+    """按分镜统计时长和画面完成度，避免把内部 ScriptUnit 暴露为进度口径。"""
     total_seconds = 0
     matched_count = 0
+    shot_count = 0
     for unit in units:
         if unit.shots:
             for shot in unit.shots:
+                shot_count += 1
                 total_seconds += shot.duration or 8
+                if (
+                    shot.selected_clip_id
+                    or shot.generated_image_path
+                    or shot.generated_video_path
+                    or shot.generated_effect_video_path
+                ):
+                    matched_count += 1
         else:
+            shot_count += 1
             total_seconds += unit.duration or 8
-        if unit.shots and any(s.selected_clip_id for s in unit.shots) or unit.selected_clip_id:
-            matched_count += 1
+            if unit.selected_clip_id:
+                matched_count += 1
 
     return {
         "duration": format_duration(total_seconds),
         "matched_count": matched_count,
-        "progress": round(matched_count / len(units) * 100) if units else 0,
-        "unit_count": len(units),
+        "progress": round(matched_count / shot_count * 100) if shot_count else 0,
+        "unit_count": shot_count,
     }
 
 
@@ -234,7 +245,9 @@ async def list_scripts(
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar() or 0
 
-    query = query.options(selectinload(Script.units).selectinload(ScriptUnit.shots)).order_by(desc(Script.created_at)).offset((page - 1) * page_size).limit(page_size)
+    query = query.options(
+        selectinload(Script.units).selectinload(ScriptUnit.shots).selectinload(Shot.generations)
+    ).order_by(desc(Script.created_at)).offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     scripts = result.scalars().all()
 
@@ -310,7 +323,7 @@ async def create_script(
     units_result = await db.execute(
         select(ScriptUnit)
         .where(ScriptUnit.script_id == script.id)
-        .options(selectinload(ScriptUnit.shots))
+        .options(selectinload(ScriptUnit.shots).selectinload(Shot.generations))
         .order_by(ScriptUnit.index)
     )
     units = list(units_result.scalars().all())
@@ -333,7 +346,7 @@ async def create_script(
     fresh_result = await db.execute(
         select(Script)
         .where(Script.id == script.id)
-        .options(selectinload(Script.units).selectinload(ScriptUnit.shots))
+        .options(selectinload(Script.units).selectinload(ScriptUnit.shots).selectinload(Shot.generations))
     )
     script = fresh_result.scalar_one()
     return ScriptOut.model_validate(script)
@@ -366,7 +379,7 @@ async def get_project_script_snapshot(
                 Script.is_snapshot.is_(True),
                 accessible_project_condition(user.id),
             )
-            .options(selectinload(Script.units).selectinload(ScriptUnit.shots))
+            .options(selectinload(Script.units).selectinload(ScriptUnit.shots).selectinload(Shot.generations))
             .order_by(desc(Script.created_at))
         )
     ).scalars().first()
@@ -387,7 +400,7 @@ async def get_script(
         .join(Project, Script.project_id == Project.id)
         .where(Script.id == script_id, accessible_project_condition(user.id))
         .options(
-            selectinload(Script.units).selectinload(ScriptUnit.shots),
+            selectinload(Script.units).selectinload(ScriptUnit.shots).selectinload(Shot.generations),
         )
     )
     script = result.scalar_one_or_none()
@@ -428,17 +441,27 @@ async def list_linked_cuts(
     result: list[LinkedCutOut] = []
     for project in projects:
         access = await require_project_access(project.id, user, db)
-        result.append(
-            LinkedCutOut(
-                project_id=project.id,
-                name=project.name,
-                status=project.status,
-                aspect_ratio=project.aspect_ratio,
-                timeline_version=project.timeline_version or 0,
-                current_user_role=access.role,
-                updated_at=project.updated_at,
+        versions = (
+            await db.execute(
+                select(CutVersion)
+                .where(CutVersion.project_id == project.id)
+                .order_by(desc(CutVersion.created_at))
             )
-        )
+        ).scalars().all()
+        for version in versions:
+            result.append(
+                LinkedCutOut(
+                    project_id=project.id,
+                    version_id=version.id,
+                    name=project.name,
+                    version_name=version.name,
+                    status=version.status,
+                    aspect_ratio=version.aspect_ratio,
+                    timeline_version=version.timeline_version or 0,
+                    current_user_role=access.role,
+                    updated_at=version.updated_at,
+                )
+            )
     return result
 
 
@@ -454,7 +477,7 @@ async def export_script(
         select(Script)
         .join(Project, Script.project_id == Project.id)
         .where(Script.id == script_id, accessible_project_condition(user.id))
-        .options(selectinload(Script.units).selectinload(ScriptUnit.shots))
+        .options(selectinload(Script.units).selectinload(ScriptUnit.shots).selectinload(Shot.generations))
     )
     script = result.scalar_one_or_none()
     if not script:
@@ -580,7 +603,7 @@ async def update_script(
     fresh_result = await db.execute(
         select(Script)
         .where(Script.id == script_id)
-        .options(selectinload(Script.units).selectinload(ScriptUnit.shots))
+        .options(selectinload(Script.units).selectinload(ScriptUnit.shots).selectinload(Shot.generations))
     )
     script = fresh_result.scalar_one()
     return ScriptOut.model_validate(script)
@@ -633,7 +656,7 @@ async def batch_update_units(
     units_result = await db.execute(
         select(ScriptUnit)
         .where(ScriptUnit.script_id == script_id)
-        .options(selectinload(ScriptUnit.shots))
+        .options(selectinload(ScriptUnit.shots).selectinload(Shot.generations))
         .order_by(ScriptUnit.index)
     )
     existing_units = {u.id: u for u in units_result.scalars().all()}
@@ -701,12 +724,31 @@ async def batch_update_units(
                         shot.notes = shot_data.get("notes", shot.notes)
                         shot.visual_mode = shot_data.get("visual_mode", shot.visual_mode)
                         shot.status = shot_data.get("status", shot.status)
-                        shot.selected_clip_id = shot_data.get("selected_clip_id", shot.selected_clip_id)
+                        incoming_clip_id = shot_data.get("selected_clip_id", shot.selected_clip_id)
+                        shot.selected_clip_id = incoming_clip_id
+                        if incoming_clip_id:
+                            await db.execute(
+                                update(ShotGeneration)
+                                .where(ShotGeneration.shot_id == shot.id)
+                                .values(is_selected=False)
+                            )
+                            shot.generated_image_path = None
+                            shot.generated_video_path = None
+                            shot.generated_effect_video_path = None
+                            shot.visual_mode = "recommend"
                         if unit_semantic_changed or description_changed:
                             await db.execute(delete(Candidate).where(Candidate.shot_id == shot.id))
                             shot.candidates = []
                             shot.status = "待编辑"
                             shot.selected_clip_id = None
+                            shot.generated_image_path = None
+                            shot.generated_video_path = None
+                            shot.generated_effect_video_path = None
+                            await db.execute(
+                                update(ShotGeneration)
+                                .where(ShotGeneration.shot_id == shot.id)
+                                .values(is_selected=False)
+                            )
                 else:
                     shot = Shot(
                         unit_id=unit.id,
@@ -750,7 +792,7 @@ async def batch_update_units(
     # 重算指标
     units_result = await db.execute(
         select(ScriptUnit).where(ScriptUnit.script_id == script_id)
-        .options(selectinload(ScriptUnit.shots))
+        .options(selectinload(ScriptUnit.shots).selectinload(Shot.generations))
         .order_by(ScriptUnit.index)
     )
     units = list(units_result.scalars().all())
@@ -763,6 +805,96 @@ async def batch_update_units(
 
     await db.flush()
     return {"status": "ok", "progress": script.progress, "matched_count": script.matched_count}
+
+
+@router.patch("/{script_id}/editor-state", response_model=ScriptOut)
+async def save_script_editor_state(
+    script_id: str,
+    req: ScriptEditorSave,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """在同一数据库事务中保存标题、视觉配置、脚本句和全部分镜。"""
+    await update_script(
+        script_id,
+        ScriptUpdate(title=req.title, visual_config=req.visual_config),
+        user,
+        db,
+    )
+    await batch_update_units(
+        script_id,
+        ScriptUnitBatchUpdate(units=req.units),
+        user,
+        db,
+    )
+    fresh = (
+        await db.execute(
+            select(Script)
+            .where(Script.id == script_id)
+            .options(
+                selectinload(Script.units)
+                .selectinload(ScriptUnit.shots)
+                .selectinload(Shot.generations)
+            )
+        )
+    ).scalar_one()
+    return ScriptOut.model_validate(fresh)
+
+
+@router.post(
+    "/{script_id}/shots/{shot_id}/generations/{generation_id}/select",
+    response_model=ShotOut,
+)
+async def select_shot_generation(
+    script_id: str,
+    shot_id: str,
+    generation_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """显式采用一条历史生成结果；其他结果继续保留为可选历史。"""
+    row = (
+        await db.execute(
+            select(ShotGeneration, Shot, Script)
+            .join(Shot, Shot.id == ShotGeneration.shot_id)
+            .join(ScriptUnit, ScriptUnit.id == Shot.unit_id)
+            .join(Script, Script.id == ScriptUnit.script_id)
+            .join(Project, Project.id == Script.project_id)
+            .where(
+                ShotGeneration.id == generation_id,
+                Shot.id == shot_id,
+                Script.id == script_id,
+                accessible_project_condition(user.id),
+            )
+        )
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="生成结果不存在或不属于当前分镜")
+    generation, shot, script = row
+    await require_project_access(script.project_id, user, db, "editor")
+
+    await db.execute(
+        update(ShotGeneration)
+        .where(ShotGeneration.shot_id == shot.id)
+        .values(is_selected=False)
+    )
+    generation.is_selected = True
+    shot.generated_image_path = generation.storage_path if generation.kind == "image" else None
+    shot.generated_video_path = generation.storage_path if generation.kind == "video" else None
+    shot.generated_effect_video_path = generation.storage_path if generation.kind == "effect" else None
+    shot.visual_mode = {"image": "image", "video": "video", "effect": "sketch"}[generation.kind]
+    shot.selected_clip_id = None
+    shot.status = "已选择"
+    await db.flush()
+
+    fresh_shot = (
+        await db.execute(
+            select(Shot)
+            .where(Shot.id == shot.id)
+            .options(selectinload(Shot.generations))
+        )
+    ).scalar_one()
+    return ShotOut.model_validate(fresh_shot)
 
 
 @router.post("/{script_id}/match")
@@ -780,7 +912,7 @@ async def match_script_clips(
         select(Script)
         .join(Project, Script.project_id == Project.id)
         .where(Script.id == script_id, accessible_project_condition(user.id))
-        .options(selectinload(Script.units).selectinload(ScriptUnit.shots))
+        .options(selectinload(Script.units).selectinload(ScriptUnit.shots).selectinload(Shot.generations))
     )
     script = result.scalar_one_or_none()
     if not script:
@@ -921,7 +1053,7 @@ async def create_rough_cut(
         select(Script).join(Project, Script.project_id == Project.id).where(
             Script.id == script_id, accessible_project_condition(user.id)
         )
-        .options(selectinload(Script.units).selectinload(ScriptUnit.shots))
+        .options(selectinload(Script.units).selectinload(ScriptUnit.shots).selectinload(Shot.generations))
     )
     script = result.scalar_one_or_none()
     if not script:
@@ -932,25 +1064,26 @@ async def create_rough_cut(
         script.visual_config = req.visual_config
     visual_config = script.visual_config or {}
 
-    # 同一来源脚本存在进行中的初剪时直接返回，防止双击生成重复项目。
+    # 同一来源脚本只维护一个剪辑项目；进行中的版本直接返回，防止双击重复创建。
     existing_project = (
         await db.execute(
             select(Project)
             .where(
                 Project.owner_id == user.id,
                 Project.source_script_id == script.id,
-                Project.status == "AI 初剪生成中",
             )
-            .order_by(desc(Project.created_at))
+            .order_by(Project.created_at)
         )
     ).scalars().first()
     if existing_project:
-        existing_snapshot = (
+        running_version = (
             await db.execute(
-                select(Script).where(
-                    Script.project_id == existing_project.id,
-                    Script.is_snapshot.is_(True),
+                select(CutVersion)
+                .where(
+                    CutVersion.project_id == existing_project.id,
+                    CutVersion.status == "AI 初剪生成中",
                 )
+                .order_by(desc(CutVersion.created_at))
             )
         ).scalars().first()
         existing_job = (
@@ -964,40 +1097,43 @@ async def create_rough_cut(
                 .order_by(desc(Job.created_at))
             )
         ).scalars().first()
-        if existing_snapshot and existing_job:
+        if running_version and running_version.snapshot_script_id and existing_job:
             return {
                 "project_id": existing_project.id,
-                "script_id": existing_snapshot.id,
+                "script_id": running_version.snapshot_script_id,
+                "version_id": running_version.id,
                 "job_id": existing_job.id,
-                "message": "该脚本已有正在生成的初剪项目",
+                "message": "该脚本已有正在生成的剪辑版本",
             }
 
-    # 创建 AI 初剪项目
-    ai_project = Project(
-        owner_id=user.id,
-        name=(req.title or "").strip() or f"{script.title} · AI 初剪",
-        initial=script.title[0].upper() if script.title else "A",
-        type="AI 初剪项目",
-        description=f"基于脚本「{script.title}」自动装配的初剪项目",
-        status="AI 初剪生成中",
-        variant="robot",
-        source_script_id=script.id,
-        visual_style=visual_config.get("stylePreset", "brand-tech"),
-        aspect_ratio=visual_config.get("aspectRatio", "16:9"),
-        ai_shot_count=sum(
-            1
-            for unit in script.units
-            for shot in (unit.shots or [])
-            if (
-                shot.generated_image_path
-                or shot.generated_video_path
-                or shot.generated_effect_video_path
-            )
-        ),
-        is_new=True,
-    )
-    db.add(ai_project)
-    await db.flush()
+    if existing_project:
+        ai_project = existing_project
+        ai_project.status = "AI 初剪生成中"
+        ai_project.visual_style = visual_config.get("stylePreset", "brand-tech")
+        ai_project.aspect_ratio = visual_config.get("aspectRatio", "16:9")
+    else:
+        ai_project = Project(
+            owner_id=user.id,
+            name=f"{script.title} · 剪辑项目",
+            initial=script.title[0].upper() if script.title else "A",
+            type="AI 剪辑项目",
+            description=f"基于脚本「{script.title}」创建的多版本剪辑项目",
+            status="AI 初剪生成中",
+            variant="robot",
+            source_script_id=script.id,
+            visual_style=visual_config.get("stylePreset", "brand-tech"),
+            aspect_ratio=visual_config.get("aspectRatio", "16:9"),
+            ai_shot_count=0,
+            is_new=True,
+        )
+        db.add(ai_project)
+        await db.flush()
+
+    version_count = (
+        await db.execute(
+            select(func.count()).select_from(CutVersion).where(CutVersion.project_id == ai_project.id)
+        )
+    ).scalar() or 0
 
     # 复制脚本
     import copy
@@ -1019,6 +1155,18 @@ async def create_rough_cut(
         needs_initial_save=False,
     )
     db.add(copied_script)
+    await db.flush()
+
+    cut_version = CutVersion(
+        project_id=ai_project.id,
+        snapshot_script_id=copied_script.id,
+        name=f"V{version_count + 1}",
+        status="AI 初剪生成中",
+        aspect_ratio=visual_config.get("aspectRatio", "16:9"),
+        timeline=[],
+        timeline_version=0,
+    )
+    db.add(cut_version)
     await db.flush()
 
     # 复制 units 和 shots
@@ -1072,6 +1220,7 @@ async def create_rough_cut(
             "project_id": ai_project.id,
             "script_id": copied_script.id,
             "source_project_id": script.project_id,
+            "cut_version_id": cut_version.id,
         },
         is_simulated=False,
     )
@@ -1081,7 +1230,9 @@ async def create_rough_cut(
     # 派发 Celery 任务
     from app.tasks.roughcut_tasks import run_rough_cut
     try:
-        task = run_rough_cut.delay(job.id, ai_project.id, copied_script.id, script.project_id)
+        task = run_rough_cut.delay(
+            job.id, ai_project.id, copied_script.id, script.project_id, cut_version.id
+        )
         job.celery_task_id = task.id
         await db.commit()
     except Exception as exc:
@@ -1095,6 +1246,7 @@ async def create_rough_cut(
     return {
         "project_id": ai_project.id,
         "script_id": copied_script.id,
+        "version_id": cut_version.id,
         "job_id": job.id,
         "message": "AI 初剪任务已创建",
     }

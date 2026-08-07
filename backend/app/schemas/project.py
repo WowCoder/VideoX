@@ -140,6 +140,8 @@ class ProjectTimelineUpdate(BaseModel):
 
 class ProjectTimelineOut(BaseModel):
     project_id: str
+    cut_version_id: Optional[str] = None
+    cut_version_name: Optional[str] = None
     version: int
     aspect_ratio: str
     clips: list[TimelineClip]
@@ -167,3 +169,22 @@ class ProjectMediaItemOut(BaseModel):
 class ProjectMediaListOut(BaseModel):
     items: list[ProjectMediaItemOut]
     total: int
+
+
+class CutVersionOut(BaseModel):
+    id: str
+    project_id: str
+    snapshot_script_id: Optional[str] = None
+    name: str
+    status: str
+    aspect_ratio: str
+    timeline_version: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AssetImportRequest(BaseModel):
+    asset_ids: list[str] = Field(..., min_length=1, max_length=100)

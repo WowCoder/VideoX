@@ -11,7 +11,8 @@ from app.models.asset import Asset, Clip
 from app.models.job import Job
 from app.models.project import Project
 from app.models.project_media import ProjectMediaItem
-from app.models.script import Candidate, Script, ScriptUnit, Shot
+from app.models.script import Candidate, Script, ScriptUnit, Shot, ShotGeneration
+from app.models.cut_version import CutVersion
 
 
 ACTIVE_JOB_STATUSES = {"QUEUED", "RUNNING", "PAUSED"}
@@ -45,10 +46,18 @@ async def asset_delete_impact(db: AsyncSession, asset: Asset) -> dict[str, Any]:
         or 0
     )
     timeline_refs = 0
+    version_rows = (
+        await db.execute(select(CutVersion.project_id, CutVersion.timeline))
+    ).all()
+    version_project_ids = {project_id for project_id, _ in version_rows}
     project_rows = (
         await db.execute(select(Project.id, Project.timeline).where(Project.timeline.is_not(None)))
     ).all()
-    for _, timeline in project_rows:
+    for project_id, timeline in project_rows:
+        if project_id in version_project_ids:
+            continue
+        timeline_refs += _timeline_asset_references(timeline, asset.id)
+    for _, timeline in version_rows:
         timeline_refs += _timeline_asset_references(timeline, asset.id)
 
     active_jobs = 0
@@ -286,6 +295,14 @@ async def project_delete_impact(db: AsyncSession, project: Project) -> dict[str,
             ).scalar()
             or 0
         )
+        external_version_rows = (
+            await db.execute(
+                select(CutVersion.project_id, CutVersion.timeline).where(
+                    CutVersion.project_id != project.id
+                )
+            )
+        ).all()
+        version_project_ids = {project_id for project_id, _ in external_version_rows}
         project_rows = (
             await db.execute(
                 select(Project.id, Project.timeline).where(
@@ -294,7 +311,12 @@ async def project_delete_impact(db: AsyncSession, project: Project) -> dict[str,
                 )
             )
         ).all()
-        for _, timeline in project_rows:
+        for external_project_id, timeline in project_rows:
+            if external_project_id in version_project_ids:
+                continue
+            for asset_id in asset_ids:
+                external_asset_references += _timeline_asset_references(timeline, asset_id)
+        for _, timeline in external_version_rows:
             for asset_id in asset_ids:
                 external_asset_references += _timeline_asset_references(timeline, asset_id)
     counts = {
@@ -364,6 +386,18 @@ async def project_storage_paths(db: AsyncSession, project_id: str) -> set[str]:
         ).all()
         for row in generated_rows:
             paths.update(path for path in row if path)
+        paths.update(
+            path
+            for path in (
+                await db.execute(
+                    select(ShotGeneration.storage_path)
+                    .join(Shot, Shot.id == ShotGeneration.shot_id)
+                    .join(ScriptUnit, Shot.unit_id == ScriptUnit.id)
+                    .where(ScriptUnit.script_id.in_(script_ids))
+                )
+            ).scalars().all()
+            if path
+        )
     paths.update(
         path
         for path in (
@@ -375,6 +409,16 @@ async def project_storage_paths(db: AsyncSession, project_id: str) -> set[str]:
         ).scalars().all()
         if path
     )
+    project_version_timelines = (
+        await db.execute(
+            select(CutVersion.timeline).where(CutVersion.project_id == project_id)
+        )
+    ).scalars().all()
+    for timeline in project_version_timelines:
+        for item in timeline or []:
+            path = item.get("generated_media_path")
+            if path:
+                paths.add(path)
 
     shared_paths = (
         set(
@@ -391,6 +435,50 @@ async def project_storage_paths(db: AsyncSession, project_id: str) -> set[str]:
         else set()
     )
     if paths:
+        external_asset_rows = (
+            await db.execute(
+                select(Asset.file_path, Asset.preview_path, Asset.thumbnail_path).where(
+                    Asset.project_id != project_id,
+                    or_(
+                        Asset.file_path.in_(paths),
+                        Asset.preview_path.in_(paths),
+                        Asset.thumbnail_path.in_(paths),
+                    ),
+                )
+            )
+        ).all()
+        for row in external_asset_rows:
+            shared_paths.update(path for path in row if path in paths)
+        shared_paths.update(
+            path
+            for path in (
+                await db.execute(
+                    select(Clip.thumbnail_path)
+                    .join(Asset)
+                    .where(
+                        Asset.project_id != project_id,
+                        Clip.thumbnail_path.in_(paths),
+                    )
+                )
+            ).scalars().all()
+            if path
+        )
+        shared_paths.update(
+            path
+            for path in (
+                await db.execute(
+                    select(ShotGeneration.storage_path)
+                    .join(Shot, Shot.id == ShotGeneration.shot_id)
+                    .join(ScriptUnit, Shot.unit_id == ScriptUnit.id)
+                    .join(Script, Script.id == ScriptUnit.script_id)
+                    .where(
+                        Script.project_id != project_id,
+                        ShotGeneration.storage_path.in_(paths),
+                    )
+                )
+            ).scalars().all()
+            if path
+        )
         external_generated_rows = (
             await db.execute(
                 select(
@@ -422,6 +510,16 @@ async def project_storage_paths(db: AsyncSession, project_id: str) -> set[str]:
             )
         ).scalars().all()
         for timeline in external_timelines:
+            for item in timeline or []:
+                path = item.get("generated_media_path")
+                if path in paths:
+                    shared_paths.add(path)
+        external_version_timelines = (
+            await db.execute(
+                select(CutVersion.timeline).where(CutVersion.project_id != project_id)
+            )
+        ).scalars().all()
+        for timeline in external_version_timelines:
             for item in timeline or []:
                 path = item.get("generated_media_path")
                 if path in paths:

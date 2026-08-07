@@ -306,7 +306,9 @@ export function Sidebar() {
   const membershipName = user?.membership?.name || "Free";
 
   function isActive(path: string) {
-    if (path === "/workspace") return location.pathname === "/workspace";
+    if (path === "/workspace") {
+      return location.pathname === "/workspace" || location.pathname === "/workspace/tasks";
+    }
     return location.pathname.startsWith(path);
   }
 

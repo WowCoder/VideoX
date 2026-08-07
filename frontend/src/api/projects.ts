@@ -139,6 +139,8 @@ export interface ProjectTimelineClip {
 
 export interface ProjectTimeline {
   projectId: string;
+  cutVersionId?: string;
+  cutVersionName?: string;
   version: number;
   aspectRatio: string;
   clips: ProjectTimelineClip[];
@@ -149,6 +151,18 @@ export interface ProjectTimelineSaveInput {
   version: number;
   aspectRatio: string;
   clips: ProjectTimelineClip[];
+}
+
+export interface CutVersion {
+  id: string;
+  projectId: string;
+  snapshotScriptId?: string;
+  name: string;
+  status: string;
+  aspectRatio: string;
+  timelineVersion: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ProjectMediaItem {
@@ -255,10 +269,24 @@ interface RawTimelineClip {
 
 interface RawProjectTimeline {
   project_id: string;
+  cut_version_id?: string | null;
+  cut_version_name?: string | null;
   version: number;
   aspect_ratio: string;
   clips: RawTimelineClip[];
   updated_at: string | null;
+}
+
+interface RawCutVersion {
+  id: string;
+  project_id: string;
+  snapshot_script_id?: string | null;
+  name: string;
+  status: string;
+  aspect_ratio: string;
+  timeline_version: number;
+  created_at: string;
+  updated_at: string;
 }
 
 interface RawProjectMediaItem {
@@ -358,6 +386,8 @@ function mapTimelineClip(raw: RawTimelineClip): ProjectTimelineClip {
 function mapTimeline(raw: RawProjectTimeline): ProjectTimeline {
   return {
     projectId: raw.project_id,
+    cutVersionId: raw.cut_version_id ?? undefined,
+    cutVersionName: raw.cut_version_name ?? undefined,
     version: raw.version,
     aspectRatio: raw.aspect_ratio,
     clips: raw.clips.map(mapTimelineClip),
@@ -470,14 +500,16 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   };
 }
 
-export async function getTimeline(id: string): Promise<ProjectTimeline> {
-  const raw = await http.get<RawProjectTimeline>(`/projects/${id}/timeline`);
+export async function getTimeline(id: string, cutVersionId?: string): Promise<ProjectTimeline> {
+  const query = cutVersionId ? `?cut_version_id=${encodeURIComponent(cutVersionId)}` : "";
+  const raw = await http.get<RawProjectTimeline>(`/projects/${id}/timeline${query}`);
   return mapTimeline(raw);
 }
 
 export async function saveTimeline(
   id: string,
   data: ProjectTimelineSaveInput,
+  cutVersionId?: string,
 ): Promise<ProjectTimeline> {
   const body = {
     version: data.version,
@@ -515,14 +547,36 @@ export async function saveTimeline(
       transition: clip.transition,
     })),
   };
-  const raw = await http.put<RawProjectTimeline>(`/projects/${id}/timeline`, body);
+  const query = cutVersionId ? `?cut_version_id=${encodeURIComponent(cutVersionId)}` : "";
+  const raw = await http.put<RawProjectTimeline>(`/projects/${id}/timeline${query}`, body);
   return mapTimeline(raw);
 }
 
 /** 为历史空剪辑项目按初剪快照补装完整时间线。 */
-export async function assembleTimelineFromScript(id: string): Promise<ProjectTimeline> {
-  const raw = await http.post<RawProjectTimeline>(`/projects/${id}/timeline/assemble-from-script`, {});
+export async function assembleTimelineFromScript(id: string, cutVersionId?: string): Promise<ProjectTimeline> {
+  const query = cutVersionId ? `?cut_version_id=${encodeURIComponent(cutVersionId)}` : "";
+  const raw = await http.post<RawProjectTimeline>(`/projects/${id}/timeline/assemble-from-script${query}`, {});
   return mapTimeline(raw);
+}
+
+export async function listVersions(id: string): Promise<CutVersion[]> {
+  const raw = await http.get<RawCutVersion[]>(`/projects/${id}/versions`);
+  return raw.map((version) => ({
+    id: version.id,
+    projectId: version.project_id,
+    snapshotScriptId: version.snapshot_script_id ?? undefined,
+    name: version.name,
+    status: version.status,
+    aspectRatio: version.aspect_ratio,
+    timelineVersion: version.timeline_version,
+    createdAt: version.created_at,
+    updatedAt: version.updated_at,
+  }));
+}
+
+export async function importAssets(id: string, assetIds: string[]): Promise<Asset[]> {
+  const raw = await http.post<RawAsset[]>(`/projects/${id}/assets/import`, { asset_ids: assetIds });
+  return raw.map(mapAsset);
 }
 
 export async function listMedia(id: string): Promise<PaginatedResponse<ProjectMediaItem>> {

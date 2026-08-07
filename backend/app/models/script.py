@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Float, Boolean, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import String, Integer, Float, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -125,6 +125,12 @@ class Shot(Base):
     unit: Mapped["ScriptUnit"] = relationship("ScriptUnit", back_populates="shots")
     # 候选列表存在 JSON 中
     candidates: Mapped[list] = mapped_column(JSON, default=list)
+    generations: Mapped[list["ShotGeneration"]] = relationship(
+        "ShotGeneration",
+        back_populates="shot",
+        cascade="all, delete-orphan",
+        order_by="ShotGeneration.created_at.desc()",
+    )
 
 
 class Candidate(Base):
@@ -148,3 +154,29 @@ class Candidate(Base):
     variant: Mapped[str] = mapped_column(String(50), default="stage")
     low_confidence: Mapped[bool] = mapped_column(Boolean, default=False)  # score < 70
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ShotGeneration(Base):
+    """一次不可变的 AI 画面生成结果；Shot 上的路径字段仅表示当前采用项。"""
+
+    __tablename__ = "shot_generations"
+    __table_args__ = (
+        UniqueConstraint("job_id", "kind", name="uq_shot_generation_job_kind"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"generation-{uuid.uuid4().hex[:12]}"
+    )
+    shot_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("shots.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    job_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    storage_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    is_selected: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    shot: Mapped["Shot"] = relationship("Shot", back_populates="generations")

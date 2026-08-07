@@ -163,6 +163,64 @@ async def _charge_success_quota(session, job_id: str, quota_type: str) -> None:
         usage.ai_video_used += 1
 
 
+async def _record_generation(
+    session,
+    shot,
+    *,
+    job_id: str,
+    kind: str,
+    storage_path: str,
+    prompt: str,
+):
+    """保存一次不可变生成结果，并仅在分镜没有任何已选画面时自动采用。"""
+    from app.models.script import ShotGeneration
+    from sqlalchemy import select
+
+    generation = None
+    if job_id:
+        generation = (
+            await session.execute(
+                select(ShotGeneration).where(
+                    ShotGeneration.job_id == job_id,
+                    ShotGeneration.kind == kind,
+                )
+            )
+        ).scalar_one_or_none()
+
+    should_select = not (
+        shot.selected_clip_id
+        or shot.generated_image_path
+        or shot.generated_video_path
+        or shot.generated_effect_video_path
+    )
+    if generation is None:
+        generation = ShotGeneration(
+            shot_id=shot.id,
+            job_id=job_id or None,
+            kind=kind,
+            storage_path=storage_path,
+            prompt=prompt,
+            is_selected=should_select,
+        )
+        session.add(generation)
+    else:
+        # Celery 重投同一任务时保持同一条历史记录，避免重复候选。
+        generation.storage_path = storage_path
+        generation.prompt = prompt
+
+    if should_select:
+        shot.generated_image_path = storage_path if kind == "image" else None
+        shot.generated_video_path = storage_path if kind == "video" else None
+        shot.generated_effect_video_path = storage_path if kind == "effect" else None
+        shot.visual_mode = {"image": "image", "video": "video", "effect": "sketch"}[kind]
+        shot.status = "已选择"
+    else:
+        shot.status = "待确认"
+
+    await session.flush()
+    return generation
+
+
 @celery_app.task(bind=True, name="app.tasks.generate_image_shot")
 def generate_image_shot(self, shot_id: str, job_id: str = "", prompt: str = ""):
     """AI 生图分镜。
@@ -217,7 +275,7 @@ async def _generate_image_async(shot_id: str, job_id: str, prompt: str):
                     image_url = await generate_image(final_prompt)
                     job = await session.get(Job, job_id) if job_id else None
                     project_id = job.project_id if job else "unassigned"
-                    shot.generated_image_path = await __import__("asyncio").to_thread(
+                    generated_path = await __import__("asyncio").to_thread(
                         _persist_remote_media,
                         image_url,
                         f"generated/{project_id}/{shot.id}/images",
@@ -240,7 +298,14 @@ async def _generate_image_async(shot_id: str, job_id: str, prompt: str):
                     await session.commit()
                     return
 
-        shot.status = "待确认"
+        generation = await _record_generation(
+            session,
+            shot,
+            job_id=job_id,
+            kind="image",
+            storage_path=generated_path,
+            prompt=final_prompt,
+        )
         if job_id:
             await _charge_success_quota(session, job_id, "image")
             await session.execute(
@@ -248,10 +313,14 @@ async def _generate_image_async(shot_id: str, job_id: str, prompt: str):
                     status="SUCCEEDED",
                     progress=100,
                     stage="完成",
-                    detail=f"已为分镜生成关键帧",
+                    detail="已生成新的 AI 分镜候选",
                     result="打开脚本",
-                    result_detail="AI 分镜图已生成",
-                    result_url=_provider_media_url(shot.generated_image_path),
+                    result_detail=(
+                        "AI 分镜图已生成并自动采用"
+                        if generation.is_selected
+                        else "AI 分镜图已加入历史候选，请确认后采用"
+                    ),
+                    result_url=_provider_media_url(generated_path),
                     updated_at=datetime.now(timezone.utc),
                 )
             )
@@ -269,7 +338,7 @@ def generate_video_shot(self, shot_id: str, job_id: str = "", prompt: str = ""):
 
 async def _generate_video_async(shot_id: str, job_id: str, prompt: str):
     from app.database import async_session_factory
-    from app.models.script import Shot
+    from app.models.script import Shot, ShotGeneration
     from app.models.job import Job
     from app.services.ai_provider import (
         generate_video,
@@ -312,12 +381,22 @@ async def _generate_video_async(shot_id: str, job_id: str, prompt: str):
 
             if i == 2:  # 生成视频
                 try:
-                    image_url = shot.generated_image_path or ""
+                    image_url = shot.generated_image_path or (
+                        await session.execute(
+                            select(ShotGeneration.storage_path)
+                            .where(
+                                ShotGeneration.shot_id == shot.id,
+                                ShotGeneration.kind == "image",
+                            )
+                            .order_by(ShotGeneration.created_at.desc())
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none() or ""
                     if not image_url:
                         raise RuntimeError("当前分镜没有可用于图生视频的关键帧")
                     task_id = await generate_video(
                         prompt or shot.description,
-                        image_url=image_url,
+                        image_url=_provider_media_url(image_url),
                         duration=shot.duration,
                     )
                     video_url = ""
@@ -340,7 +419,7 @@ async def _generate_video_async(shot_id: str, job_id: str, prompt: str):
                         raise RuntimeError("AI 视频生成超时或未返回视频地址")
                     job = await session.get(Job, job_id) if job_id else None
                     project_id = job.project_id if job else "unassigned"
-                    shot.generated_video_path = await aio.to_thread(
+                    generated_path = await aio.to_thread(
                         _persist_remote_media,
                         video_url,
                         f"generated/{project_id}/{shot.id}/videos",
@@ -362,7 +441,15 @@ async def _generate_video_async(shot_id: str, job_id: str, prompt: str):
                     await session.commit()
                     return
 
-        shot.status = "待确认"
+        final_prompt = prompt or shot.description
+        generation = await _record_generation(
+            session,
+            shot,
+            job_id=job_id,
+            kind="video",
+            storage_path=generated_path,
+            prompt=final_prompt,
+        )
         if job_id:
             await _charge_success_quota(session, job_id, "video")
             await session.execute(
@@ -370,10 +457,14 @@ async def _generate_video_async(shot_id: str, job_id: str, prompt: str):
                     status="SUCCEEDED",
                     progress=100,
                     stage="完成",
-                    detail="AI 视频已生成",
-                    result="打开时间线",
-                    result_detail="分镜视频已生成，已加入粗剪候选",
-                    result_url=_provider_media_url(shot.generated_video_path),
+                    detail="已生成新的图生视频候选",
+                    result="打开脚本",
+                    result_detail=(
+                        "分镜视频已生成并自动采用"
+                        if generation.is_selected
+                        else "分镜视频已加入历史候选，请确认后采用"
+                    ),
+                    result_url=_provider_media_url(generated_path),
                     updated_at=datetime.now(timezone.utc),
                 )
             )
@@ -477,7 +568,7 @@ async def _generate_effect_async(shot_id: str, job_id: str, motion_description: 
                             if video_url:
                                 job = await session.get(Job, job_id) if job_id else None
                                 project_id = job.project_id if job else "unassigned"
-                                shot.generated_effect_video_path = await aio.to_thread(
+                                generated_path = await aio.to_thread(
                                     _persist_remote_media,
                                     video_url,
                                     f"generated/{project_id}/{shot.id}/effects",
@@ -512,7 +603,14 @@ async def _generate_effect_async(shot_id: str, job_id: str, motion_description: 
                     await session.commit()
                     return
 
-        shot.status = "待确认"
+        generation = await _record_generation(
+            session,
+            shot,
+            job_id=job_id,
+            kind="effect",
+            storage_path=generated_path,
+            prompt=prompt,
+        )
 
         if job_id:
             await _charge_success_quota(session, job_id, "video")
@@ -521,10 +619,14 @@ async def _generate_effect_async(shot_id: str, job_id: str, motion_description: 
                     status="SUCCEEDED",
                     progress=100,
                     stage="完成",
-                    detail="示意特效已生成",
-                    result="打开时间线",
-                    result_detail="特效视频已生成",
-                    result_url=_provider_media_url(shot.generated_effect_video_path),
+                    detail="已生成新的示意特效候选",
+                    result="打开脚本",
+                    result_detail=(
+                        "特效视频已生成并自动采用"
+                        if generation.is_selected
+                        else "特效视频已加入历史候选，请确认后采用"
+                    ),
+                    result_url=_provider_media_url(generated_path),
                     updated_at=datetime.now(timezone.utc),
                 )
             )

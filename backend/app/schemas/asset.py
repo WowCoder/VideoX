@@ -31,6 +31,7 @@ class ClipOut(BaseModel):
 class AssetOut(BaseModel):
     id: str
     project_id: str
+    imported_from_asset_id: Optional[str] = None
     name: str
     duration: float
     status: str

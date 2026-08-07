@@ -24,6 +24,7 @@ const AccountCenter = lazy(() => import("@/views/AccountCenter"));
 const HelpCenterView = lazy(() => import("@/views/HelpCenterView"));
 const WechatCallbackView = lazy(() => import("@/views/WechatCallbackView"));
 const NotificationsView = lazy(() => import("@/views/NotificationsView"));
+const TasksCenterView = lazy(() => import("@/views/TasksCenterView"));
 const InvitationView = lazy(() => import("@/views/InvitationView"));
 
 function RouteView({ children }: { children: ReactNode }) {
@@ -70,6 +71,7 @@ function workspaceView(pathname: string): ReactNode | null {
   if (pathname === "/workspace/help") return <HelpCenterView />;
   if (pathname === "/workspace/account") return <AccountCenter />;
   if (pathname === "/workspace/notifications") return <NotificationsView />;
+  if (pathname === "/workspace/tasks") return <TasksCenterView />;
 
   const projectParams = matchPath("/workspace/projects/:projectId", pathname);
   if (projectParams) {

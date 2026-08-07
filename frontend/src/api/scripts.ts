@@ -22,6 +22,7 @@ import type {
   ShotStatus,
   VisualMode,
   ThumbnailVariant,
+  ShotGeneration,
 } from "@/types/models";
 
 export interface ScriptCreateInput {
@@ -64,11 +65,14 @@ export interface RoughCutResult {
   project: Project;
   script: Script;
   jobId: string;
+  versionId: string;
 }
 
 export interface LinkedCut {
   projectId: string;
+  versionId: string;
   name: string;
+  versionName: string;
   status: string;
   aspectRatio?: string;
   timelineVersion: number;
@@ -91,6 +95,19 @@ interface RawCandidate {
   reason?: string;
   variant?: string;
   low_confidence?: boolean;
+  thumbnail_url?: string | null;
+}
+
+interface RawShotGeneration {
+  id: string;
+  shot_id: string;
+  job_id?: string | null;
+  kind: "image" | "video" | "effect";
+  storage_path: string;
+  media_url?: string | null;
+  prompt: string;
+  is_selected: boolean;
+  created_at: string;
 }
 
 interface RawShot {
@@ -108,6 +125,7 @@ interface RawShot {
   generated_video_path: string | null;
   generated_effect_video_path: string | null;
   candidates: RawCandidate[];
+  generations?: RawShotGeneration[];
 }
 
 interface RawScriptUnit {
@@ -156,12 +174,15 @@ interface RawRoughCutResponse {
   project_id: string;
   script_id: string;
   job_id: string;
+  version_id: string;
   message: string;
 }
 
 interface RawLinkedCut {
   project_id: string;
+  version_id: string;
   name: string;
+  version_name: string;
   status: string;
   aspect_ratio: string | null;
   timeline_version: number;
@@ -201,7 +222,22 @@ function mapCandidate(raw: RawCandidate): Candidate {
     reason: raw.reason ?? "",
     variant: (raw.variant ?? "stage") as ThumbnailVariant,
     lowConfidence: raw.low_confidence ?? false,
+    thumbnailUrl: raw.thumbnail_url ?? undefined,
     range: raw.range_start && raw.range_end ? `${raw.range_start}-${raw.range_end}` : undefined,
+  };
+}
+
+function mapGeneration(raw: RawShotGeneration): ShotGeneration {
+  return {
+    id: raw.id,
+    shotId: raw.shot_id,
+    jobId: raw.job_id ?? undefined,
+    kind: raw.kind,
+    storagePath: raw.storage_path,
+    mediaUrl: raw.media_url ?? undefined,
+    prompt: raw.prompt ?? "",
+    isSelected: raw.is_selected,
+    createdAt: raw.created_at,
   };
 }
 
@@ -220,6 +256,7 @@ function mapShot(raw: RawShot): Shot {
     generatedImagePath: raw.generated_image_path ?? undefined,
     generatedVideoPath: raw.generated_video_path ?? undefined,
     generatedEffectVideoPath: raw.generated_effect_video_path ?? undefined,
+    generations: (raw.generations ?? []).map(mapGeneration),
     candidates: (raw.candidates ?? []).map(mapCandidate),
   };
 }
@@ -288,6 +325,7 @@ function mapParseUnit(raw: RawParseUnit, index: number): ScriptUnit {
       duration: s.duration ?? 8,
       notes: s.notes ?? "",
       candidates: [],
+      generations: [],
     })),
   };
 }
@@ -407,6 +445,49 @@ export async function batchUpdateUnits(
   return { units: fullScript.units ?? [] };
 }
 
+export async function saveEditorState(
+  id: string,
+  data: { title: string; visualConfig: VisualConfig; units: ScriptUnit[] },
+): Promise<Script> {
+  const raw = await http.patch<RawScript>(`/scripts/${id}/editor-state`, {
+    title: data.title,
+    visual_config: data.visualConfig,
+    units: data.units.map((unit) => ({
+      id: unit.id,
+      outline: unit.outline,
+      text: unit.text,
+      intent: unit.intent,
+      status: unit.status,
+      selected_clip_id: unit.selectedClipId,
+      duration: unit.duration,
+      notes: unit.notes,
+      shots: unit.shots.map((shot) => ({
+        id: shot.id,
+        description: shot.description,
+        status: shot.status,
+        selected_clip_id: shot.selectedClipId,
+        visual_mode: shot.visualMode,
+        duration: shot.duration,
+        notes: shot.notes,
+        sketch_data: undefined,
+      })),
+    })),
+  });
+  return mapScript(raw);
+}
+
+export async function selectGeneration(
+  scriptId: string,
+  shotId: string,
+  generationId: string,
+): Promise<Shot> {
+  const raw = await http.post<RawShot>(
+    `/scripts/${scriptId}/shots/${shotId}/generations/${generationId}/select`,
+    {},
+  );
+  return mapShot(raw);
+}
+
 /**
  * 解析脚本文本/表格为分镜单元
  * POST /api/scripts/parse
@@ -447,6 +528,7 @@ export async function createRoughCut(
     project,
     script: mapScript(scriptRaw),
     jobId: raw.job_id,
+    versionId: raw.version_id,
   };
 }
 
@@ -454,7 +536,9 @@ export async function listLinkedCuts(id: string): Promise<LinkedCut[]> {
   const raw = await http.get<RawLinkedCut[]>(`/scripts/${id}/cuts`);
   return raw.map((cut) => ({
     projectId: cut.project_id,
+    versionId: cut.version_id,
     name: cut.name,
+    versionName: cut.version_name,
     status: cut.status,
     aspectRatio: cut.aspect_ratio ?? undefined,
     timelineVersion: cut.timeline_version ?? 0,

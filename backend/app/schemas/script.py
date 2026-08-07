@@ -32,12 +32,28 @@ class CandidateOut(BaseModel):
     reason: str
     variant: str
     low_confidence: bool
+    thumbnail_url: Optional[str] = None
 
     class Config:
         from_attributes = True
 
 
 # ── 分镜（Shot）──
+class ShotGenerationOut(BaseModel):
+    id: str
+    shot_id: str
+    job_id: Optional[str] = None
+    kind: Literal["image", "video", "effect"]
+    storage_path: str
+    media_url: Optional[str] = None
+    prompt: str = ""
+    is_selected: bool = False
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class ShotCreate(BaseModel):
     description: str = ""
     duration: int = 8
@@ -73,6 +89,23 @@ class ShotOut(BaseModel):
     generated_video_path: Optional[str] = None
     generated_effect_video_path: Optional[str] = None
     candidates: list[dict] = []
+    generations: list[ShotGenerationOut] = []
+
+    @field_validator("candidates", mode="before")
+    @classmethod
+    def sign_candidate_thumbnails(cls, values):
+        from app.utils.storage import get_file_url
+
+        result = []
+        for value in values or []:
+            item = dict(value)
+            path = item.get("thumbnail_path")
+            try:
+                item["thumbnail_url"] = get_file_url(path) if path else item.get("thumbnail_url")
+            except Exception:
+                item["thumbnail_url"] = None
+            result.append(item)
+        return result
 
     @field_validator(
         "generated_image_path",
@@ -90,6 +123,34 @@ class ShotOut(BaseModel):
             return get_file_url(str(value))
         except Exception:
             return None
+
+    @field_validator("generations", mode="before")
+    @classmethod
+    def sign_generation_history(cls, values):
+        from app.utils.storage import get_file_url
+
+        result = []
+        for value in values or []:
+            if isinstance(value, dict):
+                item = dict(value)
+            else:
+                item = {
+                    "id": value.id,
+                    "shot_id": value.shot_id,
+                    "job_id": value.job_id,
+                    "kind": value.kind,
+                    "storage_path": value.storage_path,
+                    "prompt": value.prompt,
+                    "is_selected": value.is_selected,
+                    "created_at": value.created_at,
+                }
+            path = item.get("storage_path")
+            try:
+                item["media_url"] = get_file_url(path) if path else None
+            except Exception:
+                item["media_url"] = None
+            result.append(item)
+        return result
 
     class Config:
         from_attributes = True
@@ -156,6 +217,12 @@ class VisualConfigUpdate(BaseModel):
     references: Optional[VisualReferences] = None
 
 
+class ScriptEditorSave(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    visual_config: VisualConfigUpdate
+    units: list[dict]
+
+
 class ScriptCreate(BaseModel):
     project_id: str
     title: str
@@ -206,7 +273,9 @@ class ScriptListOut(BaseModel):
 
 class LinkedCutOut(BaseModel):
     project_id: str
+    version_id: str
     name: str
+    version_name: str
     status: str
     aspect_ratio: Optional[str] = None
     timeline_version: int = 0
