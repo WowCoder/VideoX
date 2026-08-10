@@ -102,6 +102,48 @@ async function doRefresh(): Promise<RefreshResult> {
   return refreshPromise;
 }
 
+function accessTokenExpiresWithin(token: string, seconds: number): boolean {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return false;
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const decoded = JSON.parse(atob(padded)) as { exp?: number };
+    if (typeof decoded.exp !== "number") return false;
+    return decoded.exp * 1000 <= Date.now() + seconds * 1000;
+  } catch {
+    // 非标准 JWT 交给服务端校验；若返回 401，调用方仍可强制刷新后重试。
+    return false;
+  }
+}
+
+/**
+ * 强制刷新 access token，供 XMLHttpRequest 等无法复用 request() 的调用方使用。
+ */
+export async function refreshAccessToken(): Promise<string> {
+  const result = await doRefresh();
+  if (result.token) return result.token;
+  if (result.credentialRejected) {
+    throw new HttpClientError(401, "登录已过期，请重新登录", "AUTH_EXPIRED");
+  }
+  throw new HttpClientError(
+    503,
+    "登录状态暂时无法刷新，请检查网络后重试",
+    "AUTH_REFRESH_UNAVAILABLE",
+  );
+}
+
+/**
+ * 返回仍有足够有效期的 access token；临近过期时复用全局刷新锁提前刷新。
+ */
+export async function getValidAccessToken(minValiditySeconds = 120): Promise<string> {
+  const current = getAccessToken();
+  if (current && !accessTokenExpiresWithin(current, minValiditySeconds)) {
+    return current;
+  }
+  return refreshAccessToken();
+}
+
 /* ── 自定义错误类 ── */
 
 export class HttpClientError extends Error {

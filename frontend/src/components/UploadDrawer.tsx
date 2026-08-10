@@ -14,27 +14,40 @@ import {
   FileVideo,
   Loader2,
   Music,
+  RefreshCw,
   X,
 } from "lucide-react";
 import { useUIStore } from "@/stores/uiStore";
 import { useProjectStore } from "@/stores/projectStore";
-import { getAccessToken } from "@/api/client";
+import {
+  HttpClientError,
+  getValidAccessToken,
+  refreshAccessToken,
+} from "@/api/client";
 import * as jobApi from "@/api/jobs";
 import { variantGradient } from "@/data/uiConfig";
 
+type UploadStatus = "queued" | "uploading" | "processing" | "done" | "error";
+
 interface UploadItem {
   id: string;
+  file: File;
+  projectId: string;
   name: string;
   size: number;
   progress: number;
-  status: "uploading" | "processing" | "done" | "error";
+  status: UploadStatus;
   jobId?: string;
   error?: string;
+  retryable?: boolean;
+  failureStage?: "validation" | "upload" | "processing";
 }
 
 const acceptedTypes = ".mp4,.mov,.m4v,.avi,.mkv,.webm,.mp3,.wav,.m4a,.aac,.flac,.ogg,.oga,.opus";
 const maxUploadSizeGiB = 1;
 const maxUploadBytes = maxUploadSizeGiB * 1024 * 1024 * 1024;
+const maxConcurrentUploads = 2;
+const minimumUploadTokenValiditySeconds = 25 * 60;
 const acceptedExtensions = new Set([
   "mp4", "mov", "m4v", "avi", "mkv", "webm",
   "mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus",
@@ -68,12 +81,42 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+class UploadRequestError extends Error {
+  status: number;
+  retryable: boolean;
+
+  constructor(status: number, message: string, retryable: boolean) {
+    super(message);
+    this.name = "UploadRequestError";
+    this.status = status;
+    this.retryable = retryable;
+  }
+}
+
+function createUploadResponseError(status: number, responseText: string): UploadRequestError {
+  const serverDetail = parseUploadError(responseText, "");
+  if (serverDetail) {
+    return new UploadRequestError(
+      status,
+      serverDetail,
+      status === 401 || status === 408 || status === 429 || status >= 500,
+    );
+  }
+  if (status === 401) return new UploadRequestError(status, "登录已过期，请重新登录", true);
+  if (status === 408) return new UploadRequestError(status, "上传超时，请重试", true);
+  if (status === 413) return new UploadRequestError(status, "文件过大或存储空间不足", false);
+  if (status === 429) return new UploadRequestError(status, "上传请求过于频繁，请稍后重试", true);
+  if (status >= 500) return new UploadRequestError(status, "服务器暂时不可用，请稍后重试", true);
+  return new UploadRequestError(status, `上传失败 (${status})`, false);
+}
+
 /**
  * 使用 XMLHttpRequest 上传文件，支持真实上传进度回调。
  */
 function uploadFile(
   file: File,
   projectId: string,
+  token: string,
   onProgress: (pct: number) => void,
 ): Promise<{ assetId: string; name: string; status: string; jobId: string }> {
   return new Promise((resolve, reject) => {
@@ -101,18 +144,41 @@ function uploadFile(
           reject(new Error("响应解析失败"));
         }
       } else {
-        reject(new Error(parseUploadError(xhr.responseText, "上传失败")));
+        reject(createUploadResponseError(xhr.status, xhr.responseText));
       }
     });
 
-    xhr.addEventListener("error", () => reject(new Error("网络错误")));
-    xhr.addEventListener("abort", () => reject(new Error("上传已取消")));
+    xhr.addEventListener("error", () => {
+      reject(new UploadRequestError(0, "上传连接中断，请检查网络后重试", true));
+    });
+    xhr.addEventListener("timeout", () => {
+      reject(new UploadRequestError(408, "上传超时，请重试", true));
+    });
+    xhr.addEventListener("abort", () => {
+      reject(new UploadRequestError(0, "上传已取消", true));
+    });
 
     xhr.open("POST", `/api/assets/upload?project_id=${encodeURIComponent(projectId)}`);
-    const token = getAccessToken();
-    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.send(formData);
   });
+}
+
+async function uploadFileWithFreshAuth(
+  file: File,
+  projectId: string,
+  onProgress: (pct: number) => void,
+): Promise<{ assetId: string; name: string; status: string; jobId: string }> {
+  // 大文件请求可能持续较久，出队时尽量保证接近完整的 30 分钟 access token 有效期。
+  let token = await getValidAccessToken(minimumUploadTokenValiditySeconds);
+  try {
+    return await uploadFile(file, projectId, token, onProgress);
+  } catch (error) {
+    if (!(error instanceof UploadRequestError) || error.status !== 401) throw error;
+    token = await refreshAccessToken();
+    onProgress(0);
+    return uploadFile(file, projectId, token, onProgress);
+  }
 }
 
 export function UploadDrawer() {
@@ -126,6 +192,7 @@ export function UploadDrawer() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimersRef = useRef<Record<string, number>>({});
   const pollFailuresRef = useRef<Record<string, number>>({});
+  const activeUploadsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => () => {
     Object.values(pollTimersRef.current).forEach((timer) => window.clearTimeout(timer));
@@ -162,6 +229,8 @@ export function UploadDrawer() {
                   progress: job.progress,
                   status: "error",
                   error: job.resultDetail || job.detail || "素材处理失败",
+                  retryable: false,
+                  failureStage: "processing",
                 }
               : item,
           ),
@@ -187,6 +256,8 @@ export function UploadDrawer() {
                   ...item,
                   status: "error",
                   error: error instanceof Error ? `任务状态查询失败：${error.message}` : "任务状态查询失败",
+                  retryable: false,
+                  failureStage: "processing",
                 }
               : item,
           ),
@@ -196,6 +267,82 @@ export function UploadDrawer() {
     }
     pollTimersRef.current[itemId] = window.setTimeout(() => void poll(itemId, jobId), 2_000);
   }, [refreshBusinessData]);
+
+  const runUpload = useCallback(async (item: UploadItem): Promise<void> => {
+    try {
+      const response = await uploadFileWithFreshAuth(
+        item.file,
+        item.projectId,
+        (pct) => {
+          setItems((prev) =>
+            prev.map((current) =>
+              current.id === item.id
+                ? { ...current, progress: pct, status: "uploading", error: undefined }
+                : current,
+            ),
+          );
+        },
+      );
+      setItems((prev) =>
+        prev.map((current) =>
+          current.id === item.id
+            ? {
+                ...current,
+                progress: 0,
+                status: "processing",
+                jobId: response.jobId,
+                error: undefined,
+                retryable: false,
+                failureStage: undefined,
+              }
+            : current,
+        ),
+      );
+      void pollJob(item.id, response.jobId);
+    } catch (error) {
+      const retryable = error instanceof UploadRequestError
+        ? error.retryable
+        : error instanceof HttpClientError
+          ? error.status >= 500
+          : true;
+      setItems((prev) =>
+        prev.map((current) =>
+          current.id === item.id
+            ? {
+                ...current,
+                status: "error",
+                error: error instanceof Error ? error.message : "上传失败",
+                retryable,
+                failureStage: "upload",
+              }
+            : current,
+        ),
+      );
+    } finally {
+      activeUploadsRef.current.delete(item.id);
+    }
+  }, [pollJob]);
+
+  useEffect(() => {
+    const availableSlots = maxConcurrentUploads - activeUploadsRef.current.size;
+    if (availableSlots <= 0) return;
+
+    const queuedItems = items
+      .filter((item) => item.status === "queued" && !activeUploadsRef.current.has(item.id))
+      .slice(0, availableSlots);
+
+    queuedItems.forEach((item) => {
+      activeUploadsRef.current.add(item.id);
+      setItems((prev) =>
+        prev.map((current) =>
+          current.id === item.id
+            ? { ...current, status: "uploading", progress: 0, error: undefined }
+            : current,
+        ),
+      );
+      void runUpload(item);
+    });
+  }, [items, runUpload]);
 
   // ESC 关闭
   useEffect(() => {
@@ -224,53 +371,40 @@ export function UploadDrawer() {
         const validationError = validateFile(file);
         return {
           id: `upload-${Date.now()}-${index}`,
+          file,
+          projectId: currentProjectId,
           name: file.name || `素材_${index + 1}.mp4`,
           size: file.size || 0,
           progress: 0,
-          status: validationError ? "error" : "uploading",
+          status: validationError ? "error" : "queued",
           error: validationError,
+          retryable: false,
+          failureStage: validationError ? "validation" : undefined,
         };
       });
 
-      setItems((prev) => [...newItems, ...prev]);
-
-      // 逐个上传（真实上传进度）
-      newItems.forEach((item, index) => {
-        if (item.status === "error") return;
-        const file = fileArray[index];
-        uploadFile(file, currentProjectId, (pct) => {
-          setItems((prev) =>
-            prev.map((it) =>
-              it.id === item.id
-                ? { ...it, progress: pct, status: pct >= 100 ? "processing" : "uploading" }
-                : it,
-            ),
-          );
-        })
-          .then((response) => {
-            // 上传完成，进入处理中
-            setItems((prev) =>
-              prev.map((it) =>
-                it.id === item.id
-                  ? { ...it, progress: 0, status: "processing", jobId: response.jobId }
-                  : it,
-              ),
-            );
-            void pollJob(item.id, response.jobId);
-          })
-          .catch((err) => {
-            setItems((prev) =>
-              prev.map((it) =>
-                it.id === item.id
-                  ? { ...it, status: "error", error: err instanceof Error ? err.message : "上传失败" }
-                  : it,
-              ),
-            );
-          });
-      });
+      setItems((prev) => [...prev, ...newItems]);
     },
-    [currentProjectId, notify, pollJob],
+    [currentProjectId, notify],
   );
+
+  const retryUpload = useCallback((itemId: string) => {
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === itemId && item.failureStage === "upload" && item.retryable
+          ? {
+              ...item,
+              progress: 0,
+              status: "queued",
+              jobId: undefined,
+              error: undefined,
+              retryable: false,
+              failureStage: undefined,
+            }
+          : item,
+      ),
+    );
+  }, []);
 
   function handleDrop(e: DragEvent) {
     e.preventDefault();
@@ -288,7 +422,9 @@ export function UploadDrawer() {
   }
 
   const allDone = items.length > 0 && items.every((i) => i.status === "done" || i.status === "error");
-  const uploadingCount = items.filter((i) => i.status === "uploading" || i.status === "processing").length;
+  const queuedCount = items.filter((i) => i.status === "queued").length;
+  const uploadingCount = items.filter((i) => i.status === "uploading").length;
+  const processingCount = items.filter((i) => i.status === "processing").length;
 
   function handleDone() {
     closeUploadDrawer();
@@ -396,10 +532,14 @@ export function UploadDrawer() {
                 <span className="text-sm font-medium text-text">
                   上传列表 ({items.length})
                 </span>
-                {uploadingCount > 0 && (
+                {(queuedCount > 0 || uploadingCount > 0 || processingCount > 0) && (
                   <span className="flex items-center gap-1 text-xs text-muted">
                     <Loader2 size={12} className="animate-spin" />
-                    {uploadingCount} 个处理中
+                    {uploadingCount > 0
+                      ? `${uploadingCount} 个上传中`
+                      : processingCount > 0
+                        ? `${processingCount} 个处理中`
+                        : `${queuedCount} 个等待中`}
                   </span>
                 )}
               </div>
@@ -449,19 +589,32 @@ export function UploadDrawer() {
                                 ? "失败"
                                 : item.status === "processing"
                                   ? "处理中"
-                                  : `${Math.round(item.progress)}%`}
+                                  : item.status === "queued"
+                                    ? "等待上传"
+                                    : `${Math.round(item.progress)}%`}
                           </span>
                         </div>
                         {item.status === "error" && item.error && (
-                          <p className="mt-1 truncate text-xs text-rose">{item.error}</p>
+                          <p className="mt-1 text-xs text-rose">{item.error}</p>
                         )}
                       </div>
                       {item.status === "done" && (
                         <CheckCircle2 size={18} className="shrink-0 text-teal" />
                       )}
-                      {item.status === "error" && (
+                      {item.status === "error" && item.retryable && item.failureStage === "upload" ? (
+                        <button
+                          type="button"
+                          onClick={() => retryUpload(item.id)}
+                          className="flex h-8 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-medium text-blue transition hover:bg-blue-soft"
+                          aria-label={`重试上传 ${item.name}`}
+                          title="重试上传"
+                        >
+                          <RefreshCw size={14} />
+                          重试
+                        </button>
+                      ) : item.status === "error" ? (
                         <AlertCircle size={18} className="shrink-0 text-rose" />
-                      )}
+                      ) : null}
                     </li>
                   );
                 })}
