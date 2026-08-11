@@ -174,13 +174,27 @@ function AccountMenu({ placement }: { placement: "sidebar" | "topbar" }) {
   const open = accountMenuOrigin === placement;
 
   const membershipName = user?.membership?.name || "Free";
-  const isFree = !user?.membership || user.membership.id === "free";
+  const membershipRank = user?.membership?.rank ?? 0;
+  const membershipAction = membershipRank === 0
+    ? {
+        title: "升级 OpenVMA 会员",
+        copy: "查看更高存储空间与更多 AI 额度",
+      }
+    : membershipRank === 1
+      ? {
+          title: "管理 Pro 会员",
+          copy: "查看当前权益或升级到 Team",
+        }
+      : {
+          title: "管理 Team 会员",
+          copy: "查看当前方案权益与用量",
+        };
 
   if (!open) return null;
 
   const menuItems = [
     { id: "overview", label: "个人中心", copy: "账户信息与会员概览", icon: CircleUserRound },
-    { id: "membership", label: "会员与账单", copy: "升级方案或管理续费", icon: CreditCard },
+    { id: "membership", label: "会员方案", copy: "查看当前方案与可用额度", icon: CreditCard },
     { id: "usage", label: "用量中心", copy: "处理时长与 AI 额度", icon: Gauge },
     { id: "billing", label: "账单与发票", copy: "付款记录与电子票据", icon: ReceiptText },
     { id: "settings", label: "账户设置", copy: "资料、通知与安全", icon: Settings },
@@ -189,11 +203,11 @@ function AccountMenu({ placement }: { placement: "sidebar" | "topbar" }) {
   function openSection(section: string) {
     closeAccountMenu();
     const sectionMap: Record<string, string> = {
-      overview: "/workspace/account",
-      membership: "/workspace/account",
-      usage: "/workspace/account",
-      billing: "/workspace/account",
-      settings: "/workspace/account",
+      overview: "/workspace/account?section=overview",
+      membership: "/workspace/account?section=membership",
+      usage: "/workspace/account?section=usage",
+      billing: "/workspace/account?section=billing",
+      settings: "/workspace/account?section=settings",
     };
     navigate(sectionMap[section] ?? "/workspace/account");
   }
@@ -232,12 +246,10 @@ function AccountMenu({ placement }: { placement: "sidebar" | "topbar" }) {
           <span className="text-amber"><Crown size={17} /></span>
           <div className="flex-1">
             <strong className="text-sm text-text">
-              {isFree ? "升级 OpenVMA 会员" : `管理 ${membershipName} 会员`}
+              {membershipAction.title}
             </strong>
             <small className="block text-xs text-muted">
-              {isFree
-                ? "解锁无水印导出、更高额度与优先处理"
-                : "查看权益、续费周期和账单"}
+              {membershipAction.copy}
             </small>
           </div>
           <ChevronDown size={14} className="text-muted" />
@@ -304,6 +316,18 @@ export function Sidebar() {
   } = useUIStore();
   const user = useAuthStore((s) => s.user);
   const membershipName = user?.membership?.name || "Free";
+  const membershipRank = user?.membership?.rank ?? 0;
+  const sidebarMembershipAction = membershipRank === 0
+    ? {
+        title: "查看会员方案",
+        copy: "获得更高存储与 AI 额度",
+      }
+    : membershipRank === 1
+      ? {
+          title: "升级到 Team",
+          copy: "获得 200GB 存储与更高额度",
+        }
+      : null;
 
   function isActive(path: string) {
     if (path === "/workspace") {
@@ -381,19 +405,16 @@ export function Sidebar() {
 
         {/* 底部：用量条 + 用户区 */}
         <div className="border-t border-white/10 p-3">
-          {!sidebarCollapsed && (
+          {!sidebarCollapsed && sidebarMembershipAction && (
             <button
               className="mb-3 flex w-full items-center gap-3 rounded-lg bg-gradient-to-r from-blue-2/40 to-teal/20 p-3 text-left transition hover:from-blue-2/60"
-              onClick={() => navigate("/workspace/account")}
+              onClick={() => handleNavigate("/workspace/account?section=membership")}
               type="button"
             >
               <span className="text-amber"><Crown size={16} /></span>
               <div className="flex-1">
-                <strong className="block text-xs text-white">升级到 Pro 会员</strong>
-                <small className="text-[11px] text-white/60">解锁更长时长与更多 AI 能力</small>
-                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/10">
-                  <div className="h-full w-2/3 rounded-full bg-gradient-to-r from-blue to-teal" />
-                </div>
+                <strong className="block text-xs text-white">{sidebarMembershipAction.title}</strong>
+                <small className="text-[11px] text-white/60">{sidebarMembershipAction.copy}</small>
               </div>
               <ChevronRight size={14} className="text-white/40" />
             </button>

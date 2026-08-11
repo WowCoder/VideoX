@@ -3,7 +3,7 @@
 // 页签：账户概览 / 会员方案 / 用量中心 / 账单与发票 / 账户设置
 // ──────────────────────────────────────────────
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Check,
@@ -11,6 +11,7 @@ import {
   CreditCard,
   Crown,
   Gauge,
+  HardDrive,
   Loader2,
   ReceiptText,
   Settings,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { useUIStore } from "@/stores/uiStore";
 import { useAuthStore } from "@/stores/authStore";
+import { useSearchParams } from "@/router";
 import {
   listMemberships,
   getUsage,
@@ -35,9 +37,15 @@ import {
 
 type Section = "overview" | "membership" | "usage" | "billing" | "settings";
 
+const validSections = new Set<Section>(["overview", "membership", "usage", "billing", "settings"]);
+
+function isSection(value: string | null): value is Section {
+  return value !== null && validSections.has(value as Section);
+}
+
 const sections: { id: Section; label: string; icon: typeof CircleUserRound; copy: string }[] = [
   { id: "overview", label: "账户概览", icon: CircleUserRound, copy: "账户信息与会员概览" },
-  { id: "membership", label: "会员方案", icon: Crown, copy: "升级方案或管理续费" },
+  { id: "membership", label: "会员方案", icon: Crown, copy: "查看当前方案与可用额度" },
   { id: "usage", label: "用量中心", icon: Gauge, copy: "处理时长与 AI 额度" },
   { id: "billing", label: "账单与发票", icon: ReceiptText, copy: "付款记录与电子票据" },
   { id: "settings", label: "账户设置", icon: Settings, copy: "资料、通知与安全" },
@@ -46,8 +54,22 @@ const sections: { id: Section; label: string; icon: typeof CircleUserRound; copy
 export function AccountCenter() {
   const { notify } = useUIStore();
   const user = useAuthStore((s) => s.user);
+  const refreshUser = useAuthStore((s) => s.refreshUser);
   const updateSettings = useAuthStore((s) => s.updateSettings);
-  const [section, setSection] = useState<Section>("overview");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedSection = searchParams.get("section");
+  const section: Section = isSection(requestedSection) ? requestedSection : "overview";
+
+  useEffect(() => {
+    void refreshUser();
+  }, [refreshUser]);
+
+  function openSection(nextSection: Section) {
+    if (nextSection === section) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("section", nextSection);
+    setSearchParams(nextParams);
+  }
 
   // 获取会员方案列表
   const membershipsQuery = useQuery({
@@ -78,11 +100,19 @@ export function AccountCenter() {
   const orders = ordersQuery.data ?? [];
   const invoices = invoicesQuery.data ?? [];
   const loadingMemberships = membershipsQuery.isLoading;
-  const dataError = membershipsQuery.error ?? usageQuery.error ?? ordersQuery.error ?? invoicesQuery.error;
 
   // 当前用户的会员方案
-  const currentMembership =
-    memberships?.find((m) => m.id === user?.membership?.id) ?? memberships?.[0];
+  const currentMembership = user?.membership?.id
+    ? memberships?.find((membership) => membership.id === user.membership?.id)
+    : undefined;
+  const membershipMismatch = Boolean(
+    memberships && user?.membership?.id && !currentMembership,
+  );
+  const dataError = membershipsQuery.error
+    ?? usageQuery.error
+    ?? ordersQuery.error
+    ?? invoicesQuery.error
+    ?? (membershipMismatch ? new Error("当前会员方案与方案列表不一致，请刷新后重试") : null);
 
   // 升级会员
   const handleUpgrade = async (membershipId: string, billingCycle: string = "monthly") => {
@@ -114,7 +144,7 @@ export function AccountCenter() {
             return (
               <button
                 key={s.id}
-                onClick={() => setSection(s.id)}
+                onClick={() => openSection(s.id)}
                 className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-left text-sm transition ${
                   active
                     ? "bg-blue text-white shadow-soft"
@@ -149,12 +179,19 @@ export function AccountCenter() {
               </button>
             </div>
           ) : section === "overview" ? (
-            <OverviewSection user={user} usage={usage} membership={currentMembership} orderCount={orders.length} />
+            <OverviewSection
+              user={user}
+              usage={usage}
+              membership={currentMembership}
+              orderCount={orders.length}
+              onOpenMembership={() => openSection("membership")}
+            />
           ) : section === "membership" ? (
             <MembershipSection
               memberships={memberships ?? []}
               loading={loadingMemberships}
               currentId={currentMembership?.id}
+              currentRank={currentMembership?.rank ?? user?.membership?.rank}
               onUpgrade={handleUpgrade}
             />
           ) : section === "usage" ? <UsageSection usage={usage} membership={currentMembership} />
@@ -192,18 +229,21 @@ function OverviewSection({
   usage,
   membership,
   orderCount,
+  onOpenMembership,
 }: {
   user: ReturnType<typeof useAuthStore.getState>["user"];
   usage?: UsageData;
   membership?: MembershipPlan;
   orderCount: number;
+  onOpenMembership: () => void;
 }) {
   const name = user?.name || "用户";
   const email = user?.email || "";
   const initial = user?.initial || "U";
-  const memName = membership?.name || "Free";
-  const usedMinutes = usage?.processingMinutesUsed ?? 0;
-  const totalMinutes = membership?.processingMinutes ?? 600;
+  const memName = membership?.name ?? user?.membership?.name ?? "会员信息加载中";
+  const membershipRank = membership?.rank ?? user?.membership?.rank;
+  const totalMinutes = membership?.processingMinutes;
+  const storageUsedGb = usage ? usage.storageUsedMb / 1024 : undefined;
 
   return (
     <div>
@@ -219,13 +259,13 @@ function OverviewSection({
           </span>
         </div>
       </div>
-      <div className="mt-5 grid gap-4 sm:grid-cols-3">
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border border-line bg-canvas/40 p-4">
           <Gauge size={18} className="text-blue" />
           <strong className="mt-2 block text-lg font-semibold text-text">
-            {usedMinutes} / {totalMinutes}
+            {totalMinutes === undefined ? "—" : `${totalMinutes} 分钟`}
           </strong>
-          <small className="text-xs text-muted">处理时长（分钟）</small>
+          <small className="text-xs text-muted">方案处理时长额度</small>
         </div>
         <div className="rounded-xl border border-line bg-canvas/40 p-4">
           <CreditCard size={18} className="text-teal" />
@@ -233,20 +273,68 @@ function OverviewSection({
           <small className="text-xs text-muted">当前会员方案</small>
         </div>
         <div className="rounded-xl border border-line bg-canvas/40 p-4">
+          <HardDrive size={18} className="text-blue" />
+          <strong className="mt-2 block text-lg font-semibold text-text">
+            {storageUsedGb === undefined || membership?.storageGb === undefined
+              ? "—"
+              : `${storageUsedGb.toFixed(1)} / ${membership.storageGb} GB`}
+          </strong>
+          <small className="text-xs text-muted">素材存储空间</small>
+        </div>
+        <div className="rounded-xl border border-line bg-canvas/40 p-4">
           <ReceiptText size={18} className="text-amber" />
           <strong className="mt-2 block text-lg font-semibold text-text">{orderCount}</strong>
           <small className="text-xs text-muted">历史账单数</small>
         </div>
       </div>
-      {(membership?.id === "free" || !membership?.price) && (
+      {membershipRank === 0 && (
         <div className="mt-5 rounded-xl border border-blue/20 bg-blue-soft/30 p-4">
           <div className="flex items-center gap-2">
             <Crown size={16} className="text-amber" />
-            <strong className="text-sm text-text">升级到 Pro 会员</strong>
+            <strong className="text-sm text-text">查看 OpenVMA 会员方案</strong>
           </div>
           <p className="mt-1.5 text-xs text-muted">
-            升级后按所选方案解锁更高处理时长、AI 额度、存储空间与导出次数。
+            Pro 和 Team 提供更高的 AI 额度、存储空间与导出次数。
           </p>
+          <button
+            type="button"
+            onClick={onOpenMembership}
+            className="mt-3 rounded-lg bg-blue px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-2"
+          >
+            对比会员方案
+          </button>
+        </div>
+      )}
+      {membershipRank === 1 && (
+        <div className="mt-5 rounded-xl border border-blue/20 bg-blue-soft/30 p-4">
+          <div className="flex items-center gap-2">
+            <Crown size={16} className="text-amber" />
+            <strong className="text-sm text-text">当前为 Pro 会员</strong>
+          </div>
+          <p className="mt-1.5 text-xs text-muted">可查看当前权益，或比较 Team 方案的更高额度。</p>
+          <button
+            type="button"
+            onClick={onOpenMembership}
+            className="mt-3 rounded-lg border border-blue/30 px-3 py-2 text-xs font-semibold text-blue transition hover:bg-blue-soft"
+          >
+            管理会员方案
+          </button>
+        </div>
+      )}
+      {membershipRank !== undefined && membershipRank >= 2 && (
+        <div className="mt-5 rounded-xl border border-teal/20 bg-teal/5 p-4">
+          <div className="flex items-center gap-2">
+            <Crown size={16} className="text-amber" />
+            <strong className="text-sm text-text">当前为最高等级 Team 会员</strong>
+          </div>
+          <p className="mt-1.5 text-xs text-muted">可在会员方案与用量中心查看当前权益和使用情况。</p>
+          <button
+            type="button"
+            onClick={onOpenMembership}
+            className="mt-3 rounded-lg border border-teal/30 px-3 py-2 text-xs font-semibold text-teal transition hover:bg-teal/10"
+          >
+            查看会员权益
+          </button>
         </div>
       )}
     </div>
@@ -258,11 +346,13 @@ function MembershipSection({
   memberships,
   loading,
   currentId,
+  currentRank,
   onUpgrade,
 }: {
   memberships: MembershipPlan[];
   loading: boolean;
   currentId?: string;
+  currentRank?: number;
   onUpgrade: (id: string, cycle?: string) => void;
 }) {
   if (loading) {
@@ -285,29 +375,49 @@ function MembershipSection({
     );
   }
 
+  const highestRank = Math.max(...memberships.map((membership) => membership.rank));
+
   return (
     <div>
       <h2 className="mb-4 text-lg font-bold text-text">会员方案</h2>
+      <p className="mb-5 text-sm text-muted">
+        当前方案只能升级到更高等级；在线降级与续费周期将在订阅功能接入后提供。
+      </p>
       <div className="grid gap-4 sm:grid-cols-3">
         {memberships.map((plan) => {
           const isCurrent = plan.id === currentId;
-          const isRecommended = plan.rank === 1;
+          const isHigher = currentRank !== undefined && plan.rank > currentRank;
+          const isLower = currentRank !== undefined && plan.rank < currentRank;
+          const isRecommended = currentRank === 0 && plan.rank === 1;
+          const isHighestCurrent = isCurrent && plan.rank === highestRank;
           return (
             <div
               key={plan.id}
               className={`relative rounded-2xl border p-5 ${
-                isRecommended ? "border-blue shadow-soft" : "border-line"
+                isCurrent
+                  ? "border-teal shadow-soft"
+                  : isRecommended
+                    ? "border-blue shadow-soft"
+                    : "border-line"
               }`}
             >
-              {isRecommended && (
-                <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 rounded-full bg-blue px-3 py-0.5 text-[11px] font-medium text-white">
-                  最受欢迎
+              {(isCurrent || isRecommended) && (
+                <span className={`absolute -top-2.5 left-1/2 -translate-x-1/2 rounded-full px-3 py-0.5 text-[11px] font-medium text-white ${
+                  isCurrent ? "bg-teal" : "bg-blue"
+                }`}>
+                  {isHighestCurrent ? "当前最高方案" : isCurrent ? "当前方案" : "推荐升级"}
                 </span>
               )}
               <strong className="block text-base text-text">{plan.name}</strong>
               <div className="mt-2">
-                <span className="text-2xl font-bold text-text">¥{plan.price}</span>
-                <span className="text-sm text-muted">/ 月</span>
+                {plan.price > 0 ? (
+                  <>
+                    <span className="text-2xl font-bold text-text">¥{plan.price}</span>
+                    <span className="text-sm text-muted">/ 月</span>
+                  </>
+                ) : (
+                  <span className="text-2xl font-bold text-text">永久免费</span>
+                )}
               </div>
               <ul className="mt-4 space-y-2 text-xs text-muted">
                 <li className="flex items-center gap-1.5">
@@ -324,28 +434,34 @@ function MembershipSection({
                 </li>
                 <li className="flex items-center gap-1.5">
                   <Check size={13} className="text-teal" />
+                  {plan.storageGb} GB 素材存储空间
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <Check size={13} className="text-teal" />
                   {plan.exportQuota} 次导出
                 </li>
-                {plan.rank > 0 && (
-                  <li className="flex items-center gap-1.5">
-                    <Check size={13} className="text-teal" />
-                    无水印导出
-                  </li>
-                )}
               </ul>
               <button
-                onClick={() => !isCurrent && onUpgrade(plan.id)}
-                disabled={isCurrent}
+                onClick={() => isHigher && onUpgrade(plan.id)}
+                disabled={!isHigher}
                 className={`mt-5 w-full rounded-lg py-2 text-sm font-semibold transition ${
                   isCurrent
-                    ? "border border-line text-muted cursor-default"
-                    : isRecommended
+                    ? "border border-teal/30 bg-teal/5 text-teal cursor-default"
+                    : isHigher && isRecommended
                       ? "bg-blue text-white hover:bg-blue-2"
-                      : "border border-line text-text hover:bg-canvas"
+                      : isHigher
+                        ? "border border-blue/30 text-blue hover:bg-blue-soft"
+                        : "border border-line text-muted cursor-default"
                 }`}
                 type="button"
               >
-                {isCurrent ? "当前方案" : plan.price > 0 ? "前往支付升级" : "切换到此方案"}
+                {isCurrent
+                  ? "当前方案"
+                  : currentRank === undefined
+                    ? "会员状态加载中"
+                    : isLower
+                      ? "暂不支持在线降级"
+                      : `升级到 ${plan.name}`}
               </button>
             </div>
           );
@@ -363,30 +479,44 @@ function UsageSection({
   usage?: UsageData;
   membership?: MembershipPlan;
 }) {
+  const storageLimitMb = membership ? membership.storageGb * 1024 : undefined;
   const usages = [
     {
       label: "处理时长",
       used: usage?.processingMinutesUsed ?? 0,
-      total: membership?.processingMinutes ?? 600,
+      total: membership?.processingMinutes,
       unit: "分钟",
+      tracked: false,
     },
     {
       label: "AI 生图",
       used: usage?.aiImageUsed ?? 0,
-      total: membership?.aiImageQuota ?? 100,
+      total: membership?.aiImageQuota,
       unit: "张",
+      tracked: true,
     },
     {
       label: "AI 生视频",
       used: usage?.aiVideoUsed ?? 0,
-      total: membership?.aiVideoQuota ?? 20,
+      total: membership?.aiVideoQuota,
       unit: "段",
+      tracked: true,
     },
     {
       label: "导出次数",
       used: usage?.exportUsed ?? 0,
-      total: membership?.exportQuota ?? 10,
+      total: membership?.exportQuota,
       unit: "次",
+      tracked: true,
+    },
+    {
+      label: "素材存储",
+      used: usage?.storageUsedMb ?? 0,
+      total: storageLimitMb,
+      unit: "MB",
+      tracked: true,
+      displayUsed: usage ? `${(usage.storageUsedMb / 1024).toFixed(2)} GB` : "—",
+      displayTotal: membership ? `${membership.storageGb} GB` : "—",
     },
   ];
 
@@ -395,28 +525,47 @@ function UsageSection({
       <h2 className="mb-4 text-lg font-bold text-text">用量中心</h2>
       <div className="space-y-4">
         {usages.map((u) => {
-          const percent = u.total > 0 ? Math.round((u.used / u.total) * 100) : 0;
+          const percent = u.total && u.total > 0 ? Math.round((u.used / u.total) * 100) : 0;
           return (
             <div key={u.label} className="rounded-xl border border-line bg-canvas/40 p-4">
               <div className="flex items-center justify-between">
                 <strong className="text-sm text-text">{u.label}</strong>
                 <span className="text-sm text-muted">
-                  <strong className="text-text">{u.used}</strong> / {u.total} {u.unit}
+                  {u.tracked ? (
+                    <>
+                      <strong className="text-text">{u.displayUsed ?? u.used}</strong>
+                      {" / "}{u.displayTotal ?? (u.total === undefined ? "—" : `${u.total} ${u.unit}`)}
+                    </>
+                  ) : (
+                    <strong className="text-text">
+                      本方案 {u.total === undefined ? "—" : `${u.total} ${u.unit}`}
+                    </strong>
+                  )}
                 </span>
               </div>
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface">
-                <div
-                  className={`h-full rounded-full transition-all ${
-                    percent > 80
-                      ? "bg-red"
-                      : percent > 50
-                        ? "bg-amber"
-                        : "bg-gradient-to-r from-blue to-teal"
-                  }`}
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
-              <small className="mt-1.5 block text-xs text-muted">已使用 {percent}%</small>
+              {u.tracked ? (
+                <>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        percent > 80
+                          ? "bg-red"
+                          : percent > 50
+                            ? "bg-amber"
+                            : "bg-gradient-to-r from-blue to-teal"
+                      }`}
+                      style={{ width: `${Math.min(100, percent)}%` }}
+                    />
+                  </div>
+                  <small className="mt-1.5 block text-xs text-muted">
+                    {u.total === undefined ? "额度暂时无法获取" : `已使用 ${percent}%`}
+                  </small>
+                </>
+              ) : (
+                <small className="mt-1.5 block text-xs text-muted">
+                  当前版本尚未统计已用处理时长，后续版本将补齐计量与周期重置。
+                </small>
+              )}
             </div>
           );
         })}
