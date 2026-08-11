@@ -10,6 +10,7 @@ from app.security import decode_token
 from app.models.user import User
 from sqlalchemy.orm import selectinload
 from app.services.subscriptions import reconcile_user_subscription
+from app.services.quotas import synchronize_user_usage
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -53,6 +54,7 @@ async def get_current_user(
         )
 
     await reconcile_user_subscription(db, user)
+    await synchronize_user_usage(db, user)
     return user
 
 

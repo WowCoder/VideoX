@@ -28,6 +28,7 @@ from app.services.wechat_provider import (
     get_qrcode_url, exchange_code_for_token, get_user_info,
 )
 from app.services.subscriptions import reconcile_user_subscription
+from app.services.quotas import synchronize_user_usage
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ async def _ensure_default_membership(db: AsyncSession):
             ai_video_quota=5,
             storage_gb=5,
             export_quota=10,
+            seat_quota=1,
             price=0.0,
         )
         db.add(free)
@@ -110,6 +112,7 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     )
     user = result.scalar_one()
     await reconcile_user_subscription(db, user)
+    await synchronize_user_usage(db, user)
 
     access_token = create_access_token(user.id)
     refresh_token = create_refresh_token(user.id)
@@ -139,6 +142,7 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
 
     await reconcile_user_subscription(db, user)
+    await synchronize_user_usage(db, user)
 
     access_token = create_access_token(user.id)
     refresh_token = create_refresh_token(user.id)
@@ -225,6 +229,7 @@ async def _find_or_create_user_by_email(
 
     if user:
         await reconcile_user_subscription(db, user)
+        await synchronize_user_usage(db, user)
         return user
 
     # 创建新用户
@@ -256,6 +261,7 @@ async def _find_or_create_user_by_email(
     )
     user = result.scalar_one()
     await reconcile_user_subscription(db, user)
+    await synchronize_user_usage(db, user)
     return user
 
 

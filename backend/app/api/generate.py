@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import Literal
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models.user import User, Usage
+from app.models.user import User
 from app.models.project import Project
 from app.models.asset import Asset, Clip
 from app.models.script import Script, ScriptUnit, Shot, ShotGeneration
@@ -17,6 +17,7 @@ from app.services.ai_provider import generate_script_with_ai
 from app.config import get_settings
 from app.services.project_access import require_project_access
 from app.services.timeline_validation import TimelineValidationError, validate_project_timeline
+from app.services.quotas import QuotaExceededError, admit_job_quota, synchronize_user_usage
 
 router = APIRouter()
 settings = get_settings()
@@ -111,47 +112,6 @@ async def generation_capabilities(_: User = Depends(get_current_user)):
             ),
         ),
     )
-
-
-async def _check_quota(project: Project, db: AsyncSession, quota_type: str) -> bool:
-    """检查配额是否足够。"""
-    result = await db.execute(select(Usage).where(Usage.user_id == project.owner_id))
-    usage = result.scalar_one_or_none()
-    if not usage:
-        return True  # 无用量记录，允许
-
-    from app.models.user import Membership
-    owner = (
-        await db.execute(select(User).where(User.id == project.owner_id))
-    ).scalar_one()
-    mem_result = await db.execute(select(Membership).where(Membership.id == owner.membership_id))
-    membership = mem_result.scalar_one_or_none()
-    if not membership:
-        return True
-
-    if quota_type == "image":
-        pending = (
-            await db.execute(
-                select(func.count()).select_from(Job).join(Project).where(
-                    Project.owner_id == project.owner_id,
-                    Job.type == "AI 生图分镜",
-                    Job.status.in_(["QUEUED", "RUNNING"]),
-                )
-            )
-        ).scalar() or 0
-        return usage.ai_image_used + pending < membership.ai_image_quota
-    elif quota_type == "video":
-        pending = (
-            await db.execute(
-                select(func.count()).select_from(Job).join(Project).where(
-                    Project.owner_id == project.owner_id,
-                    Job.type.in_(["分镜图 AI 生视频", "示意图特效视频"]),
-                    Job.status.in_(["QUEUED", "RUNNING"]),
-                )
-            )
-        ).scalar() or 0
-        return usage.ai_video_used + pending < membership.ai_video_quota
-    return True
 
 
 async def _editable_shot(
@@ -297,9 +257,6 @@ async def generate_image_shot(
     shot, project = await _editable_shot(req.shot_id, req.project_id, user, db)
     if not settings.has_image_generation:
         raise HTTPException(status_code=503, detail="AI 生图服务未配置或不可用")
-    if not await _check_quota(project, db, "image"):
-        raise HTTPException(status_code=403, detail="项目所有者的 AI 生图配额已用完")
-
     # 创建任务
     job = Job(
         project_id=req.project_id,
@@ -317,6 +274,10 @@ async def generate_image_shot(
         payload={"shot_id": shot.id, "prompt": req.prompt},
         is_simulated=False,
     )
+    try:
+        await admit_job_quota(db, job, project.owner_id, "ai_image", 1)
+    except QuotaExceededError as exc:
+        raise HTTPException(status_code=403, detail="项目所有者的 AI 生图配额已用完") from exc
     db.add(job)
     await db.flush()
 
@@ -324,8 +285,11 @@ async def generate_image_shot(
 
     # 派发 Celery 任务
     from app.tasks.generate_tasks import generate_image_shot as celery_generate_image
+    from app.services.task_dispatch import dispatch_project_task
     try:
-        task = celery_generate_image.delay(shot.id, job.id, req.prompt)
+        task = await dispatch_project_task(
+            db, project.id, celery_generate_image, shot.id, job.id, req.prompt
+        )
         job.celery_task_id = task.id
         await db.commit()
     except Exception as exc:
@@ -363,9 +327,6 @@ async def generate_video_shot(
     ).scalar_one_or_none()
     if not shot.generated_image_path and not image_generation:
         raise HTTPException(status_code=400, detail="当前分镜没有可用于图生视频的持久化关键帧")
-    if not await _check_quota(project, db, "video"):
-        raise HTTPException(status_code=403, detail="项目所有者的 AI 生视频配额已用完")
-
     job = Job(
         project_id=req.project_id,
         name=f"图生视频：{shot.description[:20]}",
@@ -382,14 +343,21 @@ async def generate_video_shot(
         payload={"shot_id": shot.id, "prompt": req.prompt},
         is_simulated=False,
     )
+    try:
+        await admit_job_quota(db, job, project.owner_id, "ai_video", 1)
+    except QuotaExceededError as exc:
+        raise HTTPException(status_code=403, detail="项目所有者的 AI 生视频配额已用完") from exc
     db.add(job)
     await db.flush()
 
     await db.commit()
 
     from app.tasks.generate_tasks import generate_video_shot as celery_generate_video
+    from app.services.task_dispatch import dispatch_project_task
     try:
-        task = celery_generate_video.delay(shot.id, job.id, req.prompt)
+        task = await dispatch_project_task(
+            db, project.id, celery_generate_video, shot.id, job.id, req.prompt
+        )
         job.celery_task_id = task.id
         await db.commit()
     except Exception as exc:
@@ -415,8 +383,6 @@ async def generate_effect_shot(
             status_code=503,
             detail="示意特效视频模型未配置；不能使用普通文生视频模型冒充该能力",
         )
-    if not await _check_quota(project, db, "video"):
-        raise HTTPException(status_code=403, detail="项目所有者的 AI 生成配额已用完")
     if not req.sketch_data.startswith("data:image/"):
         raise HTTPException(status_code=400, detail="示意特效需要有效的 Canvas 图片")
 
@@ -443,14 +409,21 @@ async def generate_effect_shot(
         },
         is_simulated=False,
     )
+    try:
+        await admit_job_quota(db, job, project.owner_id, "ai_video", 1)
+    except QuotaExceededError as exc:
+        raise HTTPException(status_code=403, detail="项目所有者的 AI 生视频配额已用完") from exc
     db.add(job)
     await db.flush()
 
     await db.commit()
 
     from app.tasks.generate_tasks import generate_effect_shot as celery_generate_effect
+    from app.services.task_dispatch import dispatch_project_task
     try:
-        task = celery_generate_effect.delay(shot.id, job.id, req.motion_description)
+        task = await dispatch_project_task(
+            db, project.id, celery_generate_effect, shot.id, job.id, req.motion_description
+        )
         job.celery_task_id = task.id
         await db.commit()
     except Exception as exc:
@@ -522,36 +495,6 @@ async def export_project(
     except TimelineValidationError as exc:
         raise HTTPException(status_code=400, detail=f"导出前检查失败：{exc}") from exc
 
-    # 检查导出配额
-    result = await db.execute(select(Usage).where(Usage.user_id == project.owner_id))
-    usage = result.scalar_one_or_none()
-    if not usage:
-        usage = Usage(user_id=project.owner_id)
-        db.add(usage)
-        await db.flush()
-
-    from app.models.user import Membership
-    owner = (
-        await db.execute(select(User).where(User.id == project.owner_id))
-    ).scalar_one()
-    mem_result = await db.execute(select(Membership).where(Membership.id == owner.membership_id))
-    membership = mem_result.scalar_one_or_none()
-
-    pending_exports = (
-        await db.execute(
-            select(func.count())
-            .select_from(Job)
-            .join(Project)
-            .where(
-                Project.owner_id == project.owner_id,
-                Job.type == "导出",
-                Job.status.in_(["QUEUED", "RUNNING"]),
-            )
-        )
-    ).scalar() or 0
-    if membership and usage.export_used + pending_exports >= membership.export_quota:
-        raise HTTPException(status_code=403, detail="导出配额已用完，请升级会员")
-
     # 创建导出任务
     job = Job(
         project_id=req.project_id,
@@ -559,7 +502,7 @@ async def export_project(
         type="导出",
         status="QUEUED",
         stage="等待导出",
-        stages=["准备时间线", "渲染视频轨", "混合音频轨", "烧录字幕", "编码输出"],
+        stages=["准备时间线", "渲染视频轨", "混合音频轨", "烧录字幕", "添加品牌水印", "编码输出"],
         stage_index=0,
         progress=0,
         eta="预计 1-5 分钟",
@@ -574,14 +517,26 @@ async def export_project(
         },
         is_simulated=False,
     )
+    try:
+        await admit_job_quota(db, job, project.owner_id, "export", 1)
+    except QuotaExceededError as exc:
+        raise HTTPException(status_code=403, detail="导出配额已用完，请升级会员") from exc
     db.add(job)
     await db.commit()
 
     # 派发 Celery 任务
     from app.tasks.export_tasks import export_project as celery_export
+    from app.services.task_dispatch import dispatch_project_task
     try:
-        task = celery_export.delay(
-            req.project_id, job.id, req.format, req.resolution, req.cut_version_id or ""
+        task = await dispatch_project_task(
+            db,
+            project.id,
+            celery_export,
+            req.project_id,
+            job.id,
+            req.format,
+            req.resolution,
+            req.cut_version_id or "",
         )
         job.celery_task_id = task.id
         await db.commit()
@@ -617,10 +572,5 @@ async def get_usage(
     db: AsyncSession = Depends(get_db),
 ):
     """获取当前用量。"""
-    result = await db.execute(select(Usage).where(Usage.user_id == user.id))
-    usage = result.scalar_one_or_none()
-    if not usage:
-        usage = Usage(user_id=user.id)
-        db.add(usage)
-        await db.flush()
+    usage = await synchronize_user_usage(db, user)
     return UsageOut.model_validate(usage)

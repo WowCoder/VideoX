@@ -17,11 +17,12 @@ from typing import Optional
 from app.tasks.celery_app import celery_app
 from app.tasks.async_runner import run_async
 from app.config import get_settings
+from app.services.quotas import complete_job_success
 
 settings = get_settings()
 
 
-async def _update_job(job_id: str, **kwargs):
+async def _update_job(job_id: str, **kwargs) -> bool:
     """更新任务状态。"""
     from app.database import async_session_factory
     from app.models.job import Job
@@ -32,8 +33,17 @@ async def _update_job(job_id: str, **kwargs):
         values["updated_at"] = datetime.now(timezone.utc)
 
     async with async_session_factory() as session:
-        await session.execute(update(Job).where(Job.id == job_id).values(**values))
+        if values.get("status") == "SUCCEEDED":
+            values.pop("status")
+            completed = await complete_job_success(session, job_id, values=values)
+        else:
+            statement = update(Job).where(Job.id == job_id)
+            if values.get("status") in {"RUNNING", "FAILED"} or "status" not in values:
+                statement = statement.where(Job.status.in_(["QUEUED", "RUNNING"]))
+            result = await session.execute(statement.values(**values))
+            completed = bool(result.rowcount)
         await session.commit()
+        return completed
 
 
 async def _get_job_project_owner(job_id: str) -> Optional[str]:
@@ -346,7 +356,7 @@ async def _process_asset_async(asset_id: str, job_id: str):
             if not file_path:
                 asset.status = "处理失败"
                 await session.commit()
-                await _update_job(
+                completed = await _update_job(
                     job_id,
                     status="FAILED",
                     stage="文件读取失败",
@@ -470,6 +480,8 @@ async def _process_asset_async(asset_id: str, job_id: str):
                         f"{asset.sample_rate or 0}Hz，{asset.channels or 0} 声道"
                     ),
                 )
+                if not completed:
+                    return
                 await _broadcast_ws(owner_id, {
                     "job_id": job_id,
                     "status": "SUCCEEDED",
@@ -745,7 +757,7 @@ async def _process_asset_async(asset_id: str, job_id: str):
                 completion_message = "基础媒体处理完成，语义搜索暂不可用"
 
             # ── 完成 ──
-            await _update_job(
+            completed = await _update_job(
                 job_id,
                 stage="完成",
                 stage_index=4,
@@ -755,6 +767,8 @@ async def _process_asset_async(asset_id: str, job_id: str):
                 result="已进入素材库",
                 result_detail=completion_detail,
             )
+            if not completed:
+                return
             await _broadcast_ws(owner_id, {
                 "job_id": job_id, "status": "SUCCEEDED", "progress": 100, "stage": "完成",
             })

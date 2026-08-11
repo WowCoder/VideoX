@@ -38,6 +38,13 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_max_tasks_per_child=100,
     broker_connection_retry_on_startup=True,
+    task_default_priority=9,
+    task_inherit_parent_priority=True,
+    broker_transport_options={
+        "priority_steps": [0, 4, 9],
+        "sep": ":",
+        "queue_order_strategy": "priority",
+    },
     beat_schedule={
         "fail-stale-jobs-every-five-minutes": {
             "task": "app.tasks.fail_stale_jobs",

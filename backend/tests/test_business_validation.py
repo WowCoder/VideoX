@@ -18,6 +18,15 @@ from app.services.subscriptions import (
     purchased_period,
     renewed_period,
 )
+from app.services.quotas import (
+    QuotaSnapshot,
+    expected_usage_period,
+    monthly_usage_period,
+    reset_periodic_usage,
+)
+from app.services.task_dispatch import task_priority_for_rank
+from app.services.team_seats import seat_count
+from app.models.user import Usage
 from app.tasks.roughcut_tasks import _assemble_script_timeline, _update_job_status
 from scripts.manage_test_account import (
     AccountCommandError,
@@ -39,6 +48,29 @@ class CollaborationRoleTests(unittest.TestCase):
     def test_role_order_is_read_edit_manage(self):
         self.assertLess(ROLE_LEVEL["viewer"], ROLE_LEVEL["editor"])
         self.assertLess(ROLE_LEVEL["editor"], ROLE_LEVEL["owner"])
+
+    def test_team_seats_are_unique_across_owned_projects(self):
+        self.assertEqual(
+            seat_count(
+                "OWNER@example.com",
+                ["a@example.com", "b@example.com", "a@example.com"],
+                ["B@example.com", "c@example.com"],
+            ),
+            4,
+        )
+
+    def test_owner_always_consumes_one_team_seat(self):
+        self.assertEqual(seat_count("owner@example.com", [], []), 1)
+
+
+class TaskPriorityTests(unittest.TestCase):
+    def test_team_precedes_pro_and_free(self):
+        team = task_priority_for_rank(2)
+        pro = task_priority_for_rank(1)
+        free = task_priority_for_rank(0)
+        self.assertLess(team, pro)
+        self.assertLess(pro, free)
+        self.assertEqual((team, pro, free), (0, 4, 9))
 
 
 class UploadSizeValidationTests(unittest.TestCase):
@@ -144,6 +176,74 @@ class MembershipSubscriptionTests(unittest.TestCase):
     def test_upgrade_request_rejects_unknown_billing_cycle(self):
         with self.assertRaises(ValidationError):
             UpgradeRequest(membership_id="membership-pro", billing_cycle="weekly")
+
+
+class UsageQuotaTests(unittest.TestCase):
+    def test_month_end_usage_anchor_does_not_drift(self):
+        anchor = datetime(2026, 1, 31, 8, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            monthly_usage_period(anchor, datetime(2026, 3, 15, tzinfo=timezone.utc)),
+            (
+                datetime(2026, 2, 28, 8, 30, tzinfo=timezone.utc),
+                datetime(2026, 3, 31, 8, 30, tzinfo=timezone.utc),
+            ),
+        )
+        self.assertEqual(
+            monthly_usage_period(anchor, datetime(2026, 3, 31, 8, 30, tzinfo=timezone.utc)),
+            (
+                datetime(2026, 3, 31, 8, 30, tzinfo=timezone.utc),
+                datetime(2026, 4, 30, 8, 30, tzinfo=timezone.utc),
+            ),
+        )
+
+    def test_expired_subscription_starts_free_cycle_from_paid_expiry(self):
+        subscription = SimpleNamespace(
+            status="expired",
+            current_period_start=datetime(2026, 7, 11, tzinfo=timezone.utc),
+            current_period_end=datetime(2026, 8, 11, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            expected_usage_period(subscription, datetime(2026, 8, 20, tzinfo=timezone.utc)),
+            (
+                datetime(2026, 8, 11, tzinfo=timezone.utc),
+                datetime(2026, 9, 11, tzinfo=timezone.utc),
+            ),
+        )
+
+    def test_period_reset_preserves_storage_but_clears_periodic_usage(self):
+        usage = SimpleNamespace(
+            processing_seconds_used=601,
+            ai_image_used=7,
+            ai_video_used=3,
+            storage_used_mb=512.5,
+            export_used=4,
+            billing_cycle_start=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            billing_cycle_end=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+        start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        reset_periodic_usage(usage, start, end)
+        self.assertEqual(usage.processing_seconds_used, 0)
+        self.assertEqual(usage.ai_image_used, 0)
+        self.assertEqual(usage.ai_video_used, 0)
+        self.assertEqual(usage.export_used, 0)
+        self.assertEqual(usage.storage_used_mb, 512.5)
+        self.assertEqual(usage.billing_cycle_start, start)
+        self.assertEqual(usage.billing_cycle_end, end)
+
+    def test_processing_minutes_api_rounds_partial_minute_up(self):
+        usage = Usage(user_id="quota-user", processing_seconds_used=61)
+        self.assertEqual(usage.processing_minutes_used, 2)
+
+    def test_quota_snapshot_remaining_excludes_used_and_reserved(self):
+        snapshot = QuotaSnapshot(
+            quota_type="ai_image",
+            limit=10,
+            used=4,
+            reserved=3,
+            requested=1,
+        )
+        self.assertEqual(snapshot.remaining, 3)
 
 
 class TestAccountManagementTests(unittest.TestCase):

@@ -579,6 +579,20 @@ function MembershipSection({
                   <Check size={13} className="text-teal" />
                   {plan.exportQuota} 次导出
                 </li>
+                <li className="flex items-center gap-1.5">
+                  <Check size={13} className="text-teal" />
+                  {plan.rank === 0 ? "导出含 OpenVMA 水印" : "无水印导出"}
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <Check size={13} className="text-teal" />
+                  {plan.rank >= 2 ? "高优先级任务队列" : plan.rank >= 1 ? "标准优先级任务队列" : "基础优先级任务队列"}
+                </li>
+                {plan.rank >= 2 && (
+                  <li className="flex items-center gap-1.5">
+                    <Check size={13} className="text-teal" />
+                    {plan.seatQuota} 个共享协作席位（含所有者）
+                  </li>
+                )}
               </ul>
               <button
                 onClick={() => canPurchase && onUpgrade(
@@ -630,13 +644,19 @@ function UsageSection({
   membership?: MembershipPlan;
 }) {
   const storageLimitMb = membership ? membership.storageGb * 1024 : undefined;
+  const processingDisplay = usage
+    ? usage.processingSecondsUsed < 60
+      ? `${usage.processingSecondsUsed} 秒`
+      : `${(usage.processingSecondsUsed / 60).toFixed(1)} 分钟`
+    : "—";
   const usages = [
     {
       label: "处理时长",
       used: usage?.processingMinutesUsed ?? 0,
       total: membership?.processingMinutes,
       unit: "分钟",
-      tracked: false,
+      tracked: true,
+      displayUsed: processingDisplay,
     },
     {
       label: "AI 生图",
@@ -673,6 +693,13 @@ function UsageSection({
   return (
     <div>
       <h2 className="mb-4 text-lg font-bold text-text">用量中心</h2>
+      <div className="mb-5 rounded-xl border border-line bg-canvas/40 px-4 py-3 text-xs text-muted">
+        <strong className="text-text">本期额度：</strong>{" "}
+        {usage
+          ? `${formatMembershipDate(usage.billingCycleStart)} 至 ${formatMembershipDate(usage.billingCycleEnd)}`
+          : "加载中"}
+        <span className="ml-2">处理、AI 与导出额度按月自动重置，素材存储空间不重置。</span>
+      </div>
       <div className="space-y-4">
         {usages.map((u) => {
           const percent = u.total && u.total > 0 ? Math.round((u.used / u.total) * 100) : 0;
@@ -711,11 +738,7 @@ function UsageSection({
                     {u.total === undefined ? "额度暂时无法获取" : `已使用 ${percent}%`}
                   </small>
                 </>
-              ) : (
-                <small className="mt-1.5 block text-xs text-muted">
-                  当前版本尚未统计已用处理时长，后续版本将补齐计量与周期重置。
-                </small>
-              )}
+              ) : null}
             </div>
           );
         })}

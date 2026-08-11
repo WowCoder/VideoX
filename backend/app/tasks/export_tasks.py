@@ -13,6 +13,7 @@ from typing import Any
 
 from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
+from app.services.quotas import complete_job_success
 from app.services.timeline_validation import TimelineValidationError, validate_project_timeline
 
 
@@ -401,6 +402,89 @@ def _burn_subtitles(
     _run_command(cmd, "字幕烧录")
 
 
+def requires_export_watermark(membership_rank: int) -> bool:
+    """Free exports carry the OpenVMA brand; paid plans export clean video."""
+    return membership_rank <= 0
+
+
+def _render_watermark_image(
+    output_path: str,
+    target_w: int,
+    target_h: int,
+    configured_font: str,
+) -> None:
+    from PIL import Image, ImageDraw, ImageFont
+
+    font_size = max(22, min(56, target_h // 24))
+    font = ImageFont.truetype(_font_path(configured_font), font_size)
+    text = "OpenVMA"
+    probe = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(probe)
+    bbox = draw.textbbox((0, 0), text, font=font, stroke_width=max(1, font_size // 28))
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    padding_x = max(16, font_size // 2)
+    padding_y = max(9, font_size // 4)
+    image = Image.new(
+        "RGBA",
+        (text_w + padding_x * 2, text_h + padding_y * 2),
+        (0, 0, 0, 0),
+    )
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        (0, 0, image.width - 1, image.height - 1),
+        radius=max(8, font_size // 3),
+        fill=(10, 18, 32, 155),
+        outline=(255, 255, 255, 55),
+        width=max(1, target_w // 1200),
+    )
+    draw.text(
+        (image.width // 2, image.height // 2),
+        text,
+        font=font,
+        fill=(255, 255, 255, 225),
+        anchor="mm",
+        stroke_width=max(1, font_size // 28),
+        stroke_fill=(0, 0, 0, 120),
+    )
+    image.save(output_path, "PNG")
+
+
+def _apply_export_watermark(
+    ffmpeg: str,
+    source_file: str,
+    output_path: str,
+    temp_dir: str,
+    target_w: int,
+    target_h: int,
+    duration: float,
+    configured_font: str,
+    enabled: bool,
+) -> None:
+    if not enabled:
+        shutil.copy2(source_file, output_path)
+        return
+
+    watermark_path = os.path.join(temp_dir, "openvma_watermark.png")
+    _render_watermark_image(watermark_path, target_w, target_h, configured_font)
+    margin = max(16, target_h // 36)
+    _run_command(
+        [
+            ffmpeg,
+            "-i", source_file,
+            "-loop", "1", "-framerate", "25", "-i", watermark_path,
+            "-filter_complex",
+            f"[0:v][1:v]overlay=main_w-overlay_w-{margin}:main_h-overlay_h-{margin}:"
+            "eof_action=pass[video_out]",
+            "-map", "[video_out]", "-map", "0:a:0",
+            "-t", f"{duration:.6f}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-c:a", "copy", "-y", output_path,
+        ],
+        "OpenVMA 水印烧录",
+    )
+
+
 @celery_app.task(bind=True, name="app.tasks.export_project")
 def export_project(
     self,
@@ -428,9 +512,11 @@ async def _export_project_async(
     from app.models.job import Job
     from app.models.notification import Notification
     from app.models.project import Project
+    from app.models.user import User
     from app.models.cut_version import CutVersion
-    from app.models.user import Usage
+    from app.services.subscriptions import reconcile_user_subscription
     from app.utils.storage import download_file, get_file_url, upload_stream
+    from sqlalchemy.orm import selectinload
 
     settings = get_settings()
     ffmpeg = settings.ffmpeg_path
@@ -443,7 +529,7 @@ async def _export_project_async(
     }
     target_w, target_h = resolution_map.get(resolution, (1920, 1080))
     extension = "mp4" if format == "mp4" else "mov"
-    stages = ["准备时间线", "渲染视频轨", "混合音频轨", "烧录字幕", "编码输出"]
+    stages = ["准备时间线", "渲染视频轨", "混合音频轨", "烧录字幕", "添加品牌水印", "编码输出"]
     temp_dir = tempfile.mkdtemp(prefix=f"export_{project_id}_")
 
     try:
@@ -451,6 +537,20 @@ async def _export_project_async(
             project = await session.get(Project, project_id)
             if not project:
                 raise RuntimeError("项目不存在")
+            owner = (
+                await session.execute(
+                    select(User)
+                    .where(User.id == project.owner_id)
+                    .options(
+                        selectinload(User.membership),
+                        selectinload(User.subscription),
+                    )
+                )
+            ).scalar_one()
+            await reconcile_user_subscription(session, owner)
+            watermark_required = requires_export_watermark(
+                owner.membership.rank if owner.membership else 0
+            )
 
             timeline = project.timeline or []
             if cut_version_id:
@@ -536,10 +636,13 @@ async def _export_project_async(
             rendered_file = os.path.join(temp_dir, "rendered.mp4")
             mixed_file = os.path.join(temp_dir, "mixed.mp4")
             subtitled_file = os.path.join(temp_dir, "subtitled.mp4")
+            branded_file = os.path.join(temp_dir, "branded.mp4")
 
             for stage_index, stage in enumerate(stages):
                 await session.execute(
-                    update(Job).where(Job.id == job_id).values(
+                    update(Job).where(
+                        Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                    ).values(
                         status="RUNNING",
                         stage=stage,
                         stage_index=stage_index,
@@ -599,18 +702,31 @@ async def _export_project_async(
                     )
 
                 elif stage_index == 4:
+                    _apply_export_watermark(
+                        ffmpeg,
+                        subtitled_file,
+                        branded_file,
+                        temp_dir,
+                        target_w,
+                        target_h,
+                        timeline_duration,
+                        settings.subtitle_font_path,
+                        watermark_required,
+                    )
+
+                elif stage_index == 5:
                     final_file = os.path.join(temp_dir, f"output.{extension}")
                     if format == "mp4":
-                        shutil.copy2(subtitled_file, final_file)
+                        shutil.copy2(branded_file, final_file)
                     elif format == "mov":
                         _run_command(
-                            [ffmpeg, "-i", subtitled_file, "-c", "copy", "-f", "mov", "-y", final_file],
+                            [ffmpeg, "-i", branded_file, "-c", "copy", "-f", "mov", "-y", final_file],
                             "MOV 封装",
                         )
                     elif format == "prores":
                         _run_command(
                             [
-                                ffmpeg, "-i", subtitled_file,
+                                ffmpeg, "-i", branded_file,
                                 "-c:v", "prores_ks", "-profile:v", "2",
                                 "-c:a", "pcm_s16le", "-y", final_file,
                             ],
@@ -631,24 +747,22 @@ async def _export_project_async(
                         )
                     export_url = get_file_url(object_name)
 
-                    usage = (
-                        await session.execute(select(Usage).where(Usage.user_id == project.owner_id))
-                    ).scalar_one_or_none()
-                    if usage:
-                        usage.export_used += 1
-                    await session.execute(
-                        update(Job).where(Job.id == job_id).values(
-                            status="SUCCEEDED",
-                            progress=100,
-                            stage="完成",
-                            detail=f"导出完成：{format} {resolution}",
-                            result="查看结果",
-                            result_detail="成片已按持久化时间线和编辑参数导出",
-                            result_url=export_url,
-                            result_path=object_name,
-                            updated_at=datetime.now(timezone.utc),
-                        )
+                    completed = await complete_job_success(
+                        session,
+                        job_id,
+                        values={
+                            "progress": 100,
+                            "stage": "完成",
+                            "detail": f"导出完成：{format} {resolution}",
+                            "result": "查看结果",
+                            "result_detail": "成片已按持久化时间线和编辑参数导出",
+                            "result_url": export_url,
+                            "result_path": object_name,
+                        },
                     )
+                    if not completed:
+                        await session.rollback()
+                        return
                     existing_notification = (
                         await session.execute(
                             select(Notification.id).where(
@@ -679,7 +793,9 @@ async def _export_project_async(
 
             message = str(exc)[:600]
             await failure_session.execute(
-                update(Job).where(Job.id == job_id).values(
+                update(Job).where(
+                    Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                ).values(
                     status="FAILED",
                     stage="导出失败",
                     detail=f"导出失败：{message}",

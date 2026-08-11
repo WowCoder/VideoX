@@ -44,6 +44,10 @@ class ProjectCollaborationOut(BaseModel):
     current_user_role: ProjectRole
     members: list[ProjectMemberOut]
     invitations: list[ProjectInvitationOut]
+    seats_used: int
+    seat_quota: int
+    can_manage_members: bool
+    management_message: str = ""
 
 
 class ProjectMemberRoleUpdate(BaseModel):

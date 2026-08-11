@@ -25,10 +25,24 @@ from app.schemas.collaboration import (
     ProjectMemberRoleUpdate,
 )
 from app.services.project_access import require_project_access
+from app.services.team_seats import (
+    TeamMembershipRequiredError,
+    TeamSeatLimitExceededError,
+    load_team_owner,
+    require_team_membership,
+    require_team_seat_capacity,
+    team_seat_snapshot,
+)
 
 
 router = APIRouter()
 settings = get_settings()
+
+
+def _team_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, TeamMembershipRequiredError):
+        return HTTPException(status_code=403, detail="项目协作仅对 Team 会员开放")
+    return HTTPException(status_code=409, detail="Team 席位已用完，请先移除成员或撤销邀请")
 
 
 def _now() -> datetime:
@@ -96,6 +110,8 @@ async def get_project_collaboration(
         )
     )
     project = project_result.scalar_one()
+    owner, membership = await load_team_owner(db, project.owner_id)
+    seats = await team_seat_snapshot(db, owner, membership)
     invitations: list[ProjectInvitationOut] = []
     if access.role == "owner":
         invitation_result = await db.execute(
@@ -120,6 +136,14 @@ async def get_project_collaboration(
         current_user_role=access.role,
         members=[_owner_out(project)] + [_member_out(item) for item in project.project_members],
         invitations=invitations,
+        seats_used=seats.used,
+        seat_quota=seats.quota,
+        can_manage_members=access.role == "owner" and seats.can_manage,
+        management_message=(
+            "Team 会员可在所有项目间共享 5 个席位（含所有者）"
+            if seats.can_manage
+            else "邀请和管理成员需要 Team 会员"
+        ),
     )
 
 
@@ -135,7 +159,6 @@ async def create_project_invitation(
     db: AsyncSession = Depends(get_db),
 ):
     access = await require_project_access(project_id, user, db, "owner")
-    await db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
     email = str(req.email).strip().lower()
     owner = await db.get(User, access.project.owner_id)
     if owner and owner.email.lower() == email:
@@ -169,6 +192,15 @@ async def create_project_invitation(
     for item in pending:
         item.status = "revoked"
         item.revoked_at = now
+    await db.flush()
+    try:
+        await require_team_seat_capacity(
+            db,
+            access.project.owner_id,
+            prospective_email=email,
+        )
+    except (TeamMembershipRequiredError, TeamSeatLimitExceededError) as exc:
+        raise _team_error(exc) from exc
 
     token = secrets.token_urlsafe(32)
     invitation = ProjectInvitation(
@@ -200,7 +232,11 @@ async def revoke_project_invitation(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_project_access(project_id, user, db, "owner")
+    access = await require_project_access(project_id, user, db, "owner")
+    try:
+        await require_team_membership(db, access.project.owner_id)
+    except TeamMembershipRequiredError as exc:
+        raise _team_error(exc) from exc
     invitation = (
         await db.execute(
             select(ProjectInvitation).where(
@@ -225,7 +261,11 @@ async def update_project_member_role(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_project_access(project_id, user, db, "owner")
+    access = await require_project_access(project_id, user, db, "owner")
+    try:
+        await require_team_membership(db, access.project.owner_id)
+    except TeamMembershipRequiredError as exc:
+        raise _team_error(exc) from exc
     member = (
         await db.execute(
             select(ProjectMember)
@@ -247,7 +287,11 @@ async def remove_project_member(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_project_access(project_id, user, db, "owner")
+    access = await require_project_access(project_id, user, db, "owner")
+    try:
+        await require_team_membership(db, access.project.owner_id)
+    except TeamMembershipRequiredError as exc:
+        raise _team_error(exc) from exc
     member = (
         await db.execute(
             select(ProjectMember).where(
@@ -311,6 +355,11 @@ async def accept_project_invitation(
         raise HTTPException(status_code=403, detail="当前登录邮箱与邀请邮箱不一致")
     if invitation.project.owner_id == user.id:
         raise HTTPException(status_code=409, detail="你已经是该项目所有者")
+
+    try:
+        await require_team_seat_capacity(db, invitation.project.owner_id)
+    except (TeamMembershipRequiredError, TeamSeatLimitExceededError) as exc:
+        raise _team_error(exc) from exc
 
     member = (
         await db.execute(

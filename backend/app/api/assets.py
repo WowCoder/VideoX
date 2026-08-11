@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import os
 import re
 import subprocess
@@ -15,15 +16,16 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models.user import User
+from app.models.user import User, Usage
 from app.models.project import Project
 from app.models.asset import Asset, Clip
 from app.models.job import Job
 from app.models.script import Script
 from app.services.project_access import accessible_project_condition, require_project_access
+from app.services.quotas import QuotaExceededError, admit_job_quota
 from app.schemas.asset import AssetOut, AssetListOut, ClipOut, UploadResponse
 from app.config import get_settings
-from app.utils.storage import get_file_url, upload_stream
+from app.utils.storage import delete_file, get_file_url, upload_stream
 
 router = APIRouter()
 settings = get_settings()
@@ -364,11 +366,78 @@ async def upload_asset(
     finally:
         await file.seek(0)
 
+    # 任务即额度预占。用户行锁保证并发上传不会同时绕过处理时长和存储额度。
+    job = Job(
+        project_id=project_id,
+        name=f"素材处理：{safe_name}",
+        type="素材处理",
+        status="QUEUED",
+        stage="等待处理",
+        stages=(
+            ["音频标准化", "提取音频信息", "完成"]
+            if media_info["media_type"] == "audio"
+            else ["转码", "语音转写(ASR)", "画面文字识别(OCR)", "镜头切分", "语义索引"]
+        ),
+        stage_index=0,
+        progress=0,
+        eta="预计 2-5 分钟",
+        detail=f"{safe_name} 已进入处理队列",
+        result=None,
+        result_detail="",
+        payload={},
+        is_simulated=False,
+    )
+    processing_seconds = max(1, math.ceil(float(media_info["duration"])))
+    try:
+        await admit_job_quota(
+            db,
+            job,
+            project.owner_id,
+            "processing_seconds",
+            processing_seconds,
+        )
+        storage_used_mb = (
+            await db.execute(
+                select(func.coalesce(func.sum(Asset.file_size_mb), 0.0))
+                .join(Project)
+                .where(Project.owner_id == project.owner_id)
+            )
+        ).scalar() or 0.0
+        storage_limit_mb = (
+            billing_user.membership.storage_gb if billing_user.membership else 5
+        ) * 1024
+        if storage_used_mb + file_size_mb > storage_limit_mb:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "存储空间不足：当前剩余约 "
+                    f"{max(0, storage_limit_mb - storage_used_mb):.1f}MB"
+                ),
+            )
+    except QuotaExceededError as exc:
+        try:
+            await asyncio.to_thread(delete_file, object_name)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "项目所有者的处理时长额度不足："
+                f"本次素材约 {processing_seconds / 60:.1f} 分钟"
+            ),
+        ) from exc
+    except Exception:
+        try:
+            await asyncio.to_thread(delete_file, object_name)
+        except Exception:
+            pass
+        raise
+
     # 创建 Asset
     asset = Asset(
         project_id=project_id,
         name=safe_name,
-        duration=0.0,
+        duration=float(media_info["duration"]),
         status="处理中",
         source="用户上传",
         variant=project.variant,
@@ -389,40 +458,23 @@ async def upload_asset(
     if project.status == "等待上传":
         project.status = "处理中"
 
-    # 创建处理任务
-    job = Job(
-        project_id=project_id,
-        name=f"素材处理：{safe_name}",
-        type="素材处理",
-        status="QUEUED",
-        stage="等待处理",
-        stages=(
-            ["音频标准化", "提取音频信息", "完成"]
-            if media_info["media_type"] == "audio"
-            else ["转码", "语音转写(ASR)", "画面文字识别(OCR)", "镜头切分", "语义索引"]
-        ),
-        stage_index=0,
-        progress=0,
-        eta="预计 2-5 分钟",
-        detail=f"{safe_name} 已进入处理队列",
-        result=None,
-        result_detail="",
-        payload={"asset_id": asset.id},
-        is_simulated=False,
-    )
+    job.payload = {"asset_id": asset.id}
     db.add(job)
     await db.flush()
 
-    if billing_user.usage:
-        billing_user.usage.storage_used_mb = round(storage_used_mb + file_size_mb, 2)
+    usage = (
+        await db.execute(select(Usage).where(Usage.user_id == project.owner_id))
+    ).scalar_one()
+    usage.storage_used_mb = round(storage_used_mb + file_size_mb, 2)
 
     # 先提交 Asset/Job，再派发 Worker，避免 Worker 抢先读取到不存在的记录。
     await db.commit()
 
     # 派发 Celery 媒体处理任务
     from app.tasks.media_tasks import process_asset
+    from app.services.task_dispatch import dispatch_project_task
     try:
-        task = process_asset.delay(asset.id, job.id)
+        task = await dispatch_project_task(db, project.id, process_asset, asset.id, job.id)
         job.celery_task_id = task.id
         await db.commit()
     except Exception as exc:

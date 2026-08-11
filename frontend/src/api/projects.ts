@@ -82,6 +82,10 @@ export interface ProjectCollaboration {
   currentUserRole: ProjectRole;
   members: ProjectMember[];
   invitations: ProjectInvitation[];
+  seatsUsed: number;
+  seatQuota: number;
+  canManageMembers: boolean;
+  managementMessage: string;
 }
 
 export interface InvitationPreview {
@@ -643,12 +647,20 @@ export async function getCollaboration(projectId: string): Promise<ProjectCollab
     current_user_role: ProjectRole;
     members: RawProjectMember[];
     invitations: RawProjectInvitation[];
+    seats_used: number;
+    seat_quota: number;
+    can_manage_members: boolean;
+    management_message: string;
   }>(`/projects/${projectId}/collaboration`);
   return {
     projectId: raw.project_id,
     currentUserRole: raw.current_user_role,
     members: raw.members.map(mapMember),
     invitations: raw.invitations.map(mapInvitation),
+    seatsUsed: raw.seats_used,
+    seatQuota: raw.seat_quota,
+    canManageMembers: raw.can_manage_members,
+    managementMessage: raw.management_message,
   };
 }
 

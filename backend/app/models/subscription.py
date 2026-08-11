@@ -3,7 +3,15 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -18,6 +26,8 @@ class Subscription(Base):
 
     __tablename__ = "subscriptions"
     __table_args__ = (
+        UniqueConstraint("user_id", name="uq_subscriptions_user_id"),
+        Index("ix_subscriptions_user_id", "user_id"),
         CheckConstraint(
             "status IN ('active', 'internal', 'past_due', 'cancelled', 'expired')",
             name="ck_subscriptions_status",
@@ -36,7 +46,7 @@ class Subscription(Base):
         String(64), primary_key=True, default=lambda: f"subscription-{uuid.uuid4().hex[:12]}"
     )
     user_id: Mapped[str] = mapped_column(
-        String(50), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
+        String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     membership_id: Mapped[str] = mapped_column(
         String(50), ForeignKey("memberships.id"), nullable=False, index=True

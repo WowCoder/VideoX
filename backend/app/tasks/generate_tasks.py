@@ -14,6 +14,7 @@ from urllib.parse import urljoin, urlparse
 
 from app.tasks.celery_app import celery_app
 from app.tasks.async_runner import run_async
+from app.services.quotas import complete_job_success
 
 
 def _persist_remote_media(remote_url: str, object_prefix: str, media_kind: str) -> str:
@@ -108,7 +109,7 @@ async def _mark_unexpected_failure(job_id: str, task_name: str, error: Exception
     async with async_session_factory() as session:
         await session.execute(
             update(Job)
-            .where(Job.id == job_id, Job.status != "SUCCEEDED")
+            .where(Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"]))
             .values(
                 status="FAILED",
                 stage="执行异常",
@@ -132,35 +133,6 @@ def _run_job(coro, job_id: str, task_name: str) -> None:
             # 数据库本身不可用时保留原异常，让 Celery 正确记录任务失败。
             pass
         raise
-
-
-async def _charge_success_quota(session, job_id: str, quota_type: str) -> None:
-    """仅在任务首次真实成功时扣减额度，失败和重复投递不扣费。"""
-    from app.models.job import Job
-    from app.models.project import Project
-    from app.models.user import Usage
-    from sqlalchemy import select
-
-    result = await session.execute(
-        select(Job, Project.owner_id)
-        .join(Project, Job.project_id == Project.id)
-        .where(Job.id == job_id)
-        .with_for_update()
-    )
-    row = result.first()
-    if not row or row[0].status == "SUCCEEDED":
-        return
-    usage = (
-        await session.execute(select(Usage).where(Usage.user_id == row[1]).with_for_update())
-    ).scalar_one_or_none()
-    if not usage:
-        usage = Usage(user_id=row[1])
-        session.add(usage)
-        await session.flush()
-    if quota_type == "image":
-        usage.ai_image_used += 1
-    else:
-        usage.ai_video_used += 1
 
 
 async def _record_generation(
@@ -245,7 +217,9 @@ async def _generate_image_async(shot_id: str, job_id: str, prompt: str):
         if not shot:
             if job_id:
                 await session.execute(
-                    update(Job).where(Job.id == job_id).values(
+                    update(Job).where(
+                        Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                    ).values(
                         status="FAILED", stage="分镜不存在", detail="目标分镜已被删除",
                         result=None, result_detail="无法继续生成", result_url=None,
                         updated_at=datetime.now(timezone.utc),
@@ -260,7 +234,9 @@ async def _generate_image_async(shot_id: str, job_id: str, prompt: str):
             if job_id:
                 progress = int((i + 1) / len(stages) * 100)
                 await session.execute(
-                    update(Job).where(Job.id == job_id).values(
+                    update(Job).where(
+                        Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                    ).values(
                         status="RUNNING",
                         stage=stage,
                         stage_index=i,
@@ -285,7 +261,9 @@ async def _generate_image_async(shot_id: str, job_id: str, prompt: str):
                     shot.status = "待编辑"
                     if job_id:
                         await session.execute(
-                            update(Job).where(Job.id == job_id).values(
+                            update(Job).where(
+                                Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                            ).values(
                                 status="FAILED",
                                 stage="生成失败",
                                 detail=f"AI 生图失败：{str(e)[:200]}",
@@ -307,23 +285,25 @@ async def _generate_image_async(shot_id: str, job_id: str, prompt: str):
             prompt=final_prompt,
         )
         if job_id:
-            await _charge_success_quota(session, job_id, "image")
-            await session.execute(
-                update(Job).where(Job.id == job_id).values(
-                    status="SUCCEEDED",
-                    progress=100,
-                    stage="完成",
-                    detail="已生成新的 AI 分镜候选",
-                    result="打开脚本",
-                    result_detail=(
+            completed = await complete_job_success(
+                session,
+                job_id,
+                values={
+                    "progress": 100,
+                    "stage": "完成",
+                    "detail": "已生成新的 AI 分镜候选",
+                    "result": "打开脚本",
+                    "result_detail": (
                         "AI 分镜图已生成并自动采用"
                         if generation.is_selected
                         else "AI 分镜图已加入历史候选，请确认后采用"
                     ),
-                    result_url=_provider_media_url(generated_path),
-                    updated_at=datetime.now(timezone.utc),
-                )
+                    "result_url": _provider_media_url(generated_path),
+                },
             )
+            if not completed:
+                await session.rollback()
+                return
         await session.commit()
 
 
@@ -356,7 +336,9 @@ async def _generate_video_async(shot_id: str, job_id: str, prompt: str):
         if not shot:
             if job_id:
                 await session.execute(
-                    update(Job).where(Job.id == job_id).values(
+                    update(Job).where(
+                        Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                    ).values(
                         status="FAILED", stage="分镜不存在", detail="目标分镜已被删除",
                         result=None, result_detail="无法继续生成", result_url=None,
                         updated_at=datetime.now(timezone.utc),
@@ -369,7 +351,9 @@ async def _generate_video_async(shot_id: str, job_id: str, prompt: str):
             if job_id:
                 progress = int((i + 1) / len(stages) * 100)
                 await session.execute(
-                    update(Job).where(Job.id == job_id).values(
+                    update(Job).where(
+                        Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                    ).values(
                         status="RUNNING",
                         stage=stage,
                         stage_index=i,
@@ -428,7 +412,9 @@ async def _generate_video_async(shot_id: str, job_id: str, prompt: str):
                 except Exception as e:
                     if job_id:
                         await session.execute(
-                            update(Job).where(Job.id == job_id).values(
+                            update(Job).where(
+                                Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                            ).values(
                                 status="FAILED",
                                 stage="生成失败",
                                 detail=f"AI 视频生成失败：{str(e)[:200]}",
@@ -451,23 +437,25 @@ async def _generate_video_async(shot_id: str, job_id: str, prompt: str):
             prompt=final_prompt,
         )
         if job_id:
-            await _charge_success_quota(session, job_id, "video")
-            await session.execute(
-                update(Job).where(Job.id == job_id).values(
-                    status="SUCCEEDED",
-                    progress=100,
-                    stage="完成",
-                    detail="已生成新的图生视频候选",
-                    result="打开脚本",
-                    result_detail=(
+            completed = await complete_job_success(
+                session,
+                job_id,
+                values={
+                    "progress": 100,
+                    "stage": "完成",
+                    "detail": "已生成新的图生视频候选",
+                    "result": "打开脚本",
+                    "result_detail": (
                         "分镜视频已生成并自动采用"
                         if generation.is_selected
                         else "分镜视频已加入历史候选，请确认后采用"
                     ),
-                    result_url=_provider_media_url(generated_path),
-                    updated_at=datetime.now(timezone.utc),
-                )
+                    "result_url": _provider_media_url(generated_path),
+                },
             )
+            if not completed:
+                await session.rollback()
+                return
         await session.commit()
 
 
@@ -509,7 +497,9 @@ async def _generate_effect_async(shot_id: str, job_id: str, motion_description: 
         if not shot:
             if job_id:
                 await session.execute(
-                    update(Job).where(Job.id == job_id).values(
+                    update(Job).where(
+                        Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                    ).values(
                         status="FAILED", stage="分镜不存在", detail="目标分镜已被删除",
                         result=None, result_detail="无法继续生成", result_url=None,
                         updated_at=datetime.now(timezone.utc),
@@ -522,7 +512,9 @@ async def _generate_effect_async(shot_id: str, job_id: str, motion_description: 
         if not sketch_data:
             if job_id:
                 await session.execute(
-                    update(Job).where(Job.id == job_id).values(
+                    update(Job).where(
+                        Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                    ).values(
                         status="FAILED",
                         stage="草图不存在",
                         detail="示意草图未保存或已被清除",
@@ -539,7 +531,9 @@ async def _generate_effect_async(shot_id: str, job_id: str, motion_description: 
             if job_id:
                 progress = int((i + 1) / len(stages) * 100)
                 await session.execute(
-                    update(Job).where(Job.id == job_id).values(
+                    update(Job).where(
+                        Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                    ).values(
                         status="RUNNING",
                         stage=stage,
                         stage_index=i,
@@ -590,7 +584,9 @@ async def _generate_effect_async(shot_id: str, job_id: str, motion_description: 
                 except Exception as e:
                     if job_id:
                         await session.execute(
-                            update(Job).where(Job.id == job_id).values(
+                            update(Job).where(
+                                Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"])
+                            ).values(
                                 status="FAILED",
                                 stage="生成失败",
                                 detail=f"AI 特效生成失败：{str(e)[:200]}",
@@ -613,21 +609,23 @@ async def _generate_effect_async(shot_id: str, job_id: str, motion_description: 
         )
 
         if job_id:
-            await _charge_success_quota(session, job_id, "video")
-            await session.execute(
-                update(Job).where(Job.id == job_id).values(
-                    status="SUCCEEDED",
-                    progress=100,
-                    stage="完成",
-                    detail="已生成新的示意特效候选",
-                    result="打开脚本",
-                    result_detail=(
+            completed = await complete_job_success(
+                session,
+                job_id,
+                values={
+                    "progress": 100,
+                    "stage": "完成",
+                    "detail": "已生成新的示意特效候选",
+                    "result": "打开脚本",
+                    "result_detail": (
                         "特效视频已生成并自动采用"
                         if generation.is_selected
                         else "特效视频已加入历史候选，请确认后采用"
                     ),
-                    result_url=_provider_media_url(generated_path),
-                    updated_at=datetime.now(timezone.utc),
-                )
+                    "result_url": _provider_media_url(generated_path),
+                },
             )
+            if not completed:
+                await session.rollback()
+                return
         await session.commit()

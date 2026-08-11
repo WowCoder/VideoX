@@ -954,8 +954,11 @@ async def match_script_clips(
     await db.commit()
 
     from app.tasks.match_tasks import match_script_shots
+    from app.services.task_dispatch import dispatch_project_task
     try:
-        task = match_script_shots.delay(script.id, shot_ids, job.id)
+        task = await dispatch_project_task(
+            db, script.project_id, match_script_shots, script.id, shot_ids, job.id
+        )
         job.celery_task_id = task.id
         await db.commit()
     except Exception as exc:
@@ -1022,8 +1025,11 @@ async def complete_script_shots(
     await db.commit()
 
     from app.tasks.script_tasks import complete_shot_descriptions
+    from app.services.task_dispatch import dispatch_project_task
     try:
-        task = complete_shot_descriptions.delay(script.id, shot_ids, job.id)
+        task = await dispatch_project_task(
+            db, script.project_id, complete_shot_descriptions, script.id, shot_ids, job.id
+        )
         job.celery_task_id = task.id
         await db.commit()
     except Exception as exc:
@@ -1229,9 +1235,17 @@ async def create_rough_cut(
 
     # 派发 Celery 任务
     from app.tasks.roughcut_tasks import run_rough_cut
+    from app.services.task_dispatch import dispatch_project_task
     try:
-        task = run_rough_cut.delay(
-            job.id, ai_project.id, copied_script.id, script.project_id, cut_version.id
+        task = await dispatch_project_task(
+            db,
+            ai_project.id,
+            run_rough_cut,
+            job.id,
+            ai_project.id,
+            copied_script.id,
+            script.project_id,
+            cut_version.id,
         )
         job.celery_task_id = task.id
         await db.commit()

@@ -78,6 +78,7 @@ export function ProjectCollaborationModal({ projectId, open, onClose }: Props) {
   if (!open) return null;
   const collaboration = collaborationQuery.data;
   const isOwner = collaboration?.currentUserRole === "owner";
+  const canManageMembers = collaboration?.canManageMembers === true;
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
@@ -103,9 +104,13 @@ export function ProjectCollaborationModal({ projectId, open, onClose }: Props) {
             <div className="space-y-6">
               {isOwner && (
                 <section className="rounded-xl border border-line bg-canvas/50 p-4">
-                  <h3 className="flex items-center gap-2 text-sm font-semibold text-text"><UserPlus size={16} />邀请成员</h3>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="flex items-center gap-2 text-sm font-semibold text-text"><UserPlus size={16} />邀请成员</h3>
+                    <span className="rounded-full bg-surface px-2.5 py-1 text-xs text-muted">席位 {collaboration.seatsUsed}/{collaboration.seatQuota}</span>
+                  </div>
                   <form className="mt-3 grid gap-2 sm:grid-cols-[1fr_110px_auto]" onSubmit={(event) => {
                     event.preventDefault();
+                    if (!canManageMembers) return notify("邀请成员需要 Team 会员", "error");
                     if (!email.trim()) return notify("请输入成员邮箱", "error");
                     inviteMutation.mutate();
                   }}>
@@ -116,11 +121,11 @@ export function ProjectCollaborationModal({ projectId, open, onClose }: Props) {
                     <select value={role} onChange={(event) => setRole(event.target.value as "editor" | "viewer")} className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-text outline-none focus:border-blue">
                       <option value="editor">编辑者</option><option value="viewer">查看者</option>
                     </select>
-                    <button type="submit" disabled={inviteMutation.isPending} className="flex h-10 items-center justify-center gap-1.5 rounded-lg bg-blue px-4 text-sm font-medium text-white transition hover:bg-blue/90 disabled:opacity-50">
+                    <button type="submit" disabled={!canManageMembers || inviteMutation.isPending} className="flex h-10 items-center justify-center gap-1.5 rounded-lg bg-blue px-4 text-sm font-medium text-white transition hover:bg-blue/90 disabled:opacity-50">
                       {inviteMutation.isPending && <Loader2 size={14} className="animate-spin" />}创建邀请
                     </button>
                   </form>
-                  <p className="mt-2 text-xs text-muted">当前未接入邮件发送服务。创建后会生成 7 天有效的真实邀请链接，不会假装邮件已发送。</p>
+                  <p className="mt-2 text-xs text-muted">{collaboration.managementMessage}。当前未接入邮件发送服务，邀请链接 7 天有效。</p>
                   {createdLink && <div className="mt-3 flex gap-2 rounded-lg border border-blue/20 bg-blue-soft/40 p-2">
                     <input readOnly value={createdLink} className="min-w-0 flex-1 bg-transparent px-1 text-xs text-text outline-none" />
                     <button type="button" onClick={() => void copyLink()} className="flex shrink-0 items-center gap-1 rounded-md bg-surface px-2.5 py-1.5 text-xs text-blue shadow-sm"><Copy size={13} />复制</button>
@@ -134,10 +139,10 @@ export function ProjectCollaborationModal({ projectId, open, onClose }: Props) {
                   {collaboration.members.map((member) => <li key={member.id} className="flex items-center gap-3 p-3.5">
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue to-teal text-sm font-medium text-white">{member.avatarInitial}</span>
                     <div className="min-w-0 flex-1"><strong className="block truncate text-sm text-text">{member.name}</strong><span className="block truncate text-xs text-muted">{member.email}</span></div>
-                    {isOwner && member.role !== "owner" ? <select value={member.role} disabled={roleMutation.isPending} onChange={(event) => roleMutation.mutate({ memberId: member.id, nextRole: event.target.value as "editor" | "viewer" })} className="rounded-lg border border-line bg-surface px-2 py-1.5 text-xs text-text">
+                    {canManageMembers && member.role !== "owner" ? <select value={member.role} disabled={roleMutation.isPending} onChange={(event) => roleMutation.mutate({ memberId: member.id, nextRole: event.target.value as "editor" | "viewer" })} className="rounded-lg border border-line bg-surface px-2 py-1.5 text-xs text-text">
                       <option value="editor">编辑者</option><option value="viewer">查看者</option>
                     </select> : <span className="flex items-center gap-1 rounded-full bg-canvas px-2.5 py-1 text-xs text-muted"><Shield size={12} />{roleLabels[member.role]}</span>}
-                    {isOwner && member.role !== "owner" && <button type="button" aria-label={`移除 ${member.name}`} disabled={removeMutation.isPending} onClick={() => {
+                    {canManageMembers && member.role !== "owner" && <button type="button" aria-label={`移除 ${member.name}`} disabled={removeMutation.isPending} onClick={() => {
                       if (window.confirm(`确定将 ${member.name} 移出项目吗？`)) removeMutation.mutate(member.id);
                     }} className="rounded-lg p-2 text-muted transition hover:bg-red/10 hover:text-red"><Trash2 size={15} /></button>}
                   </li>)}
@@ -150,7 +155,7 @@ export function ProjectCollaborationModal({ projectId, open, onClose }: Props) {
                   {collaboration.invitations.map((invitation) => <li key={invitation.id} className="flex items-center gap-3 p-3.5">
                     <Mail size={16} className="shrink-0 text-muted" />
                     <div className="min-w-0 flex-1"><strong className="block truncate text-sm font-medium text-text">{invitation.email}</strong><span className="text-xs text-muted">{roleLabels[invitation.role]} · {invitationStatusLabels[invitation.status] ?? invitation.status}</span></div>
-                    {invitation.status === "pending" && <button type="button" disabled={revokeMutation.isPending} onClick={() => revokeMutation.mutate(invitation.id)} className="rounded-lg border border-line px-2.5 py-1.5 text-xs text-muted transition hover:border-red/30 hover:text-red">撤销</button>}
+                    {canManageMembers && invitation.status === "pending" && <button type="button" disabled={revokeMutation.isPending} onClick={() => revokeMutation.mutate(invitation.id)} className="rounded-lg border border-line px-2.5 py-1.5 text-xs text-muted transition hover:border-red/30 hover:text-red">撤销</button>}
                   </li>)}
                 </ul>
               </section>}

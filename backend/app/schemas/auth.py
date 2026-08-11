@@ -64,6 +64,7 @@ class MembershipOut(BaseModel):
     ai_video_quota: int
     storage_gb: int
     export_quota: int
+    seat_quota: int
     price: float
 
     class Config:
@@ -71,11 +72,14 @@ class MembershipOut(BaseModel):
 
 
 class UsageOut(BaseModel):
+    processing_seconds_used: int
     processing_minutes_used: int
     ai_image_used: int
     ai_video_used: int
     storage_used_mb: float
     export_used: int
+    billing_cycle_start: datetime
+    billing_cycle_end: datetime
 
     class Config:
         from_attributes = True

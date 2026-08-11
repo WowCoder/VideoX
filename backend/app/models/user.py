@@ -1,8 +1,9 @@
 """用户、会员、用量模型。"""
 
 import uuid
+import math
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, Text, Float
+from sqlalchemy import String, Integer, Boolean, CheckConstraint, DateTime, ForeignKey, Text, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -14,6 +15,9 @@ def _utcnow() -> datetime:
 class Membership(Base):
     """会员方案。"""
     __tablename__ = "memberships"
+    __table_args__ = (
+        CheckConstraint("seat_quota >= 1", name="ck_memberships_seat_quota_positive"),
+    )
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True, default=lambda: f"membership-{uuid.uuid4().hex[:12]}")
     name: Mapped[str] = mapped_column(String(100), nullable=False)  # Free / Pro / Team
@@ -24,6 +28,7 @@ class Membership(Base):
     ai_video_quota: Mapped[int] = mapped_column(Integer, default=5)  # AI 生视频配额
     storage_gb: Mapped[int] = mapped_column(Integer, default=5)  # 存储容量 GB
     export_quota: Mapped[int] = mapped_column(Integer, default=10)  # 导出次数配额
+    seat_quota: Mapped[int] = mapped_column(Integer, default=1)  # 团队总席位（含所有者）
     price: Mapped[float] = mapped_column(Float, default=0.0)  # 价格（元）
     payment_method: Mapped[str] = mapped_column(String(50), nullable=True)
 
@@ -63,7 +68,7 @@ class Usage(Base):
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True, default=lambda: f"usage-{uuid.uuid4().hex[:12]}")
     user_id: Mapped[str] = mapped_column(String(50), ForeignKey("users.id"), unique=True, nullable=False)
-    processing_minutes_used: Mapped[int] = mapped_column(Integer, default=0)
+    processing_seconds_used: Mapped[int] = mapped_column(Integer, default=0)
     ai_image_used: Mapped[int] = mapped_column(Integer, default=0)
     ai_video_used: Mapped[int] = mapped_column(Integer, default=0)
     storage_used_mb: Mapped[float] = mapped_column(Float, default=0.0)
@@ -72,3 +77,8 @@ class Usage(Base):
     billing_cycle_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     user: Mapped["User"] = relationship("User", back_populates="usage")
+
+    @property
+    def processing_minutes_used(self) -> int:
+        """兼容现有 API；数据库以秒为唯一计量单位。"""
+        return math.ceil(max(0, self.processing_seconds_used) / 60)

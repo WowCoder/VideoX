@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models.order import Order
 from app.models.subscription import Subscription
@@ -203,26 +202,43 @@ async def reconcile_user_subscription(
 async def expire_due_subscriptions(db: AsyncSession, *, now: datetime | None = None) -> int:
     """批量过期已结束的付费订阅，并将用户降级到 Free。"""
     now = as_utc(now or utcnow())
-    subscriptions = (
+    # 所有写路径统一按 User -> Subscription 的顺序加锁，避免与支付和额度结算死锁。
+    users = (
         await db.execute(
-            select(Subscription)
+            select(User)
+            .join(Subscription, Subscription.user_id == User.id)
             .where(
                 Subscription.status == "active",
                 Subscription.current_period_end.is_not(None),
                 Subscription.current_period_end <= now,
             )
-            .options(selectinload(Subscription.user))
-            .with_for_update(skip_locked=True)
+            .with_for_update(of=User, skip_locked=True)
         )
     ).scalars().all()
-    if not subscriptions:
+    if not users:
         return 0
 
-    for subscription in subscriptions:
+    expired_count = 0
+    for user in users:
+        subscription = (
+            await db.execute(
+                select(Subscription)
+                .where(Subscription.user_id == user.id)
+                .with_for_update()
+            )
+        ).scalar_one()
+        period_end = (
+            as_utc(subscription.current_period_end)
+            if subscription.current_period_end is not None
+            else None
+        )
+        if subscription.status != "active" or period_end is None or period_end > now:
+            continue
         subscription.status = "expired"
         subscription.auto_renew = False
         subscription.cancel_at_period_end = False
         subscription.updated_at = now
-        subscription.user.membership_id = FREE_MEMBERSHIP_ID
+        user.membership_id = FREE_MEMBERSHIP_ID
+        expired_count += 1
     await db.flush()
-    return len(subscriptions)
+    return expired_count

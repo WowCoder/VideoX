@@ -22,11 +22,12 @@ from sqlalchemy.orm import selectinload
 from app.config import get_settings
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models.user import User, Membership, Usage
+from app.models.user import User, Membership
 from app.models.order import Order
 from app.models.invoice import Invoice
 from app.schemas.auth import MembershipOut, SubscriptionOut, UsageOut
 from app.services.subscriptions import activate_paid_subscription, ensure_user_subscription
+from app.services.quotas import synchronize_user_usage
 
 router = APIRouter()
 settings = get_settings()
@@ -249,6 +250,7 @@ async def alipay_notify(
         return AlipayNotifyResponse(result="fail")
 
     await activate_paid_subscription(db, user, order)
+    await synchronize_user_usage(db, user, for_update=True)
     logger.info("用户 %s 会员订阅已更新至 %s", user.id, order.membership_id)
 
     # 更新订单状态
@@ -442,12 +444,7 @@ async def get_usage(
 
     与 /api/generate/usage 功能一致，在 billing 模块也暴露此端点。
     """
-    result = await db.execute(select(Usage).where(Usage.user_id == user.id))
-    usage = result.scalar_one_or_none()
-    if not usage:
-        usage = Usage(user_id=user.id)
-        db.add(usage)
-        await db.flush()
+    usage = await synchronize_user_usage(db, user)
     return UsageOut.model_validate(usage)
 
 

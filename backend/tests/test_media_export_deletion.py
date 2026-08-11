@@ -196,6 +196,34 @@ class AudioExportFilterTests(unittest.TestCase):
         self.assertIn("volume=0.800000", filter_complex)
 
 
+class ExportWatermarkTests(unittest.TestCase):
+    def test_only_free_plan_requires_watermark(self):
+        self.assertTrue(export_tasks.requires_export_watermark(0))
+        self.assertFalse(export_tasks.requires_export_watermark(1))
+        self.assertFalse(export_tasks.requires_export_watermark(2))
+
+    @patch.object(export_tasks, "_run_command")
+    @patch.object(export_tasks, "_render_watermark_image")
+    def test_watermark_is_burned_at_bottom_right(self, mock_render, mock_run):
+        export_tasks._apply_export_watermark(
+            "ffmpeg",
+            "/tmp/source.mp4",
+            "/tmp/output.mp4",
+            "/tmp",
+            1920,
+            1080,
+            12.5,
+            "/tmp/font.ttf",
+            True,
+        )
+        mock_render.assert_called_once()
+        command = mock_run.call_args.args[0]
+        filter_complex = command[command.index("-filter_complex") + 1]
+        self.assertIn("main_w-overlay_w-30", filter_complex)
+        self.assertIn("main_h-overlay_h-30", filter_complex)
+        self.assertEqual(command[command.index("-t") + 1], "12.500000")
+
+
 class ExportResultPathTests(unittest.TestCase):
     def test_prefers_durable_result_path(self):
         job = SimpleNamespace(

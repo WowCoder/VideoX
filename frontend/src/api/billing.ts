@@ -17,15 +17,19 @@ interface RawMembership {
   ai_video_quota: number;
   storage_gb: number;
   export_quota: number;
+  seat_quota: number;
   price: number;
 }
 
 interface RawUsage {
+  processing_seconds_used: number;
   processing_minutes_used: number;
   ai_image_used: number;
   ai_video_used: number;
   storage_used_mb: number;
   export_used: number;
+  billing_cycle_start: string;
+  billing_cycle_end: string;
 }
 
 interface RawSubscription {
@@ -85,15 +89,19 @@ export interface MembershipPlan {
   aiVideoQuota: number;
   storageGb: number;
   exportQuota: number;
+  seatQuota: number;
   price: number;
 }
 
 export interface UsageData {
+  processingSecondsUsed: number;
   processingMinutesUsed: number;
   aiImageUsed: number;
   aiVideoUsed: number;
   storageUsedMb: number;
   exportUsed: number;
+  billingCycleStart: string;
+  billingCycleEnd: string;
 }
 
 export interface SubscriptionData {
@@ -153,17 +161,21 @@ function mapMembership(raw: RawMembership): MembershipPlan {
     aiVideoQuota: raw.ai_video_quota,
     storageGb: raw.storage_gb,
     exportQuota: raw.export_quota,
+    seatQuota: raw.seat_quota,
     price: raw.price,
   };
 }
 
 function mapUsage(raw: RawUsage): UsageData {
   return {
-    processingMinutesUsed: raw.processing_minutes_used,
+    processingSecondsUsed: raw.processing_seconds_used,
+    processingMinutesUsed: raw.processing_seconds_used / 60,
     aiImageUsed: raw.ai_image_used,
     aiVideoUsed: raw.ai_video_used,
     storageUsedMb: raw.storage_used_mb,
     exportUsed: raw.export_used,
+    billingCycleStart: raw.billing_cycle_start,
+    billingCycleEnd: raw.billing_cycle_end,
   };
 }
 
