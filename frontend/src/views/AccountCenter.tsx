@@ -24,6 +24,7 @@ import { useSearchParams } from "@/router";
 import {
   listMemberships,
   getUsage,
+  getSubscription,
   listOrders,
   listInvoices,
   createInvoiceApplication,
@@ -32,6 +33,7 @@ import {
   type BillingInvoice,
   type BillingOrder,
   type MembershipPlan,
+  type SubscriptionData,
   type UsageData,
 } from "@/api/billing";
 
@@ -41,6 +43,67 @@ const validSections = new Set<Section>(["overview", "membership", "usage", "bill
 
 function isSection(value: string | null): value is Section {
   return value !== null && validSections.has(value as Section);
+}
+
+function formatMembershipDate(value?: string): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function subscriptionPresentation(subscription?: SubscriptionData) {
+  if (!subscription) {
+    return {
+      status: "订阅信息加载中",
+      cycle: "—",
+      period: "—",
+      renewal: "—",
+    };
+  }
+  if (subscription.status === "internal") {
+    return {
+      status: "测试授权会员",
+      cycle: "长期有效",
+      period: `自 ${formatMembershipDate(subscription.currentPeriodStart)} 起长期有效`,
+      renewal: "无需续费",
+    };
+  }
+  if (subscription.billingCycle === "permanent") {
+    return {
+      status: subscription.status === "active" ? "永久免费" : "已失效",
+      cycle: "永久",
+      period: "无到期时间",
+      renewal: "无需续费",
+    };
+  }
+
+  const cycle = subscription.billingCycle === "yearly" ? "年付" : "月付";
+  const start = formatMembershipDate(subscription.currentPeriodStart);
+  const end = formatMembershipDate(subscription.currentPeriodEnd);
+  const remainingDays = subscription.currentPeriodEnd
+    ? Math.max(0, Math.ceil((new Date(subscription.currentPeriodEnd).getTime() - Date.now()) / 86_400_000))
+    : 0;
+  const statusMap: Record<SubscriptionData["status"], string> = {
+    active: "生效中",
+    internal: "测试授权会员",
+    past_due: "续费待处理",
+    cancelled: "已取消",
+    expired: "已到期",
+  };
+  return {
+    status: statusMap[subscription.status],
+    cycle,
+    period: `${start} 至 ${end}${subscription.status === "active" ? `，剩余 ${remainingDays} 天` : ""}`,
+    renewal: subscription.autoRenew
+      ? subscription.cancelAtPeriodEnd ? "周期结束后停止续费" : "自动续费"
+      : "手动续费",
+  };
 }
 
 const sections: { id: Section; label: string; icon: typeof CircleUserRound; copy: string }[] = [
@@ -84,6 +147,11 @@ export function AccountCenter() {
     queryFn: getUsage,
     retry: false,
   });
+  const subscriptionQuery = useQuery({
+    queryKey: ["billing-subscription"],
+    queryFn: getSubscription,
+    retry: false,
+  });
   const ordersQuery = useQuery({
     queryKey: ["billing-orders"],
     queryFn: listOrders,
@@ -97,6 +165,7 @@ export function AccountCenter() {
 
   const memberships = membershipsQuery.data;
   const usage = usageQuery.data;
+  const subscription = subscriptionQuery.data;
   const orders = ordersQuery.data ?? [];
   const invoices = invoicesQuery.data ?? [];
   const loadingMemberships = membershipsQuery.isLoading;
@@ -110,6 +179,7 @@ export function AccountCenter() {
   );
   const dataError = membershipsQuery.error
     ?? usageQuery.error
+    ?? subscriptionQuery.error
     ?? ordersQuery.error
     ?? invoicesQuery.error
     ?? (membershipMismatch ? new Error("当前会员方案与方案列表不一致，请刷新后重试") : null);
@@ -170,6 +240,7 @@ export function AccountCenter() {
                 onClick={() => {
                   void membershipsQuery.refetch();
                   void usageQuery.refetch();
+                  void subscriptionQuery.refetch();
                   void ordersQuery.refetch();
                   void invoicesQuery.refetch();
                 }}
@@ -183,6 +254,7 @@ export function AccountCenter() {
               user={user}
               usage={usage}
               membership={currentMembership}
+              subscription={subscription}
               orderCount={orders.length}
               onOpenMembership={() => openSection("membership")}
             />
@@ -192,6 +264,7 @@ export function AccountCenter() {
               loading={loadingMemberships}
               currentId={currentMembership?.id}
               currentRank={currentMembership?.rank ?? user?.membership?.rank}
+              subscription={subscription}
               onUpgrade={handleUpgrade}
             />
           ) : section === "usage" ? <UsageSection usage={usage} membership={currentMembership} />
@@ -228,12 +301,14 @@ function OverviewSection({
   user,
   usage,
   membership,
+  subscription,
   orderCount,
   onOpenMembership,
 }: {
   user: ReturnType<typeof useAuthStore.getState>["user"];
   usage?: UsageData;
   membership?: MembershipPlan;
+  subscription?: SubscriptionData;
   orderCount: number;
   onOpenMembership: () => void;
 }) {
@@ -244,6 +319,12 @@ function OverviewSection({
   const membershipRank = membership?.rank ?? user?.membership?.rank;
   const totalMinutes = membership?.processingMinutes;
   const storageUsedGb = usage ? usage.storageUsedMb / 1024 : undefined;
+  const subscriptionInfo = subscriptionPresentation(subscription);
+  const previousSubscriptionExpired = Boolean(
+    subscription?.status === "expired"
+    && membership
+    && subscription.membershipId !== membership.id,
+  );
 
   return (
     <div>
@@ -270,7 +351,11 @@ function OverviewSection({
         <div className="rounded-xl border border-line bg-canvas/40 p-4">
           <CreditCard size={18} className="text-teal" />
           <strong className="mt-2 block text-lg font-semibold text-text">{memName}</strong>
-          <small className="text-xs text-muted">当前会员方案</small>
+          <small className="text-xs text-muted">
+            {previousSubscriptionExpired
+              ? `当前为 ${memName} · 上一订阅已到期`
+              : `${subscriptionInfo.status} · ${subscriptionInfo.cycle}`}
+          </small>
         </div>
         <div className="rounded-xl border border-line bg-canvas/40 p-4">
           <HardDrive size={18} className="text-blue" />
@@ -347,12 +432,14 @@ function MembershipSection({
   loading,
   currentId,
   currentRank,
+  subscription,
   onUpgrade,
 }: {
   memberships: MembershipPlan[];
   loading: boolean;
   currentId?: string;
   currentRank?: number;
+  subscription?: SubscriptionData;
   onUpgrade: (id: string, cycle?: string) => void;
 }) {
   if (loading) {
@@ -376,12 +463,52 @@ function MembershipSection({
   }
 
   const highestRank = Math.max(...memberships.map((membership) => membership.rank));
+  const currentPlan = memberships.find((membership) => membership.id === currentId);
+  const subscribedPlan = memberships.find(
+    (membership) => membership.id === subscription?.membershipId,
+  );
+  const subscriptionInfo = subscriptionPresentation(subscription);
+  const renewalCycle = subscription?.billingCycle === "yearly" ? "yearly" : "monthly";
+  const previousSubscriptionExpired = Boolean(
+    subscription?.status === "expired"
+    && subscription.membershipId !== currentId,
+  );
 
   return (
     <div>
       <h2 className="mb-4 text-lg font-bold text-text">会员方案</h2>
+      <div className="mb-6 rounded-xl border border-line bg-canvas/40 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs text-muted">当前订阅</p>
+            <strong className="mt-1 block text-base text-text">
+              {previousSubscriptionExpired
+                ? `${subscribedPlan?.name ?? "付费会员"} · ${subscriptionInfo.status}`
+                : `${currentPlan?.name ?? "会员信息加载中"} · ${subscriptionInfo.status}`}
+            </strong>
+            {previousSubscriptionExpired && (
+              <span className="mt-1 block text-xs text-muted">
+                当前可用权益已回退至 {currentPlan?.name ?? "Free"}
+              </span>
+            )}
+          </div>
+          <span className="rounded-full bg-blue-soft px-2.5 py-1 text-xs font-medium text-blue">
+            {subscriptionInfo.cycle}
+          </span>
+        </div>
+        <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+          <div className="rounded-lg bg-surface px-3 py-2.5">
+            <span className="text-muted">有效期</span>
+            <strong className="mt-1 block text-text">{subscriptionInfo.period}</strong>
+          </div>
+          <div className="rounded-lg bg-surface px-3 py-2.5">
+            <span className="text-muted">续费方式</span>
+            <strong className="mt-1 block text-text">{subscriptionInfo.renewal}</strong>
+          </div>
+        </div>
+      </div>
       <p className="mb-5 text-sm text-muted">
-        当前方案只能升级到更高等级；在线降级与续费周期将在订阅功能接入后提供。
+        可升级到更高等级，也可续费当前付费方案；主动降级暂未开放，到期后会自动回退至 Free。
       </p>
       <div className="grid gap-4 sm:grid-cols-3">
         {memberships.map((plan) => {
@@ -390,6 +517,18 @@ function MembershipSection({
           const isLower = currentRank !== undefined && plan.rank < currentRank;
           const isRecommended = currentRank === 0 && plan.rank === 1;
           const isHighestCurrent = isCurrent && plan.rank === highestRank;
+          const isExpiredSubscription = Boolean(
+            subscription?.status === "expired"
+            && subscription.membershipId === plan.id,
+          );
+          const canRenew = Boolean(
+            isCurrent
+            && plan.price > 0
+            && subscription
+            && subscription.status !== "internal"
+            && subscription.billingCycle !== "permanent",
+          );
+          const canPurchase = isHigher || canRenew;
           return (
             <div
               key={plan.id}
@@ -442,10 +581,15 @@ function MembershipSection({
                 </li>
               </ul>
               <button
-                onClick={() => isHigher && onUpgrade(plan.id)}
-                disabled={!isHigher}
+                onClick={() => canPurchase && onUpgrade(
+                  plan.id,
+                  canRenew || isExpiredSubscription ? renewalCycle : "monthly",
+                )}
+                disabled={!canPurchase}
                 className={`mt-5 w-full rounded-lg py-2 text-sm font-semibold transition ${
-                  isCurrent
+                  canRenew
+                    ? "border border-blue/30 text-blue hover:bg-blue-soft"
+                    : isCurrent
                     ? "border border-teal/30 bg-teal/5 text-teal cursor-default"
                     : isHigher && isRecommended
                       ? "bg-blue text-white hover:bg-blue-2"
@@ -456,11 +600,17 @@ function MembershipSection({
                 type="button"
               >
                 {isCurrent
-                  ? "当前方案"
+                  ? canRenew
+                    ? `续费 ${plan.name}`
+                    : subscription?.status === "internal"
+                      ? "测试授权长期有效"
+                      : "当前方案"
                   : currentRank === undefined
                     ? "会员状态加载中"
                     : isLower
                       ? "暂不支持在线降级"
+                      : isExpiredSubscription
+                        ? `重新订阅 ${plan.name}`
                       : `升级到 ${plan.name}`}
               </button>
             </div>

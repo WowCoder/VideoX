@@ -28,6 +28,18 @@ interface RawUsage {
   export_used: number;
 }
 
+interface RawSubscription {
+  id: string;
+  membership_id: string;
+  status: "active" | "internal" | "past_due" | "cancelled" | "expired";
+  billing_cycle: "monthly" | "yearly" | "permanent";
+  current_period_start: string;
+  current_period_end: string | null;
+  auto_renew: boolean;
+  cancel_at_period_end: boolean;
+  provider: string;
+}
+
 interface RawUpgradeResponse {
   order_id: string;
   message: string;
@@ -82,6 +94,18 @@ export interface UsageData {
   aiVideoUsed: number;
   storageUsedMb: number;
   exportUsed: number;
+}
+
+export interface SubscriptionData {
+  id: string;
+  membershipId: string;
+  status: RawSubscription["status"];
+  billingCycle: RawSubscription["billing_cycle"];
+  currentPeriodStart: string;
+  currentPeriodEnd?: string;
+  autoRenew: boolean;
+  cancelAtPeriodEnd: boolean;
+  provider: string;
 }
 
 export interface UpgradeResult {
@@ -150,7 +174,7 @@ function mapUsage(raw: RawUsage): UsageData {
  * GET /api/generate/memberships
  */
 export async function listMemberships(): Promise<MembershipPlan[]> {
-  const res = await http.get<RawMembership[]>("/generate/memberships");
+  const res = await http.get<RawMembership[]>("/billing/plans");
   return res.map(mapMembership);
 }
 
@@ -161,6 +185,21 @@ export async function listMemberships(): Promise<MembershipPlan[]> {
 export async function getUsage(): Promise<UsageData> {
   const res = await http.get<RawUsage>("/generate/usage");
   return mapUsage(res);
+}
+
+export async function getSubscription(): Promise<SubscriptionData> {
+  const raw = await http.get<RawSubscription>("/billing/subscription");
+  return {
+    id: raw.id,
+    membershipId: raw.membership_id,
+    status: raw.status,
+    billingCycle: raw.billing_cycle,
+    currentPeriodStart: raw.current_period_start,
+    currentPeriodEnd: raw.current_period_end ?? undefined,
+    autoRenew: raw.auto_renew,
+    cancelAtPeriodEnd: raw.cancel_at_period_end,
+    provider: raw.provider,
+  };
 }
 
 export async function listOrders(): Promise<BillingOrder[]> {

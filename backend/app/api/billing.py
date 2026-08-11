@@ -9,6 +9,7 @@ import io
 import os
 import textwrap
 from datetime import datetime, timezone
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.database import get_db
@@ -23,7 +25,8 @@ from app.dependencies import get_current_user
 from app.models.user import User, Membership, Usage
 from app.models.order import Order
 from app.models.invoice import Invoice
-from app.schemas.auth import MembershipOut, UsageOut
+from app.schemas.auth import MembershipOut, SubscriptionOut, UsageOut
+from app.services.subscriptions import activate_paid_subscription, ensure_user_subscription
 
 router = APIRouter()
 settings = get_settings()
@@ -39,7 +42,9 @@ def _utcnow() -> datetime:
 class UpgradeRequest(BaseModel):
     """升级订单请求。"""
     membership_id: str = Field(..., description="目标会员方案 ID")
-    billing_cycle: str = Field("monthly", description="计费周期：monthly / yearly")
+    billing_cycle: Literal["monthly", "yearly"] = Field(
+        "monthly", description="计费周期：monthly / yearly"
+    )
 
 
 class UpgradeResponse(BaseModel):
@@ -108,6 +113,16 @@ async def list_plans(
     return [MembershipOut.model_validate(m) for m in result.scalars().all()]
 
 
+@router.get("/subscription", response_model=SubscriptionOut)
+async def get_subscription(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取当前用户已经过到期校验的订阅状态。"""
+    subscription = user.subscription or await ensure_user_subscription(db, user)
+    return SubscriptionOut.model_validate(subscription)
+
+
 @router.post("/upgrade", response_model=UpgradeResponse)
 async def create_upgrade_order(
     req: UpgradeRequest,
@@ -128,14 +143,16 @@ async def create_upgrade_order(
     target_membership = result.scalar_one_or_none()
     if not target_membership:
         raise HTTPException(status_code=404, detail="会员方案不存在")
+    if target_membership.rank <= 0:
+        raise HTTPException(status_code=400, detail="Free 方案无需购买")
 
     # 检查是否已持有更高或同等档位
     current_result = await db.execute(
         select(Membership).where(Membership.id == user.membership_id)
     )
     current_membership = current_result.scalar_one_or_none()
-    if current_membership and current_membership.rank >= target_membership.rank:
-        raise HTTPException(status_code=400, detail="当前会员档位已达到或超过目标方案")
+    if current_membership and current_membership.rank > target_membership.rank:
+        raise HTTPException(status_code=400, detail="暂不支持在线降级会员方案")
 
     # 计算金额
     amount = target_membership.price
@@ -161,11 +178,18 @@ async def create_upgrade_order(
     if not pay_url:
         raise HTTPException(status_code=503, detail="支付链接生成失败，请检查支付宝配置")
     order.pay_url = pay_url
-    logger.info("升级订单已创建：%s 用户 %s -> %s", order.id, user.id, target_membership.name)
+    is_renewal = bool(current_membership and current_membership.rank == target_membership.rank)
+    logger.info(
+        "%s订单已创建：%s 用户 %s -> %s",
+        "续费" if is_renewal else "升级",
+        order.id,
+        user.id,
+        target_membership.name,
+    )
 
     return UpgradeResponse(
         order_id=order.id,
-        message="订单已创建，请前往支付宝完成支付",
+        message=f"{'续费' if is_renewal else '升级'}订单已创建，请前往支付宝完成支付",
         pay_url=order.pay_url,
     )
 
@@ -197,12 +221,8 @@ async def alipay_notify(
     # 获取订单信息
     order_id = notify_data.get("out_trade_no", "")
     trade_status = notify_data.get("trade_status", "")
-    membership_id = ""
-
-    result = await db.execute(select(Order).where(Order.id == order_id))
+    result = await db.execute(select(Order).where(Order.id == order_id).with_for_update())
     order = result.scalar_one_or_none()
-    if order:
-        membership_id = order.membership_id
 
     if not order:
         logger.warning("支付宝回调：订单不存在 %s", order_id)
@@ -212,14 +232,24 @@ async def alipay_notify(
     if trade_status not in ("TRADE_SUCCESS", "TRADE_FINISHED"):
         return AlipayNotifyResponse(result="success")
 
-    # 更新用户会员
-    if membership_id:
-        result = await db.execute(select(User).where(User.id == order.user_id))
-        user = result.scalar_one_or_none()
-        if user:
-            user.membership_id = membership_id
-            await db.flush()
-            logger.info("用户 %s 会员已升级至 %s", user.id, membership_id)
+    # 支付宝可能重复投递同一回调；已支付订单不得再次延长订阅。
+    if order.status == "paid":
+        return AlipayNotifyResponse(result="success")
+
+    user = (
+        await db.execute(
+            select(User)
+            .where(User.id == order.user_id)
+            .options(selectinload(User.membership), selectinload(User.subscription))
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not user:
+        logger.error("支付宝回调：订单用户不存在 %s", order.user_id)
+        return AlipayNotifyResponse(result="fail")
+
+    await activate_paid_subscription(db, user, order)
+    logger.info("用户 %s 会员订阅已更新至 %s", user.id, order.membership_id)
 
     # 更新订单状态
     order.status = "paid"

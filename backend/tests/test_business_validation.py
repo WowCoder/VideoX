@@ -1,16 +1,23 @@
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from pydantic import ValidationError
 from fastapi import HTTPException
 
 from app.api.assets import _validate_upload_size
-from app.api.billing import InvoiceCreateRequest
+from app.api.billing import InvoiceCreateRequest, UpgradeRequest
 from app.api.scripts import router as scripts_router
 from app.api.projects import router as projects_router
 from app.schemas.project import ProjectTimelineUpdate, TimelineAudio, TimelineClip, TimelineTransition
 from app.services.project_access import ROLE_LEVEL
 from app.services.timeline_validation import validate_timeline_layout
+from app.services.subscriptions import (
+    add_billing_period,
+    initial_subscription_values,
+    purchased_period,
+    renewed_period,
+)
 from app.tasks.roughcut_tasks import _assemble_script_timeline, _update_job_status
 from scripts.manage_test_account import (
     AccountCommandError,
@@ -51,6 +58,92 @@ class UploadSizeValidationTests(unittest.TestCase):
             _validate_upload_size(1024 * 1024 * 1024 + 1, max_size_gb=1)
         self.assertEqual(context.exception.status_code, 413)
         self.assertIn("1 GiB", context.exception.detail)
+
+
+class MembershipSubscriptionTests(unittest.TestCase):
+    def test_monthly_period_clamps_month_end(self):
+        start = datetime(2026, 1, 31, 8, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            add_billing_period(start, "monthly"),
+            datetime(2026, 2, 28, 8, 30, tzinfo=timezone.utc),
+        )
+
+    def test_yearly_period_handles_leap_day(self):
+        start = datetime(2024, 2, 29, 8, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            add_billing_period(start, "yearly"),
+            datetime(2025, 2, 28, 8, 30, tzinfo=timezone.utc),
+        )
+
+    def test_existing_free_user_gets_permanent_active_subscription(self):
+        values = initial_subscription_values(0, datetime(2026, 8, 11, tzinfo=timezone.utc))
+        self.assertEqual(values["status"], "active")
+        self.assertEqual(values["billing_cycle"], "permanent")
+        self.assertEqual(values["provider"], "system")
+        self.assertIsNone(values["current_period_end"])
+
+    def test_existing_paid_user_gets_internal_subscription_without_fake_expiry(self):
+        values = initial_subscription_values(2, datetime(2026, 8, 11, tzinfo=timezone.utc))
+        self.assertEqual(values["status"], "internal")
+        self.assertEqual(values["billing_cycle"], "permanent")
+        self.assertEqual(values["provider"], "internal")
+        self.assertIsNone(values["current_period_end"])
+
+    def test_early_renewal_extends_from_existing_expiry(self):
+        start = datetime(2026, 8, 11, tzinfo=timezone.utc)
+        current_end = datetime(2026, 9, 11, tzinfo=timezone.utc)
+        period_start, period_end = renewed_period(
+            current_start=start,
+            current_end=current_end,
+            current_status="active",
+            billing_cycle="monthly",
+            now=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+        self.assertEqual(period_start, start)
+        self.assertEqual(period_end, datetime(2026, 10, 11, tzinfo=timezone.utc))
+
+    def test_expired_renewal_restarts_from_payment_time(self):
+        now = datetime(2026, 10, 20, tzinfo=timezone.utc)
+        period_start, period_end = renewed_period(
+            current_start=datetime(2026, 8, 11, tzinfo=timezone.utc),
+            current_end=datetime(2026, 9, 11, tzinfo=timezone.utc),
+            current_status="expired",
+            billing_cycle="monthly",
+            now=now,
+        )
+        self.assertEqual(period_start, now)
+        self.assertEqual(period_end, datetime(2026, 11, 20, tzinfo=timezone.utc))
+
+    def test_cross_tier_upgrade_starts_a_fresh_period(self):
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        period_start, period_end = purchased_period(
+            current_membership_id="membership-pro",
+            target_membership_id="membership-team",
+            current_start=datetime(2026, 8, 11, tzinfo=timezone.utc),
+            current_end=datetime(2026, 9, 11, tzinfo=timezone.utc),
+            current_status="active",
+            billing_cycle="monthly",
+            now=now,
+        )
+        self.assertEqual(period_start, now)
+        self.assertEqual(period_end, datetime(2026, 10, 1, tzinfo=timezone.utc))
+
+    def test_same_tier_purchase_extends_the_existing_period(self):
+        period_start, period_end = purchased_period(
+            current_membership_id="membership-pro",
+            target_membership_id="membership-pro",
+            current_start=datetime(2026, 8, 11, tzinfo=timezone.utc),
+            current_end=datetime(2026, 9, 11, tzinfo=timezone.utc),
+            current_status="active",
+            billing_cycle="monthly",
+            now=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+        self.assertEqual(period_start, datetime(2026, 8, 11, tzinfo=timezone.utc))
+        self.assertEqual(period_end, datetime(2026, 10, 11, tzinfo=timezone.utc))
+
+    def test_upgrade_request_rejects_unknown_billing_cycle(self):
+        with self.assertRaises(ValidationError):
+            UpgradeRequest(membership_id="membership-pro", billing_cycle="weekly")
 
 
 class TestAccountManagementTests(unittest.TestCase):

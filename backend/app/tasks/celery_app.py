@@ -18,6 +18,7 @@ celery_app = Celery(
         "app.tasks.script_tasks",
         "app.tasks.roughcut_tasks",
         "app.tasks.export_tasks",
+        "app.tasks.subscription_tasks",
     ],
 )
 
@@ -41,6 +42,10 @@ celery_app.conf.update(
         "fail-stale-jobs-every-five-minutes": {
             "task": "app.tasks.fail_stale_jobs",
             "schedule": 300.0,
+        },
+        "expire-memberships-hourly": {
+            "task": "app.tasks.expire_due_subscriptions",
+            "schedule": 3600.0,
         },
     },
 )

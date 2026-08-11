@@ -48,6 +48,9 @@ class User(Base):
 
     membership: Mapped["Membership"] = relationship("Membership", back_populates="users")
     usage: Mapped["Usage"] = relationship("Usage", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    subscription: Mapped["Subscription | None"] = relationship(  # type: ignore[name-defined]
+        "Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
     projects: Mapped[list["Project"]] = relationship("Project", back_populates="owner")
     notifications: Mapped[list["Notification"]] = relationship(
         "Notification", back_populates="user", cascade="all, delete-orphan"

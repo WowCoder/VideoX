@@ -81,6 +81,21 @@ class UsageOut(BaseModel):
         from_attributes = True
 
 
+class SubscriptionOut(BaseModel):
+    id: str
+    membership_id: str
+    status: str
+    billing_cycle: str
+    current_period_start: datetime
+    current_period_end: datetime | None = None
+    auto_renew: bool
+    cancel_at_period_end: bool
+    provider: str
+
+    class Config:
+        from_attributes = True
+
+
 class UserOut(BaseModel):
     id: str
     email: str
@@ -92,6 +107,7 @@ class UserOut(BaseModel):
     created_at: datetime | None = None
     membership: MembershipOut | None = None
     usage: UsageOut | None = None
+    subscription: SubscriptionOut | None = None
 
     class Config:
         from_attributes = True

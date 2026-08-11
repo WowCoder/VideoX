@@ -13,7 +13,7 @@ from app.models.user import User, Membership, Usage
 from app.schemas.auth import (
     RegisterRequest, LoginRequest, RefreshRequest,
     TokenResponse, UserOut, AuthResponse,
-    MembershipOut, UsageOut,
+    MembershipOut, UsageOut, SubscriptionOut,
     UserSettingsUpdate,
     PhoneCodeRequest, PhoneLoginRequest, WechatCallbackRequest,
     SmsCodeResponse, WechatQrcodeResponse,
@@ -27,6 +27,7 @@ from app.services.sms_provider import send_code, verify_code
 from app.services.wechat_provider import (
     get_qrcode_url, exchange_code_for_token, get_user_info,
 )
+from app.services.subscriptions import reconcile_user_subscription
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -64,6 +65,9 @@ async def _serialize_user(user: User) -> UserOut:
         created_at=user.created_at,
         membership=MembershipOut.model_validate(user.membership) if user.membership else None,
         usage=UsageOut.model_validate(user.usage) if user.usage else None,
+        subscription=(
+            SubscriptionOut.model_validate(user.subscription) if user.subscription else None
+        ),
     )
 
 
@@ -98,9 +102,14 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(User)
         .where(User.id == user.id)
-        .options(selectinload(User.membership), selectinload(User.usage))
+        .options(
+            selectinload(User.membership),
+            selectinload(User.usage),
+            selectinload(User.subscription),
+        )
     )
     user = result.scalar_one()
+    await reconcile_user_subscription(db, user)
 
     access_token = create_access_token(user.id)
     refresh_token = create_refresh_token(user.id)
@@ -118,12 +127,18 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(User)
         .where(func.lower(User.email) == str(req.email).strip().lower())
-        .options(selectinload(User.membership), selectinload(User.usage))
+        .options(
+            selectinload(User.membership),
+            selectinload(User.usage),
+            selectinload(User.subscription),
+        )
     )
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
+
+    await reconcile_user_subscription(db, user)
 
     access_token = create_access_token(user.id)
     refresh_token = create_refresh_token(user.id)
@@ -200,11 +215,16 @@ async def _find_or_create_user_by_email(
     result = await db.execute(
         select(User)
         .where(User.email == email)
-        .options(selectinload(User.membership), selectinload(User.usage))
+        .options(
+            selectinload(User.membership),
+            selectinload(User.usage),
+            selectinload(User.subscription),
+        )
     )
     user = result.scalar_one_or_none()
 
     if user:
+        await reconcile_user_subscription(db, user)
         return user
 
     # 创建新用户
@@ -228,9 +248,15 @@ async def _find_or_create_user_by_email(
     result = await db.execute(
         select(User)
         .where(User.id == user.id)
-        .options(selectinload(User.membership), selectinload(User.usage))
+        .options(
+            selectinload(User.membership),
+            selectinload(User.usage),
+            selectinload(User.subscription),
+        )
     )
-    return result.scalar_one()
+    user = result.scalar_one()
+    await reconcile_user_subscription(db, user)
+    return user
 
 
 async def _issue_tokens(user: User) -> AuthResponse:

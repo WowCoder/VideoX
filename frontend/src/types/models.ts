@@ -11,6 +11,18 @@ export interface UserMembership {
   rank: number;
 }
 
+export interface UserSubscription {
+  id: string;
+  membershipId: string;
+  status: "active" | "internal" | "past_due" | "cancelled" | "expired";
+  billingCycle: "monthly" | "yearly" | "permanent";
+  currentPeriodStart: string;
+  currentPeriodEnd?: string;
+  autoRenew: boolean;
+  cancelAtPeriodEnd: boolean;
+  provider: string;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -22,6 +34,7 @@ export interface User {
   notifyScriptGeneration: boolean;
   notifyMarketing: boolean;
   membership?: UserMembership;
+  subscription?: UserSubscription;
 }
 
 export interface AuthTokens {

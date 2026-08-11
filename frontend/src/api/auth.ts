@@ -31,6 +31,17 @@ interface BackendAuthResponse {
       export_quota: number;
       price: number;
     };
+    subscription?: {
+      id: string;
+      membership_id: string;
+      status: "active" | "internal" | "past_due" | "cancelled" | "expired";
+      billing_cycle: "monthly" | "yearly" | "permanent";
+      current_period_start: string;
+      current_period_end: string | null;
+      auto_renew: boolean;
+      cancel_at_period_end: boolean;
+      provider: string;
+    };
     usage?: Record<string, unknown>;
   };
   access_token: string;
@@ -60,6 +71,17 @@ function mapUser(raw: BackendAuthResponse["user"]): User {
     notifyScriptGeneration: raw.notify_script_generation,
     notifyMarketing: raw.notify_marketing,
     membership,
+    subscription: raw.subscription ? {
+      id: raw.subscription.id,
+      membershipId: raw.subscription.membership_id,
+      status: raw.subscription.status,
+      billingCycle: raw.subscription.billing_cycle,
+      currentPeriodStart: raw.subscription.current_period_start,
+      currentPeriodEnd: raw.subscription.current_period_end ?? undefined,
+      autoRenew: raw.subscription.auto_renew,
+      cancelAtPeriodEnd: raw.subscription.cancel_at_period_end,
+      provider: raw.subscription.provider,
+    } : undefined,
   };
 }
 

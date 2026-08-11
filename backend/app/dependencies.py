@@ -9,6 +9,7 @@ from app.database import get_db
 from app.security import decode_token
 from app.models.user import User
 from sqlalchemy.orm import selectinload
+from app.services.subscriptions import reconcile_user_subscription
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -37,7 +38,11 @@ async def get_current_user(
     result = await db.execute(
         select(User)
         .where(User.id == user_id)
-        .options(selectinload(User.membership), selectinload(User.usage))
+        .options(
+            selectinload(User.membership),
+            selectinload(User.usage),
+            selectinload(User.subscription),
+        )
     )
     user = result.scalar_one_or_none()
 
@@ -47,6 +52,7 @@ async def get_current_user(
             detail="用户不存在",
         )
 
+    await reconcile_user_subscription(db, user)
     return user
 
 
