@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models.asset import Asset, Clip
+from app.models.asset import Asset, AssetSegment
 from app.models.project import Project
 from app.models.script import Script
 from app.models.user import User
@@ -39,7 +39,7 @@ async def global_search(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """搜索当前用户拥有或参与的真实业务数据，每类最多返回 limit 条。"""
+    """搜索当前用户拥有的真实业务数据，每类最多返回 limit 条。"""
     query_text = q.strip()
     if not query_text:
         return SearchResponse(query="", items=[], total=0)
@@ -87,12 +87,12 @@ async def global_search(
     ).scalars().all()
     items.extend(
         SearchItem(
-            type="script",
+            type="project_script",
             id=script.id,
             title=script.title,
             subtitle=script.summary or script.status,
             project_id=script.project_id,
-            url=f"/workspace/scripts/{script.id}/editor",
+            url=f"/workspace/projects/{script.project_id}",
         )
         for script in scripts
     )
@@ -100,9 +100,9 @@ async def global_search(
     assets = (
         await db.execute(
             select(Asset)
-            .join(Project, Asset.project_id == Project.id)
             .where(
-                accessible_project_condition(user.id),
+                Asset.owner_id == user.id,
+                Asset.deleted_at.is_(None),
                 or_(
                     Asset.name.ilike(pattern),
                     Asset.transcript.ilike(pattern),
@@ -119,40 +119,40 @@ async def global_search(
             type="asset",
             id=asset.id,
             title=asset.name,
-            subtitle=f"{asset.status} · {asset.source}",
-            project_id=asset.project_id,
+            subtitle=f"{asset.status} · {asset.source_type}",
+            project_id=None,
             url="/workspace/library",
         )
         for asset in assets
     )
 
-    clips = (
+    segments = (
         await db.execute(
-            select(Clip, Asset.project_id, Asset.name)
-            .join(Asset, Clip.asset_id == Asset.id)
-            .join(Project, Asset.project_id == Project.id)
+            select(AssetSegment, Asset.name)
+            .join(Asset, AssetSegment.asset_id == Asset.id)
             .where(
-                accessible_project_condition(user.id),
+                Asset.owner_id == user.id,
+                Asset.deleted_at.is_(None),
                 or_(
-                    Clip.title.ilike(pattern),
-                    Clip.transcript_segment.ilike(pattern),
-                    Clip.ocr_segment.ilike(pattern),
+                    AssetSegment.title.ilike(pattern),
+                    AssetSegment.transcript.ilike(pattern),
+                    AssetSegment.ocr_text.ilike(pattern),
                 ),
             )
-            .order_by(Clip.created_at.desc())
+            .order_by(AssetSegment.created_at.desc())
             .limit(limit)
         )
     ).all()
     items.extend(
         SearchItem(
-            type="clip",
-            id=clip.id,
-            title=clip.title or f"{asset_name} 片段",
-            subtitle=f"{asset_name} · {clip.start_time:.1f}s–{clip.end_time:.1f}s",
-            project_id=project_id,
+            type="segment",
+            id=segment.id,
+            title=segment.title or f"{asset_name} 片段",
+            subtitle=f"{asset_name} · {segment.start_ms / 1000:.1f}s–{segment.end_ms / 1000:.1f}s",
+            project_id=None,
             url="/workspace/library",
         )
-        for clip, project_id, asset_name in clips
+        for segment, asset_name in segments
     )
 
     return SearchResponse(query=query_text, items=items, total=len(items))

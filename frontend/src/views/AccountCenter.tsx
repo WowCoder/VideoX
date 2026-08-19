@@ -106,12 +106,12 @@ function subscriptionPresentation(subscription?: SubscriptionData) {
   };
 }
 
-const sections: { id: Section; label: string; icon: typeof CircleUserRound; copy: string }[] = [
-  { id: "overview", label: "账户概览", icon: CircleUserRound, copy: "账户信息与会员概览" },
-  { id: "membership", label: "会员方案", icon: Crown, copy: "查看当前方案与可用额度" },
-  { id: "usage", label: "用量中心", icon: Gauge, copy: "处理时长与 AI 额度" },
-  { id: "billing", label: "账单与发票", icon: ReceiptText, copy: "付款记录与电子票据" },
-  { id: "settings", label: "账户设置", icon: Settings, copy: "资料、通知与安全" },
+const sections: { id: Section; label: string; icon: typeof CircleUserRound }[] = [
+  { id: "overview", label: "概览", icon: CircleUserRound },
+  { id: "membership", label: "会员方案", icon: Crown },
+  { id: "usage", label: "用量", icon: Gauge },
+  { id: "billing", label: "账单", icon: ReceiptText },
+  { id: "settings", label: "设置", icon: Settings },
 ];
 
 export function AccountCenter() {
@@ -199,38 +199,26 @@ export function AccountCenter() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
+    <div className="workspace-page max-w-[1240px]">
       <header className="mb-6">
-        <h1 className="text-2xl font-bold text-text">个人中心</h1>
-        <p className="mt-1.5 text-sm text-muted">管理账户信息、会员、用量与设置</p>
+        <p className="mb-2 text-xs font-semibold tracking-[0.12em] text-muted">PERSONAL SPACE</p>
+        <h1 className="workspace-page-title">个人中心</h1>
+        <p className="workspace-page-copy">管理账户信息、创作用量、会员方案和付款记录。</p>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
-        {/* 左侧页签 */}
-        <nav className="space-y-1">
-          {sections.map((s) => {
-            const Icon = s.icon;
-            const active = section === s.id;
-            return (
-              <button
-                key={s.id}
-                onClick={() => openSection(s.id)}
-                className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-left text-sm transition ${
-                  active
-                    ? "bg-blue text-white shadow-soft"
-                    : "text-muted hover:bg-canvas hover:text-text"
-                }`}
-                type="button"
-              >
-                <Icon size={17} />
-                <span>{s.label}</span>
-              </button>
-            );
-          })}
-        </nav>
+      <nav className="account-section-tabs" aria-label="个人中心栏目">
+        {sections.map((item) => {
+          const Icon = item.icon;
+          const active = section === item.id;
+          return (
+            <button key={item.id} onClick={() => openSection(item.id)} className={`account-section-tab ${active ? "is-active" : ""}`} aria-current={active ? "page" : undefined} type="button">
+              <Icon size={15} />{item.label}
+            </button>
+          );
+        })}
+      </nav>
 
-        {/* 右侧内容 */}
-        <div className="rounded-2xl border border-line bg-surface p-6 shadow-soft">
+      <main className="mt-7">
           {dataError ? (
             <div className="rounded-xl border border-red/20 bg-red/5 py-12 text-center">
               <p className="text-sm font-medium text-red">账户数据加载失败</p>
@@ -290,8 +278,7 @@ export function AccountCenter() {
               }}
             />
           )}
-        </div>
-      </div>
+      </main>
     </div>
   );
 }
@@ -328,27 +315,27 @@ function OverviewSection({
 
   return (
     <div>
-      <div className="flex items-center gap-4 border-b border-line pb-5">
-        <span className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue to-teal text-xl font-semibold text-white">
+      <div className="flex items-center gap-4 rounded-2xl border border-line bg-white p-5">
+        <span className="flex h-16 w-16 items-center justify-center rounded-full bg-ink text-xl font-semibold text-white">
           {initial}
         </span>
         <div>
           <h2 className="text-lg font-bold text-text">{name}</h2>
           <p className="text-sm text-muted">{email}</p>
-          <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-blue-soft px-2.5 py-0.5 text-xs font-medium text-blue">
+          <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-canvas px-2.5 py-1 text-xs font-medium text-text">
             <Crown size={12} />{memName} 会员
           </span>
         </div>
       </div>
       <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-xl border border-line bg-canvas/40 p-4">
+        <div className="rounded-xl border border-line bg-white p-4">
           <Gauge size={18} className="text-blue" />
           <strong className="mt-2 block text-lg font-semibold text-text">
             {totalMinutes === undefined ? "—" : `${totalMinutes} 分钟`}
           </strong>
           <small className="text-xs text-muted">方案处理时长额度</small>
         </div>
-        <div className="rounded-xl border border-line bg-canvas/40 p-4">
+        <div className="rounded-xl border border-line bg-white p-4">
           <CreditCard size={18} className="text-teal" />
           <strong className="mt-2 block text-lg font-semibold text-text">{memName}</strong>
           <small className="text-xs text-muted">
@@ -357,7 +344,7 @@ function OverviewSection({
               : `${subscriptionInfo.status} · ${subscriptionInfo.cycle}`}
           </small>
         </div>
-        <div className="rounded-xl border border-line bg-canvas/40 p-4">
+        <div className="rounded-xl border border-line bg-white p-4">
           <HardDrive size={18} className="text-blue" />
           <strong className="mt-2 block text-lg font-semibold text-text">
             {storageUsedGb === undefined || membership?.storageGb === undefined
@@ -366,7 +353,7 @@ function OverviewSection({
           </strong>
           <small className="text-xs text-muted">素材存储空间</small>
         </div>
-        <div className="rounded-xl border border-line bg-canvas/40 p-4">
+        <div className="rounded-xl border border-line bg-white p-4">
           <ReceiptText size={18} className="text-amber" />
           <strong className="mt-2 block text-lg font-semibold text-text">{orderCount}</strong>
           <small className="text-xs text-muted">历史账单数</small>
@@ -587,12 +574,6 @@ function MembershipSection({
                   <Check size={13} className="text-teal" />
                   {plan.rank >= 2 ? "高优先级任务队列" : plan.rank >= 1 ? "标准优先级任务队列" : "基础优先级任务队列"}
                 </li>
-                {plan.rank >= 2 && (
-                  <li className="flex items-center gap-1.5">
-                    <Check size={13} className="text-teal" />
-                    {plan.seatQuota} 个共享协作席位（含所有者）
-                  </li>
-                )}
               </ul>
               <button
                 onClick={() => canPurchase && onUpgrade(
@@ -729,7 +710,7 @@ function UsageSection({
                           ? "bg-red"
                           : percent > 50
                             ? "bg-amber"
-                            : "bg-gradient-to-r from-blue to-teal"
+                            : "bg-ink"
                       }`}
                       style={{ width: `${Math.min(100, percent)}%` }}
                     />

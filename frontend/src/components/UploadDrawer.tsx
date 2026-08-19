@@ -11,6 +11,7 @@ import {
   AlertCircle,
   CheckCircle2,
   CloudUpload,
+  Image as ImageIcon,
   FileVideo,
   Loader2,
   Music,
@@ -18,7 +19,6 @@ import {
   X,
 } from "lucide-react";
 import { useUIStore } from "@/stores/uiStore";
-import { useProjectStore } from "@/stores/projectStore";
 import {
   HttpClientError,
   getValidAccessToken,
@@ -32,7 +32,7 @@ type UploadStatus = "queued" | "uploading" | "processing" | "done" | "error";
 interface UploadItem {
   id: string;
   file: File;
-  projectId: string;
+  projectId?: string;
   name: string;
   size: number;
   progress: number;
@@ -43,19 +43,25 @@ interface UploadItem {
   failureStage?: "validation" | "upload" | "processing";
 }
 
-const acceptedTypes = ".mp4,.mov,.m4v,.avi,.mkv,.webm,.mp3,.wav,.m4a,.aac,.flac,.ogg,.oga,.opus";
+const acceptedTypes = ".jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.m4v,.avi,.mkv,.webm,.mp3,.wav,.m4a,.aac,.flac,.ogg,.oga,.opus";
 const maxUploadSizeGiB = 1;
 const maxUploadBytes = maxUploadSizeGiB * 1024 * 1024 * 1024;
 const maxConcurrentUploads = 2;
 const minimumUploadTokenValiditySeconds = 25 * 60;
 const acceptedExtensions = new Set([
+  "jpg", "jpeg", "png", "webp", "gif",
   "mp4", "mov", "m4v", "avi", "mkv", "webm",
   "mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus",
 ]);
 const audioExtensions = new Set(["mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus"]);
+const imageExtensions = new Set(["jpg", "jpeg", "png", "webp", "gif"]);
 
 function isAudioFilename(filename: string): boolean {
   return audioExtensions.has(filename.split(".").pop()?.toLowerCase() ?? "");
+}
+
+function isImageFilename(filename: string): boolean {
+  return imageExtensions.has(filename.split(".").pop()?.toLowerCase() ?? "");
 }
 
 function validateFile(file: File): string | undefined {
@@ -115,7 +121,7 @@ function createUploadResponseError(status: number, responseText: string): Upload
  */
 function uploadFile(
   file: File,
-  projectId: string,
+  projectId: string | undefined,
   token: string,
   onProgress: (pct: number) => void,
 ): Promise<{ assetId: string; name: string; status: string; jobId: string }> {
@@ -158,7 +164,8 @@ function uploadFile(
       reject(new UploadRequestError(0, "上传已取消", true));
     });
 
-    xhr.open("POST", `/api/assets/upload?project_id=${encodeURIComponent(projectId)}`);
+    const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+    xhr.open("POST", `/api/assets/upload${projectQuery}`);
     xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.send(formData);
   });
@@ -166,7 +173,7 @@ function uploadFile(
 
 async function uploadFileWithFreshAuth(
   file: File,
-  projectId: string,
+  projectId: string | undefined,
   onProgress: (pct: number) => void,
 ): Promise<{ assetId: string; name: string; status: string; jobId: string }> {
   // 大文件请求可能持续较久，出队时尽量保证接近完整的 30 分钟 access token 有效期。
@@ -182,13 +189,11 @@ async function uploadFileWithFreshAuth(
 }
 
 export function UploadDrawer() {
-  const { uploadDrawerOpen, closeUploadDrawer, notify } = useUIStore();
-  const { currentProjectId } = useProjectStore();
+  const { uploadDrawerOpen, uploadProjectId, closeUploadDrawer, notify } = useUIStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [items, setItems] = useState<UploadItem[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  const [noProject, setNoProject] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimersRef = useRef<Record<string, number>>({});
   const pollFailuresRef = useRef<Record<string, number>>({});
@@ -359,20 +364,12 @@ export function UploadDrawer() {
       const fileArray = Array.from(files);
       if (!fileArray.length) return;
 
-      // 检查是否已选择项目
-      if (!currentProjectId) {
-        setNoProject(true);
-        notify("请先选择一个项目再上传素材", "error");
-        return;
-      }
-      setNoProject(false);
-
       const newItems: UploadItem[] = fileArray.map((file, index) => {
         const validationError = validateFile(file);
         return {
           id: `upload-${Date.now()}-${index}`,
           file,
-          projectId: currentProjectId,
+          projectId: uploadProjectId ?? undefined,
           name: file.name || `素材_${index + 1}.mp4`,
           size: file.size || 0,
           progress: 0,
@@ -385,7 +382,7 @@ export function UploadDrawer() {
 
       setItems((prev) => [...prev, ...newItems]);
     },
-    [currentProjectId, notify],
+    [uploadProjectId],
   );
 
   const retryUpload = useCallback((itemId: string) => {
@@ -464,7 +461,7 @@ export function UploadDrawer() {
         <header className="flex h-16 items-center justify-between border-b border-line px-5">
           <div>
             <h2 className="text-base font-semibold text-text">上传素材</h2>
-            <p className="text-xs text-muted">支持常见视频及 MP3 / WAV / M4A / AAC / FLAC / OGG 音频</p>
+            <p className="text-xs text-muted">支持图片、视频和音频；在项目内打开时自动关联</p>
           </div>
           <button
             onClick={closeUploadDrawer}
@@ -475,14 +472,6 @@ export function UploadDrawer() {
             <X size={18} />
           </button>
         </header>
-
-        {/* 未选择项目提示 */}
-        {noProject && (
-          <div className="mx-5 mt-4 flex items-center gap-2 rounded-lg border border-amber/30 bg-amber/10 px-3.5 py-2.5 text-sm text-amber">
-            <AlertCircle size={16} className="shrink-0" />
-            <span>请先在项目中心选择一个项目，再上传素材。</span>
-          </div>
-        )}
 
         {/* 拖拽区 */}
         <div className="p-5">
@@ -504,7 +493,7 @@ export function UploadDrawer() {
               <CloudUpload size={26} />
             </span>
             <p className="mt-4 text-sm font-medium text-text">
-              拖拽视频或音频文件到这里，或<span className="text-blue">点击选择</span>
+              拖拽图片、视频或音频到这里，或<span className="text-blue">点击选择</span>
             </p>
             <p className="mt-1 text-xs text-muted">单个文件最大 {maxUploadSizeGiB} GiB，可同时选择多个文件</p>
             <input
@@ -524,7 +513,7 @@ export function UploadDrawer() {
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <FileVideo size={32} className="text-line" />
               <p className="mt-3 text-sm text-muted">还没有上传的素材</p>
-              <p className="text-xs text-muted">视频会进行理解与切片，音频会生成兼容试听文件</p>
+              <p className="text-xs text-muted">图片会生成缩略图、OCR 与语义索引，视频和音频会进入媒体处理链</p>
             </div>
           ) : (
             <>
@@ -556,9 +545,11 @@ export function UploadDrawer() {
                       <span
                         className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${gradient}`}
                       >
-                        {isAudioFilename(item.name)
-                          ? <Music size={18} className="text-white" />
-                          : <FileVideo size={18} className="text-white" />}
+                        {isImageFilename(item.name)
+                          ? <ImageIcon size={18} className="text-white" />
+                          : isAudioFilename(item.name)
+                            ? <Music size={18} className="text-white" />
+                            : <FileVideo size={18} className="text-white" />}
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
@@ -577,7 +568,7 @@ export function UploadDrawer() {
                                   ? "bg-teal"
                                   : item.status === "error"
                                     ? "bg-rose"
-                                    : "bg-gradient-to-r from-blue to-teal"
+                                    : "bg-ink"
                               }`}
                               style={{ width: `${item.status === "error" ? 100 : item.progress}%` }}
                             />

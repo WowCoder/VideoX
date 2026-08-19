@@ -4,8 +4,7 @@
 
 import { create } from "zustand";
 import * as projectApi from "@/api/projects";
-import type { Project } from "@/types/models";
-import type { ProjectCreateInput, ProjectUpdateInput, ProjectListParams } from "@/api/projects";
+import type { Project, ProjectUpdateInput, ProjectListParams } from "@/api/projects";
 
 interface ProjectState {
   projects: Project[];
@@ -14,7 +13,6 @@ interface ProjectState {
   error: string | null;
 
   fetchProjects: (params?: ProjectListParams) => Promise<Project[]>;
-  createProject: (data: ProjectCreateInput) => Promise<Project>;
   setCurrentProject: (id: string | null) => void;
   updateProject: (id: string, data: ProjectUpdateInput) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
@@ -37,23 +35,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return projects;
     } catch (err) {
       const message = err instanceof Error ? err.message : "获取项目列表失败";
-      set({ loading: false, error: message });
-      throw err;
-    }
-  },
-
-  createProject: async (data: ProjectCreateInput) => {
-    set({ loading: true, error: null });
-    try {
-      const project = await projectApi.create(data);
-      set((state) => ({
-        projects: [project, ...state.projects],
-        currentProjectId: project.id,
-        loading: false,
-      }));
-      return project;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "创建项目失败";
       set({ loading: false, error: message });
       throw err;
     }

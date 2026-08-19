@@ -103,11 +103,10 @@ app.add_middleware(RateLimitMiddleware)
 
 
 # ── 路由注册 ──
-from app.api import auth, projects, scripts, assets, jobs, generate, ws, billing, notifications, search, collaboration  # noqa: E402
+from app.api import auth, projects, assets, jobs, generate, ws, billing, notifications, search, inspiration  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/auth", tags=["鉴权"])
 app.include_router(projects.router, prefix="/api/projects", tags=["项目"])
-app.include_router(scripts.router, prefix="/api/scripts", tags=["脚本"])
 app.include_router(assets.router, prefix="/api/assets", tags=["素材"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["任务"])
 app.include_router(generate.router, prefix="/api/generate", tags=["AI 生成"])
@@ -115,7 +114,7 @@ app.include_router(ws.router, prefix="/api/ws", tags=["WebSocket"])
 app.include_router(billing.router, prefix="/api/billing", tags=["会员与支付"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["站内通知"])
 app.include_router(search.router, prefix="/api/search", tags=["全局搜索"])
-app.include_router(collaboration.router, prefix="/api/projects", tags=["项目协作"])
+app.include_router(inspiration.router, prefix="/api/inspiration", tags=["灵感岛"])
 
 
 @app.get("/api/health")

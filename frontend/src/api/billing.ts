@@ -17,7 +17,6 @@ interface RawMembership {
   ai_video_quota: number;
   storage_gb: number;
   export_quota: number;
-  seat_quota: number;
   price: number;
 }
 
@@ -89,7 +88,6 @@ export interface MembershipPlan {
   aiVideoQuota: number;
   storageGb: number;
   exportQuota: number;
-  seatQuota: number;
   price: number;
 }
 
@@ -161,7 +159,6 @@ function mapMembership(raw: RawMembership): MembershipPlan {
     aiVideoQuota: raw.ai_video_quota,
     storageGb: raw.storage_gb,
     exportQuota: raw.export_quota,
-    seatQuota: raw.seat_quota,
     price: raw.price,
   };
 }
@@ -183,7 +180,7 @@ function mapUsage(raw: RawUsage): UsageData {
 
 /**
  * 获取会员方案列表
- * GET /api/generate/memberships
+ * GET /api/billing/plans
  */
 export async function listMemberships(): Promise<MembershipPlan[]> {
   const res = await http.get<RawMembership[]>("/billing/plans");
@@ -192,10 +189,10 @@ export async function listMemberships(): Promise<MembershipPlan[]> {
 
 /**
  * 获取当前用量
- * GET /api/generate/usage
+ * GET /api/billing/usage
  */
 export async function getUsage(): Promise<UsageData> {
-  const res = await http.get<RawUsage>("/generate/usage");
+  const res = await http.get<RawUsage>("/billing/usage");
   return mapUsage(res);
 }
 

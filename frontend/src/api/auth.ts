@@ -29,7 +29,6 @@ interface BackendAuthResponse {
       ai_video_quota: number;
       storage_gb: number;
       export_quota: number;
-      seat_quota: number;
       price: number;
     };
     subscription?: {

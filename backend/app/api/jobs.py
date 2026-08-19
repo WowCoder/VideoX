@@ -16,9 +16,8 @@ from app.models.user import User
 from app.models.project import Project
 from app.models.job import Job
 from app.schemas.job import JobOut, JobListOut
-from app.services.project_access import accessible_project_condition, require_project_access
 from app.services.quotas import QuotaExceededError, readmit_existing_job_quota
-from app.services.task_dispatch import dispatch_project_task
+from app.services.task_dispatch import dispatch_owner_task, dispatch_project_task
 
 router = APIRouter()
 
@@ -36,60 +35,40 @@ def _export_result_path(job: Job) -> str | None:
 
 async def _dispatch_replay(db: AsyncSession, job: Job):
     """根据持久化 payload 真实派发任务；暂停恢复和失败重试共用。"""
+    async def dispatch(task, *args):
+        if job.project_id:
+            return await dispatch_project_task(db, job.project_id, task, *args)
+        return await dispatch_owner_task(db, job.owner_id, task, *args)
+
     if job.type == "素材处理":
         from app.tasks.media_tasks import process_asset
-        return await dispatch_project_task(
-            db, job.project_id, process_asset, job.payload["asset_id"], job.id
-        )
+        return await dispatch(process_asset, job.payload["asset_id"], job.id)
     if job.type == "AI 初剪生成":
         from app.tasks.roughcut_tasks import run_rough_cut
-        return await dispatch_project_task(
-            db,
-            job.project_id,
-            run_rough_cut,
-            job.id,
-            job.payload["project_id"],
-            job.payload["script_id"],
-            job.payload["source_project_id"],
-            job.payload.get("cut_version_id", ""),
-        )
+        return await dispatch(run_rough_cut, job.id, job.payload["project_id"])
     if job.type == "导出":
         from app.tasks.export_tasks import export_project
-        return await dispatch_project_task(
-            db,
-            job.project_id,
+        return await dispatch(
             export_project,
             job.payload["project_id"],
             job.id,
             job.payload.get("format", "mp4"),
             job.payload.get("resolution", "1080p"),
-            job.payload.get("cut_version_id", ""),
+            job.payload.get("aspect_ratio"),
         )
     if job.type == "镜头匹配":
         if job.payload.get("shot_ids"):
             from app.tasks.match_tasks import match_script_shots
-            return await dispatch_project_task(
-                db,
-                job.project_id,
+            return await dispatch(
                 match_script_shots,
                 job.payload["script_id"],
                 job.payload["shot_ids"],
                 job.id,
             )
-        from app.tasks.match_tasks import match_script_units
-        return await dispatch_project_task(
-            db,
-            job.project_id,
-            match_script_units,
-            job.payload["script_id"],
-            job.payload["unit_ids"],
-            job.id,
-        )
+        raise HTTPException(status_code=400, detail="旧场景级匹配任务不再支持重放")
     if job.type == "AI 生图分镜":
         from app.tasks.generate_tasks import generate_image_shot
-        return await dispatch_project_task(
-            db,
-            job.project_id,
+        return await dispatch(
             generate_image_shot,
             job.payload["shot_id"],
             job.id,
@@ -97,19 +76,22 @@ async def _dispatch_replay(db: AsyncSession, job: Job):
         )
     if job.type == "AI 分镜完善":
         from app.tasks.script_tasks import complete_shot_descriptions
-        return await dispatch_project_task(
-            db,
-            job.project_id,
+        return await dispatch(
             complete_shot_descriptions,
             job.payload["script_id"],
             job.payload["shot_ids"],
             job.id,
         )
+    if job.type == "AI 脚本生成":
+        from app.tasks.script_tasks import generate_project_script
+        return await dispatch(
+            generate_project_script,
+            job.payload["project_id"],
+            job.id,
+        )
     if job.type == "分镜图 AI 生视频":
         from app.tasks.generate_tasks import generate_video_shot
-        return await dispatch_project_task(
-            db,
-            job.project_id,
+        return await dispatch(
             generate_video_shot,
             job.payload["shot_id"],
             job.id,
@@ -117,9 +99,7 @@ async def _dispatch_replay(db: AsyncSession, job: Job):
         )
     if job.type == "示意图特效视频":
         from app.tasks.generate_tasks import generate_effect_shot
-        return await dispatch_project_task(
-            db,
-            job.project_id,
+        return await dispatch(
             generate_effect_shot,
             job.payload["shot_id"],
             job.id,
@@ -138,7 +118,7 @@ async def list_jobs(
     db: AsyncSession = Depends(get_db),
 ):
     """获取任务列表。"""
-    query = select(Job).join(Project).where(accessible_project_condition(user.id))
+    query = select(Job).where(Job.owner_id == user.id)
 
     if project_id:
         query = query.where(Job.project_id == project_id)
@@ -163,9 +143,7 @@ async def get_job(
 ):
     """获取任务详情。"""
     result = await db.execute(
-        select(Job)
-        .join(Project)
-        .where(Job.id == job_id, accessible_project_condition(user.id))
+        select(Job).where(Job.id == job_id, Job.owner_id == user.id)
     )
     job = result.scalar_one_or_none()
     if not job:
@@ -181,15 +159,12 @@ async def retry_job(
 ):
     """重试任务。"""
     result = await db.execute(
-        select(Job)
-        .join(Project)
-        .where(Job.id == job_id, accessible_project_condition(user.id))
+        select(Job).where(Job.id == job_id, Job.owner_id == user.id)
         .with_for_update()
     )
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
-    await require_project_access(job.project_id, user, db, "editor")
     if job.status != "FAILED":
         raise HTTPException(status_code=400, detail="只有失败任务可以重试")
     if not job.payload:
@@ -197,11 +172,8 @@ async def retry_job(
     if job.attempts >= job.max_attempts:
         raise HTTPException(status_code=400, detail=f"任务已达到最大重试次数 {job.max_attempts}")
 
-    owner_id = (
-        await db.execute(select(Project.owner_id).where(Project.id == job.project_id))
-    ).scalar_one()
     try:
-        await readmit_existing_job_quota(db, job, owner_id)
+        await readmit_existing_job_quota(db, job, job.owner_id)
     except QuotaExceededError as exc:
         raise HTTPException(status_code=403, detail="当前会员额度不足，暂时无法重试该任务") from exc
 
@@ -249,15 +221,12 @@ async def cancel_job(
 ):
     """真实撤销排队任务或终止正在执行的 Celery 子进程。"""
     result = await db.execute(
-        select(Job)
-        .join(Project)
-        .where(Job.id == job_id, accessible_project_condition(user.id))
+        select(Job).where(Job.id == job_id, Job.owner_id == user.id)
         .with_for_update()
     )
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
-    await require_project_access(job.project_id, user, db, "editor")
     if job.status not in {"QUEUED", "RUNNING"}:
         raise HTTPException(status_code=400, detail="只有排队中或执行中的任务可以取消")
     if not job.celery_task_id:
@@ -294,15 +263,12 @@ async def pause_job(
 ):
     """真实撤销当前执行；恢复时根据 payload 从任务起点重新运行。"""
     result = await db.execute(
-        select(Job)
-        .join(Project)
-        .where(Job.id == job_id, accessible_project_condition(user.id))
+        select(Job).where(Job.id == job_id, Job.owner_id == user.id)
         .with_for_update()
     )
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
-    await require_project_access(job.project_id, user, db, "editor")
     if job.status not in {"QUEUED", "RUNNING"}:
         raise HTTPException(status_code=400, detail="只有排队中或执行中的任务可以暂停")
     if not job.payload:
@@ -337,25 +303,19 @@ async def resume_job(
 ):
     """从持久化 payload 重新派发已暂停任务。"""
     result = await db.execute(
-        select(Job)
-        .join(Project)
-        .where(Job.id == job_id, accessible_project_condition(user.id))
+        select(Job).where(Job.id == job_id, Job.owner_id == user.id)
         .with_for_update()
     )
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
-    await require_project_access(job.project_id, user, db, "editor")
     if job.status != "PAUSED":
         raise HTTPException(status_code=400, detail="只有已暂停任务可以继续")
     if not job.payload:
         raise HTTPException(status_code=400, detail="任务缺少恢复参数，无法安全继续")
 
-    owner_id = (
-        await db.execute(select(Project.owner_id).where(Project.id == job.project_id))
-    ).scalar_one()
     try:
-        await readmit_existing_job_quota(db, job, owner_id)
+        await readmit_existing_job_quota(db, job, job.owner_id)
     except QuotaExceededError as exc:
         raise HTTPException(status_code=403, detail="当前会员额度不足，暂时无法继续该任务") from exc
 
@@ -399,7 +359,7 @@ async def download_job_result(
     result = await db.execute(
         select(Job, Project)
         .join(Project, Project.id == Job.project_id)
-        .where(Job.id == job_id, accessible_project_condition(user.id))
+        .where(Job.id == job_id, Job.owner_id == user.id)
     )
     row = result.first()
     if not row:

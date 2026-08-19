@@ -58,27 +58,23 @@ const capabilities = [
     icon: Film,
     number: "04",
     title: "拼出可改初剪",
-    copy: "自动把选定与生成的镜头装配成一版可继续拖拽、修剪和替换的多轨初剪。",
+    copy: "自动把选定与生成的镜头编排为项目唯一主成片，并可继续替换镜头与调整节奏。",
     detail:
-      "创作者只需改几个不合适的镜头、细化节奏或继续处理 AI 素材，即可导出横屏、竖屏、方形成片或剪辑工程。",
-    tags: ["多轨时间线", "继续精剪", "多格式导出"],
+      "创作者只需调整不合适的镜头、时长与字幕，即可按项目画幅编排并导出主成片。",
+    tags: ["唯一主成片", "镜头精调", "MP4 / MOV 导出"],
   },
 ] as const;
 
 const workflowTasks = [
   { icon: Upload, title: "脚本与素材理解", detail: "1 份脚本 · 128 个视频 · 392 个片段", status: "已完成", progress: 100 },
   { icon: WandSparkles, title: "统一人物与场景设定", detail: "2 个人物 · 3 个物品 · 2 个空间", status: "已完成", progress: 100 },
-  { icon: ScanSearch, title: "镜头匹配", detail: "12 个脚本单元 · 48 个候选镜头", status: "处理中", progress: 76 },
+  { icon: ScanSearch, title: "镜头匹配", detail: "12 个镜头 · 48 个候选素材", status: "处理中", progress: 76 },
   { icon: Sparkles, title: "缺失镜头 AI 补齐", detail: "3 个分镜等待生成画面", status: "排队中", progress: 28 },
-  { icon: Clapperboard, title: "多轨初剪装配", detail: "横屏主版 · 竖屏社媒版", status: "等待中", progress: 0 },
+  { icon: Clapperboard, title: "主成片编排", detail: "项目唯一主成片 · 16:9", status: "等待中", progress: 0 },
 ] as const;
 
 function BrandMark() {
-  return (
-    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue to-teal">
-      <Sparkles size={17} className="text-white" />
-    </span>
-  );
+  return <img src="/favicon.svg" alt="" className="h-8 w-8 rounded-lg" />;
 }
 
 export function SiteHome() {
@@ -152,15 +148,15 @@ export function SiteHome() {
       </header>
 
       {/* Hero 区 */}
-      <section className="relative overflow-hidden bg-gradient-to-b from-canvas to-surface px-6 py-20 lg:py-28">
-        <div className="absolute -top-20 left-1/2 h-72 w-[42rem] -translate-x-1/2 rounded-full bg-blue/10 blur-3xl" />
+      <section className="relative overflow-hidden bg-white px-6 py-20 lg:py-28">
+        <div className="absolute -top-20 left-1/2 h-72 w-[42rem] -translate-x-1/2 rounded-full bg-black/[0.035] blur-3xl" />
         <div className="relative mx-auto max-w-4xl text-center">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-blue/20 bg-blue-soft/60 px-3 py-1 text-xs font-medium text-blue">
             <Sparkles size={13} />AI 视频剪辑工作流 · 从脚本到初剪
           </span>
           <h1 className="mt-6 text-3xl font-bold leading-tight text-text lg:text-5xl lg:leading-tight">
             把脚本和素材交给 AI，<br />
-            几分钟得到一版<span className="bg-gradient-to-r from-blue to-teal bg-clip-text text-transparent">可改的初剪</span>。
+            几分钟得到一版<span className="text-text">可改的初剪</span>。
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-muted lg:text-lg">
             OpenVMA 自动理解脚本与素材、找好合适镜头；缺失画面可生成 AI 素材，并装配成一版能继续替换镜头、细化剪辑和多格式导出的初剪。
@@ -194,7 +190,7 @@ export function SiteHome() {
           <div className="mb-12 text-center">
             <h2 className="text-2xl font-bold text-text lg:text-3xl">从一份脚本，直接走到可编辑初剪</h2>
             <p className="mx-auto mt-3 max-w-2xl text-muted">
-              同一份脚本连接素材理解、镜头选择、AI 画面生成与时间线，创作者只处理真正需要判断的部分。
+              项目内唯一主脚本连接素材理解、镜头选择、AI 画面生成与主成片编排，创作者只处理真正需要判断的部分。
             </p>
           </div>
 
@@ -325,7 +321,7 @@ export function SiteHome() {
                           task.progress === 100
                             ? "bg-teal"
                             : task.progress > 0
-                              ? "bg-gradient-to-r from-blue to-teal"
+                              ? "bg-ink"
                               : "bg-line"
                         }`}
                         style={{ width: `${task.progress}%` }}

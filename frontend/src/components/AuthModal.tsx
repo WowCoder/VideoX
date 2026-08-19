@@ -15,7 +15,6 @@ import {
   MessageSquare,
   Phone,
   ShieldCheck,
-  Sparkles,
   X,
 } from "lucide-react";
 import { useUIStore } from "@/stores/uiStore";
@@ -177,9 +176,7 @@ export function AuthModal() {
         <div className="relative hidden flex-col justify-between bg-gradient-to-br from-ink to-ink-2 p-8 text-white lg:flex">
           <div>
             <div className="flex items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-blue to-teal">
-                <Sparkles size={18} />
-              </span>
+              <img src="/favicon.svg" alt="" className="h-9 w-9 rounded-lg" />
               <span className="text-lg font-semibold tracking-wide">OpenVMA</span>
             </div>
             <h2 className="mt-10 text-2xl font-bold leading-snug">

@@ -18,7 +18,7 @@ export interface JobListParams {
 
 export interface RawJob {
   id: string;
-  project_id: string;
+  project_id: string | null;
   name: string;
   type: string;
   status: string;
@@ -32,6 +32,11 @@ export interface RawJob {
   result: string | null;
   result_detail: string;
   result_url: string | null;
+  export_metadata: {
+    format: string;
+    resolution: string;
+    aspect_ratio: string;
+  } | null;
   is_simulated: boolean;
   created_at: string | null;
   updated_at: string | null;
@@ -47,7 +52,7 @@ interface RawJobList {
 export function mapJob(raw: RawJob): Job {
   return {
     id: raw.id,
-    projectId: raw.project_id,
+    projectId: raw.project_id ?? undefined,
     name: raw.name,
     type: raw.type as JobType,
     status: raw.status as JobStatus,
@@ -65,6 +70,11 @@ export function mapJob(raw: RawJob): Job {
     result: raw.result ?? undefined,
     resultDetail: raw.result_detail,
     resultUrl: raw.result_url ?? undefined,
+    exportMetadata: raw.export_metadata ? {
+      format: raw.export_metadata.format,
+      resolution: raw.export_metadata.resolution,
+      aspectRatio: raw.export_metadata.aspect_ratio,
+    } : undefined,
     isSimulated: raw.is_simulated,
     createdAt: raw.created_at ?? "",
   };

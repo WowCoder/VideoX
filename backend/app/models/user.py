@@ -3,7 +3,7 @@
 import uuid
 import math
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Boolean, CheckConstraint, DateTime, ForeignKey, Text, Float
+from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -15,10 +15,6 @@ def _utcnow() -> datetime:
 class Membership(Base):
     """会员方案。"""
     __tablename__ = "memberships"
-    __table_args__ = (
-        CheckConstraint("seat_quota >= 1", name="ck_memberships_seat_quota_positive"),
-    )
-
     id: Mapped[str] = mapped_column(String(50), primary_key=True, default=lambda: f"membership-{uuid.uuid4().hex[:12]}")
     name: Mapped[str] = mapped_column(String(100), nullable=False)  # Free / Pro / Team
     rank: Mapped[int] = mapped_column(Integer, default=0)  # 档位序号
@@ -28,7 +24,6 @@ class Membership(Base):
     ai_video_quota: Mapped[int] = mapped_column(Integer, default=5)  # AI 生视频配额
     storage_gb: Mapped[int] = mapped_column(Integer, default=5)  # 存储容量 GB
     export_quota: Mapped[int] = mapped_column(Integer, default=10)  # 导出次数配额
-    seat_quota: Mapped[int] = mapped_column(Integer, default=1)  # 团队总席位（含所有者）
     price: Mapped[float] = mapped_column(Float, default=0.0)  # 价格（元）
     payment_method: Mapped[str] = mapped_column(String(50), nullable=True)
 
@@ -56,7 +51,10 @@ class User(Base):
     subscription: Mapped["Subscription | None"] = relationship(  # type: ignore[name-defined]
         "Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
-    projects: Mapped[list["Project"]] = relationship("Project", back_populates="owner")
+    projects: Mapped[list["Project"]] = relationship(
+        "Project", back_populates="owner", cascade="all, delete-orphan"
+    )
+    assets: Mapped[list["Asset"]] = relationship("Asset", cascade="all, delete-orphan")  # type: ignore[name-defined]
     notifications: Mapped[list["Notification"]] = relationship(
         "Notification", back_populates="user", cascade="all, delete-orphan"
     )  # type: ignore

@@ -1,671 +1,317 @@
-// ──────────────────────────────────────────────
-// OpenVMA - 素材库
-// 页头 + 上传按钮 + 统计卡 + 工具栏(搜索/项目筛选/状态筛选/视图切换)
-// 素材网格/列表 + 素材详情面板
-// ──────────────────────────────────────────────
-
-import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "@/router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Clock3,
-  FileVideo,
-  LayoutGrid,
+  FileAudio,
+  Film,
+  Grid2X2,
+  Image as ImageIcon,
+  Link2,
   List,
   Loader2,
-  Music,
   Search,
-  ScanText,
-  Sparkles,
-  Tag,
+  SlidersHorizontal,
   Trash2,
+  Unlink,
   Upload,
-  Users,
   X,
 } from "lucide-react";
 import * as assetApi from "@/api/assets";
 import * as projectApi from "@/api/projects";
-import { useUIStore } from "@/stores/uiStore";
+import type { Project } from "@/api/projects";
 import { VideoThumb } from "@/components/VideoThumb";
-import type { Asset, AssetStatus } from "@/types/models";
-import { DeleteConfirmModal } from "@/components/DeleteConfirmModal";
+import { useUIStore } from "@/stores/uiStore";
 
-const statusOptions: { value: string; label: string }[] = [
-  { value: "", label: "全部状态" },
-  { value: "处理完成", label: "处理完成" },
-  { value: "AI 处理中", label: "AI 处理中" },
-  { value: "处理中", label: "处理中" },
-  { value: "处理失败", label: "处理失败" },
+type SourceFilter = "all" | assetApi.AssetSourceCategory;
+type ContentFilter = "all" | assetApi.AssetContentType;
+type ViewMode = "grid" | "list";
+
+const sourceFilters: Array<{ id: SourceFilter; label: string }> = [
+  { id: "all", label: "全部" },
+  { id: "ai", label: "AI 素材" },
+  { id: "non-ai", label: "非 AI 素材" },
 ];
+const formatFilters: Array<{ id: assetApi.MediaType | ""; label: string }> = [
+  { id: "", label: "全部" },
+  { id: "audio", label: "音频" },
+  { id: "image", label: "图片" },
+  { id: "video", label: "视频" },
+];
+const contentFilters: Array<{ id: ContentFilter; label: string }> = [
+  { id: "all", label: "全部" },
+  { id: "scene", label: "场景" },
+  { id: "role", label: "角色" },
+  { id: "object", label: "物品" },
+  { id: "event", label: "事件" },
+];
+const mediaLabels: Record<assetApi.MediaType, string> = { image: "图片", video: "视频", audio: "音频" };
+const contentLabels: Record<assetApi.AssetContentType, string> = { scene: "场景", role: "角色", object: "物品", event: "事件" };
 
-const statusBadgeClass: Record<AssetStatus, string> = {
-  处理完成: "bg-teal/10 text-teal",
-  "AI 处理中": "bg-blue-soft text-blue",
-  处理中: "bg-amber/10 text-amber",
-  处理失败: "bg-red/10 text-red",
-  失败: "bg-red/10 text-red",
-};
+function formatDuration(ms: number) {
+  if (!ms) return "静态图片";
+  const seconds = Math.round(ms / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
 
-const EMPTY_PROJECTS: Awaited<ReturnType<typeof projectApi.list>>["items"] = [];
-const EMPTY_ASSETS: Asset[] = [];
+function FilterGroup<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: Array<{ id: T; label: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <fieldset className="flex min-w-0 items-center gap-3">
+      <legend className="sr-only">{label}</legend>
+      <span className="w-9 shrink-0 text-xs font-medium text-muted">{label}</span>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((option) => (
+          <button
+            key={option.id || "all"}
+            type="button"
+            aria-pressed={value === option.id}
+            onClick={() => onChange(option.id)}
+            className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+              value === option.id ? "bg-ink text-white" : "text-muted hover:bg-canvas hover:text-text"
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
 
-export function LibraryView() {
-  const { openUploadDrawer, notify } = useUIStore();
+function AssetTaxonomy({ asset }: { asset: assetApi.Asset }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <span className="rounded-full bg-canvas px-2 py-1 text-[10px] font-medium text-text">
+        {asset.sourceCategory === "ai" ? "AI 素材" : "非 AI 素材"}
+      </span>
+      <span className="rounded-full bg-canvas px-2 py-1 text-[10px] font-medium text-text">{mediaLabels[asset.mediaType]}</span>
+      {asset.contentTypes.length ? asset.contentTypes.map((type) => (
+        <span key={type} className="rounded-full border border-line px-2 py-1 text-[10px] text-muted">{contentLabels[type]}</span>
+      )) : <span className="rounded-full border border-dashed border-line px-2 py-1 text-[10px] text-muted">内容待识别</span>}
+    </div>
+  );
+}
+
+export default function LibraryView({
+  previewAssets,
+  previewProjects,
+}: {
+  previewAssets?: assetApi.Asset[];
+  previewProjects?: Project[];
+} = {}) {
+  const previewMode = Boolean(previewAssets);
   const queryClient = useQueryClient();
-  const [deleteAssetId, setDeleteAssetId] = useState<string | null>(null);
-  const [searchParams, setSearchParams] = useSearchParams();
-  const search = searchParams.get("search") ?? "";
-  const projectFilter = searchParams.get("project") ?? "";
-  const statusFilter = searchParams.get("status") ?? "";
-  const mediaTypeFilter = searchParams.get("media") === "audio"
-    ? "audio"
-    : searchParams.get("media") === "video"
-      ? "video"
-      : "";
-  const view = searchParams.get("view") === "list" ? "list" : "grid";
-  const selectedAssetId = searchParams.get("asset");
+  const openUploadDrawer = useUIStore((state) => state.openUploadDrawer);
+  const notify = useUIStore((state) => state.notify);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [mediaType, setMediaType] = useState<assetApi.MediaType | "">("");
+  const [contentFilter, setContentFilter] = useState<ContentFilter>("all");
+  const [projectId, setProjectId] = useState("");
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
-  function updateQuery(key: string, value: string | null) {
-    const next = new URLSearchParams(searchParams);
-    if (value) next.set(key, value);
-    else next.delete(key);
-    setSearchParams(next, { replace: true });
-  }
-
-  const { data: projectsData } = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => projectApi.list(),
+  const projectsQuery = useQuery({
+    queryKey: ["projects", "asset-filter"],
+    queryFn: () => projectApi.list({ pageSize: 100 }),
+    retry: false,
+    enabled: !previewMode,
+  });
+  const assetsQuery = useInfiniteQuery({
+    queryKey: ["assets", { search, sourceFilter, mediaType, projectId }],
+    queryFn: ({ pageParam }) => assetApi.listPage({
+      cursor: pageParam,
+      limit: 48,
+      search: search || undefined,
+      sourceCategory: sourceFilter === "all" ? undefined : sourceFilter,
+      mediaType: mediaType || undefined,
+      projectId: projectId || undefined,
+    }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.hasMore ? page.nextCursor : undefined,
+    retry: false,
+    enabled: !previewMode,
+  });
+  const assets = useMemo(
+    () => previewAssets ?? assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [assetsQuery.data, previewAssets],
+  );
+  const visibleAssets = useMemo(
+    () => assets
+      .filter((asset) => sourceFilter === "all" || asset.sourceCategory === sourceFilter)
+      .filter((asset) => !mediaType || asset.mediaType === mediaType)
+      .filter((asset) => !projectId || asset.projectIds.includes(projectId))
+      .filter((asset) => contentFilter === "all" || asset.contentTypes.includes(contentFilter)),
+    [assets, contentFilter, mediaType, projectId, sourceFilter],
+  );
+  const { fetchNextPage, hasNextPage, isFetchingNextPage } = assetsQuery;
+  const selectedListAsset = assets.find((asset) => asset.id === selectedId);
+  const detailQuery = useQuery({
+    queryKey: ["asset", selectedId],
+    queryFn: () => assetApi.get(selectedId!),
+    enabled: Boolean(selectedId) && !previewMode,
     retry: false,
   });
-  const projects = projectsData?.items ?? EMPTY_PROJECTS;
-
-  const { data: assetsData, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["assets", projectFilter, search, statusFilter, mediaTypeFilter],
-    queryFn: () =>
-      assetApi.list({
-        projectId: projectFilter || undefined,
-        mediaType: mediaTypeFilter || undefined,
-        search: search || undefined,
-        status: statusFilter || undefined,
-      }),
+  const segmentsQuery = useQuery({
+    queryKey: ["asset-segments", selectedId],
+    queryFn: () => assetApi.listSegments(selectedId!, { limit: 100 }),
+    enabled: Boolean(selectedId) && !previewMode,
     retry: false,
   });
-  const assets = assetsData?.items ?? EMPTY_ASSETS;
-  const selectedAsset = selectedAssetId
-    ? assets.find((asset) => asset.id === selectedAssetId) ?? null
-    : null;
+  const selected = detailQuery.data ?? selectedListAsset;
+  const projects = previewProjects ?? projectsQuery.data?.items ?? [];
+  const selectedSegments = previewMode ? selected?.segments ?? [] : segmentsQuery.data ?? [];
 
-  const stats = useMemo(() => {
-    const videos = assets.filter((asset) => asset.mediaType === "video").length;
-    const audios = assets.filter((asset) => asset.mediaType === "audio").length;
-    const clips = assets.reduce((sum, asset) => sum + asset.clips.length, 0);
-    const processing = assets.filter(
-      (a) => a.status !== "处理完成" && a.status !== "失败" && a.status !== "处理失败",
-    ).length;
-    return { videos, audios, clips, processing };
-  }, [assets]);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (!previewMode && entries[0]?.isIntersecting && hasNextPage && !isFetchingNextPage) void fetchNextPage();
+    }, { rootMargin: "400px" });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, previewMode]);
 
-  function handleAssetClick(asset: Asset) {
-    updateQuery("asset", asset.id);
-  }
+  const linkMutation = useMutation({
+    mutationFn: async ({ targetProjectId, unlink }: { targetProjectId: string; unlink: boolean }) => {
+      if (unlink) await projectApi.unlinkAsset(targetProjectId, selectedId!);
+      else await projectApi.linkAsset(targetProjectId, selectedId!);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["assets"] });
+      void queryClient.invalidateQueries({ queryKey: ["asset", selectedId] });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      notify("项目素材关联已更新");
+    },
+    onError: (error) => notify(error instanceof Error ? error.message : "关联更新失败", "error"),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const impact = await assetApi.getDeleteImpact(id);
+      if (!impact.canDelete) throw new Error(impact.blockers.join("；"));
+      if (!window.confirm("确认将该全局素材移入回收站？已关联或被镜头使用的素材不能删除。")) return false;
+      await assetApi.remove(id);
+      return true;
+    },
+    onSuccess: (deleted) => {
+      if (!deleted) return;
+      setSelectedId(null);
+      void queryClient.invalidateQueries({ queryKey: ["assets"] });
+      notify("素材已移入回收站，仍会占用存储空间");
+    },
+    onError: (error) => notify(error instanceof Error ? error.message : "素材删除失败", "error"),
+  });
 
   return (
-    <div className="mx-auto max-w-[1600px] px-6 py-8">
-      {/* 页头 */}
-      <header className="mb-6 flex items-end justify-between">
+    <div className="workspace-page max-w-[1500px]">
+      <header className="mb-7 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-text">素材库</h1>
-          <p className="mt-1.5 text-sm text-muted">管理项目下的视频、音频素材与可搜索片段</p>
+          <p className="mb-2 text-xs font-semibold tracking-[0.12em] text-muted">GLOBAL ASSET LIBRARY</p>
+          <h1 className="workspace-page-title">素材库</h1>
+          <p className="workspace-page-copy">统一管理素材、识别内容与处理状态，并按需关联到项目。</p>
         </div>
-        <button
-          onClick={openUploadDrawer}
-          className="flex items-center gap-2 rounded-lg bg-blue px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-2"
-          type="button"
-        >
-          <Upload size={16} />上传素材
-        </button>
+        <button type="button" onClick={() => openUploadDrawer(null)} className="workspace-primary-button"><Upload size={16} />上传素材</button>
       </header>
 
-      {/* 统计卡片 */}
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-4 shadow-soft">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-soft text-blue">
-            <FileVideo size={20} />
-          </span>
-          <div>
-            <strong className="text-xl font-semibold text-text">{stats.videos}</strong>
-            <small className="block text-xs text-muted">视频素材</small>
+      <section className="mb-5 overflow-hidden rounded-2xl border border-line bg-surface">
+        <form
+          onSubmit={(event) => { event.preventDefault(); setSearch(searchDraft.trim()); setSelectedId(null); }}
+          className="flex flex-wrap items-center gap-3 border-b border-line p-3"
+        >
+          <div className="relative min-w-[260px] flex-1">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+            <input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="搜索名称、标签、转写、OCR 和片段…" className="w-full rounded-lg border border-line bg-canvas/30 py-2.5 pl-9 pr-3 text-sm text-text" />
           </div>
-        </div>
-        <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-4 shadow-soft">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal/10 text-teal">
-            <Music size={20} />
-          </span>
-          <div>
-            <strong className="text-xl font-semibold text-text">{stats.audios}</strong>
-            <small className="block text-xs text-muted">音频素材</small>
+          <button type="submit" className="workspace-secondary-button min-h-10 px-4">搜索</button>
+          <label className="flex min-h-10 items-center gap-2 rounded-lg border border-line px-3 text-sm text-muted">
+            <SlidersHorizontal size={14} />
+            <select value={projectId} onChange={(event) => { setProjectId(event.target.value); setSelectedId(null); }} className="bg-transparent text-sm text-text">
+              <option value="">全部项目</option>
+              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>
+          </label>
+          <div className="flex rounded-lg border border-line p-1" aria-label="素材视图">
+            <button type="button" aria-label="网格视图" onClick={() => setViewMode("grid")} className={`rounded-md p-2 ${viewMode === "grid" ? "bg-ink text-white" : "text-muted"}`}><Grid2X2 size={15} /></button>
+            <button type="button" aria-label="列表视图" onClick={() => setViewMode("list")} className={`rounded-md p-2 ${viewMode === "list" ? "bg-ink text-white" : "text-muted"}`}><List size={15} /></button>
           </div>
+        </form>
+        <div className="space-y-2.5 px-4 py-3">
+          <FilterGroup label="类型" value={sourceFilter} options={sourceFilters} onChange={(value) => { setSourceFilter(value); setSelectedId(null); }} />
+          <FilterGroup label="格式" value={mediaType} options={formatFilters} onChange={(value) => { setMediaType(value); setSelectedId(null); }} />
+          <FilterGroup label="内容" value={contentFilter} options={contentFilters} onChange={(value) => { setContentFilter(value); setSelectedId(null); }} />
         </div>
-        <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-4 shadow-soft">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal/10 text-teal">
-            <Sparkles size={20} />
-          </span>
-          <div>
-            <strong className="text-xl font-semibold text-text">{stats.clips}</strong>
-            <small className="block text-xs text-muted">可搜索片段</small>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-4 shadow-soft">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber/10 text-amber">
-            <Clock3 size={20} />
-          </span>
-          <div>
-            <strong className="text-xl font-semibold text-text">{stats.processing}</strong>
-            <small className="block text-xs text-muted">处理中</small>
-          </div>
-        </div>
-      </div>
+      </section>
 
-      {/* 工具栏 */}
-      <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface p-3 shadow-soft">
-        <div className="relative min-w-[200px] flex-1">
-          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-          <input
-            value={search}
-            onChange={(e) => updateQuery("search", e.target.value)}
-            placeholder="搜索素材名称、标签、对白或画面文字…"
-            className="w-full rounded-lg border border-line bg-canvas/40 py-2 pl-9 pr-3 text-sm text-text placeholder:text-muted transition focus:border-blue focus:bg-surface focus:ring-2 focus:ring-blue/10"
-          />
-        </div>
-        <select
-          value={projectFilter}
-          onChange={(e) => updateQuery("project", e.target.value)}
-          className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-text transition focus:border-blue"
-        >
-          <option value="">全部项目</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-        <select
-          value={mediaTypeFilter}
-          onChange={(e) => updateQuery("media", e.target.value)}
-          className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-text transition focus:border-blue"
-        >
-          <option value="">全部类型</option>
-          <option value="video">视频</option>
-          <option value="audio">音频</option>
-        </select>
-        <select
-          value={statusFilter}
-          onChange={(e) => updateQuery("status", e.target.value)}
-          className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-text transition focus:border-blue"
-        >
-          {statusOptions.map((s) => (
-            <option key={s.value} value={s.value}>{s.label}</option>
-          ))}
-        </select>
-        <div className="flex gap-1 rounded-lg bg-canvas p-1">
-          <button
-            onClick={() => updateQuery("view", null)}
-            className={`flex h-8 w-8 items-center justify-center rounded transition ${view === "grid" ? "bg-surface text-blue shadow-sm" : "text-muted"}`}
-            aria-label="宫格视图"
-            type="button"
-          >
-            <LayoutGrid size={16} />
-          </button>
-          <button
-            onClick={() => updateQuery("view", "list")}
-            className={`flex h-8 w-8 items-center justify-center rounded transition ${view === "list" ? "bg-surface text-blue shadow-sm" : "text-muted"}`}
-            aria-label="列表视图"
-            type="button"
-          >
-            <List size={16} />
-          </button>
-        </div>
-      </div>
-
-      <div className={selectedAsset ? "grid min-w-0 grid-cols-[minmax(0,1fr)_400px] gap-5" : "min-w-0"}>
-        <section className="min-w-0">
-      {/* 素材区 */}
-      {isLoading ? (
-        <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-muted" /></div>
-      ) : isError ? (
-        <div className="rounded-2xl border border-red/20 bg-red/5 py-16 text-center">
-          <p className="text-sm font-medium text-red">素材加载失败</p>
-          <p className="mt-1 text-xs text-muted">{error instanceof Error ? error.message : "请检查后端服务"}</p>
-          <button type="button" onClick={() => void refetch()} className="mt-4 rounded-lg bg-blue px-3 py-2 text-sm text-white">
-            重试
-          </button>
-        </div>
-      ) : assets.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-line py-20 text-center">
-          {mediaTypeFilter === "audio"
-            ? <Music size={32} className="mx-auto text-line" />
-            : <FileVideo size={32} className="mx-auto text-line" />}
-          <p className="mt-3 text-sm text-muted">还没有素材，点击右上角上传</p>
-        </div>
-      ) : view === "grid" ? (
-        <div className={selectedAsset ? "grid gap-4 md:grid-cols-2 xl:grid-cols-3" : "grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"}>
-          {assets.map((asset) => (
-            <article
-              key={asset.id}
-              onClick={() => handleAssetClick(asset)}
-              onKeyDown={(event) => event.key === "Enter" && handleAssetClick(asset)}
-              className={`group overflow-hidden rounded-2xl border bg-surface text-left shadow-soft transition hover:-translate-y-0.5 hover:border-blue/40 ${selectedAssetId === asset.id ? "border-blue ring-2 ring-blue/10" : "border-line"}`}
-              role="button"
-              tabIndex={0}
-            >
-              <div className="relative">
-                {asset.mediaType === "audio" ? (
-                  <div className="flex aspect-video flex-col items-center justify-center bg-gradient-to-br from-teal/15 via-blue-soft to-canvas px-5">
-                    <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface text-teal shadow-soft">
-                      <Music size={22} />
-                    </span>
-                    {asset.mediaUrl && (
-                      <audio
-                        src={asset.mediaUrl}
-                        controls
-                        preload="metadata"
-                        onClick={(event) => event.stopPropagation()}
-                        className="mt-4 h-8 w-full"
-                      />
-                    )}
+      {!previewMode && assetsQuery.isLoading ? <div className="flex justify-center py-24"><Loader2 className="animate-spin text-muted" /></div>
+        : !previewMode && assetsQuery.isError ? <div className="rounded-2xl border border-red/20 bg-red/5 py-16 text-center text-sm text-red">{assetsQuery.error instanceof Error ? assetsQuery.error.message : "素材加载失败"}</div>
+        : !visibleAssets.length ? <div className="rounded-2xl border border-dashed border-line py-24 text-center"><Search className="mx-auto mb-3 text-muted" size={23} /><strong className="text-sm text-text">没有符合条件的素材</strong><p className="mt-1 text-xs text-muted">调整项目、搜索词或“类型 × 格式 × 内容”分类后重试。</p></div>
+        : viewMode === "grid" ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+            {visibleAssets.map((asset) => {
+              const TypeIcon = asset.mediaType === "image" ? ImageIcon : asset.mediaType === "audio" ? FileAudio : Film;
+              return (
+                <button key={asset.id} type="button" onClick={() => setSelectedId(asset.id)} className="group overflow-hidden rounded-2xl border border-line bg-surface text-left transition hover:-translate-y-0.5 hover:border-[#c3c3c6] hover:shadow-[0_14px_34px_rgba(0,0,0,.08)]">
+                  <div className="relative">
+                    <VideoThumb imageUrl={asset.thumbnailUrl ?? (asset.mediaType === "image" ? asset.mediaUrl : undefined)} videoUrl={asset.mediaType === "video" ? asset.mediaUrl : undefined} showPlay={asset.mediaType === "video"} />
+                    <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-ink/75 px-2 py-1 text-[10px] text-white"><TypeIcon size={11} />{mediaLabels[asset.mediaType]}</span>
+                    <span className="absolute right-2 top-2 rounded-full bg-white/90 px-2 py-1 text-[10px] font-medium text-text">{asset.processingStatus}</span>
                   </div>
-                ) : (
-                  <VideoThumb
-                    variant={asset.variant}
-                    imageUrl={asset.thumbnailUrl}
-                    videoUrl={asset.mediaUrl}
-                    rounded="rounded-none"
-                  />
-                )}
-                {projects.find((project) => project.id === asset.projectId)?.currentUserRole !== "viewer" && (
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setDeleteAssetId(asset.id);
-                    }}
-                    className="absolute bottom-3 right-3 rounded-lg bg-ink/65 p-2 text-white/80 opacity-0 backdrop-blur-sm transition hover:bg-red hover:text-white group-hover:opacity-100"
-                    aria-label={`删除素材 ${asset.name}`}
-                  ><Trash2 size={14} /></button>
-                )}
-              </div>
-              <div className="p-3.5">
-                <div className="flex items-center justify-between gap-2">
-                  <strong className="truncate text-sm text-text">{asset.name}</strong>
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${statusBadgeClass[asset.status]}`}>
-                    {asset.status}
-                  </span>
-                </div>
-                <div className="mt-2 flex items-center gap-3 text-xs text-muted">
-                  <span className="flex items-center gap-1"><Clock3 size={12} />{asset.duration}</span>
-                  <span>·</span>
-                  <span>{asset.uploadedAt}</span>
-                </div>
-                <AssetTags asset={asset} />
-                {search.trim() && <AssetMatchInfo asset={asset} />}
-              </div>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-soft">
-          <table className="min-w-[760px] w-full text-sm">
-            <thead>
-              <tr className="border-b border-line bg-canvas/40 text-left text-xs text-muted">
-                <th className="px-4 py-3 font-medium">素材名称</th>
-                <th className="px-4 py-3 font-medium">所属项目</th>
-                <th className="px-4 py-3 font-medium">时长</th>
-                <th className="px-4 py-3 font-medium">状态</th>
-                <th className="px-4 py-3 font-medium">上传时间</th>
-                <th className="px-4 py-3 font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {assets.map((asset) => {
-                const project = projects.find((p) => p.id === asset.projectId);
-                return (
-                  <tr
-                    key={asset.id}
-                    onClick={() => handleAssetClick(asset)}
-                    className={`cursor-pointer border-b border-line/60 transition hover:bg-canvas/40 ${selectedAssetId === asset.id ? "bg-blue-soft/60" : ""}`}
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2.5">
-                        <span className="flex h-8 w-12 items-center justify-center rounded bg-gradient-to-br from-blue to-teal">
-                          {asset.mediaType === "audio"
-                            ? <Music size={14} className="text-white" />
-                            : <FileVideo size={14} className="text-white" />}
-                        </span>
-                        <div className="min-w-0">
-                          <span className="block truncate font-medium text-text">{asset.name}</span>
-                          {search.trim() && <AssetMatchInfo asset={asset} compact />}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-muted">{project?.name ?? "—"}</td>
-                    <td className="px-4 py-3 text-muted">{asset.duration}</td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-2 py-0.5 text-[11px] ${statusBadgeClass[asset.status]}`}>
-                        {asset.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-muted">{asset.uploadedAt}</td>
-                    <td className="px-4 py-3">
-                      {project?.currentUserRole !== "viewer" && (
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setDeleteAssetId(asset.id);
-                          }}
-                          className="rounded-lg p-1.5 text-muted hover:bg-red/10 hover:text-red"
-                          aria-label={`删除素材 ${asset.name}`}
-                        ><Trash2 size={14} /></button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                  <div className="p-3">
+                    <strong className="block truncate text-sm text-text">{asset.name}</strong>
+                    <p className="mb-2 mt-1 flex items-center gap-1 text-xs text-muted"><Clock3 size={12} />{formatDuration(asset.durationMs)} · {asset.fileSizeMb.toFixed(1)} MB</p>
+                    <AssetTaxonomy asset={asset} />
+                    <div className="mt-3 flex justify-between border-t border-line pt-2 text-[11px] text-muted"><span>{asset.createdAtRelative}</span><span>{asset.projectIds.length} 个项目</span></div>
+                    {asset.matchExcerpt && <p className="mt-2 line-clamp-2 rounded-lg bg-canvas p-2 text-[11px] text-text">{asset.matchExcerpt}</p>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-line bg-surface">
+            {visibleAssets.map((asset) => {
+              const TypeIcon = asset.mediaType === "image" ? ImageIcon : asset.mediaType === "audio" ? FileAudio : Film;
+              return (
+                <button key={asset.id} type="button" onClick={() => setSelectedId(asset.id)} className="group grid w-full grid-cols-[112px_minmax(0,1fr)] gap-4 border-b border-line p-3 text-left last:border-b-0 hover:bg-canvas/70 md:grid-cols-[128px_minmax(180px,1.4fr)_minmax(220px,1fr)_120px] md:items-center">
+                  <div className="relative"><VideoThumb imageUrl={asset.thumbnailUrl ?? (asset.mediaType === "image" ? asset.mediaUrl : undefined)} videoUrl={asset.mediaType === "video" ? asset.mediaUrl : undefined} showPlay={asset.mediaType === "video"} /><span className="absolute left-1.5 top-1.5 rounded-full bg-ink/75 p-1 text-white"><TypeIcon size={11} /></span></div>
+                  <div className="min-w-0"><strong className="block truncate text-sm text-text">{asset.name}</strong><p className="mt-1 text-xs text-muted">{formatDuration(asset.durationMs)} · {asset.fileSizeMb.toFixed(1)} MB · {asset.createdAtRelative}</p><p className="mt-1 text-[11px] text-muted">{asset.projectIds.length ? `已关联 ${asset.projectIds.length} 个项目` : "尚未关联项目"}</p></div>
+                  <div className="col-span-2 md:col-span-1"><AssetTaxonomy asset={asset} /></div>
+                  <span className="hidden justify-self-end rounded-full bg-canvas px-2.5 py-1 text-xs text-muted md:inline-flex">{asset.processingStatus}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+      <div ref={sentinelRef} className="flex h-20 items-center justify-center text-xs text-muted">
+        {!previewMode && assetsQuery.isFetchingNextPage ? <><Loader2 size={14} className="mr-2 animate-spin" />加载更多…</> : !previewMode && assetsQuery.hasNextPage ? "继续滚动加载更多素材" : assets.length ? `已加载当前筛选下的全部 ${assets.length} 项` : ""}
+      </div>
+
+      {selected && (
+        <div className="fixed inset-0 z-[70] flex justify-end bg-ink/40 backdrop-blur-sm" onClick={() => setSelectedId(null)}>
+          <aside className="h-full w-full max-w-xl overflow-y-auto bg-surface p-6 shadow-soft" onClick={(event) => event.stopPropagation()}>
+            <header className="flex items-start gap-3"><div className="min-w-0 flex-1"><p className="mb-1 text-[10px] font-semibold tracking-[0.12em] text-muted">素材详情</p><h2 className="truncate text-lg font-semibold text-text">{selected.name}</h2><p className="text-xs text-muted">{mediaLabels[selected.mediaType]} · {selected.sourceCategory === "ai" ? "AI 素材" : "非 AI 素材"} · {selected.processingStatus}</p></div><button type="button" aria-label="关闭素材详情" onClick={() => setSelectedId(null)} className="p-2 text-muted"><X size={18} /></button></header>
+            <div className="mt-5"><VideoThumb imageUrl={selected.thumbnailUrl ?? (selected.mediaType === "image" ? selected.mediaUrl : undefined)} videoUrl={selected.mediaType === "video" ? selected.mediaUrl : undefined} showPlay={selected.mediaType === "video"} /></div>
+            <div className="mt-4"><AssetTaxonomy asset={selected} /></div>
+            <div className="mt-5 grid grid-cols-3 gap-2 text-center text-xs">{[["尺寸", selected.width && selected.height ? `${selected.width}×${selected.height}` : "—"], ["时长", formatDuration(selected.durationMs)], ["大小", `${selected.fileSizeMb.toFixed(1)} MB`]].map(([label, value]) => <div key={label} className="rounded-lg bg-canvas p-3"><strong className="block text-text">{value}</strong><span className="text-muted">{label}</span></div>)}</div>
+            <section className="mt-5"><h3 className="text-sm font-semibold text-text">项目关联</h3><div className="mt-2 space-y-2">{projects.map((project) => { const linked = selected.projectIds.includes(project.id); return <div key={project.id} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2"><span className="min-w-0 flex-1 truncate text-xs text-text">{project.name}</span><button type="button" disabled={previewMode} onClick={() => linkMutation.mutate({ targetProjectId: project.id, unlink: linked })} className={`flex items-center gap-1 text-xs font-medium disabled:opacity-45 ${linked ? "text-red" : "text-blue"}`}>{linked ? <><Unlink size={12} />解除</> : <><Link2 size={12} />关联</>}</button></div>; })}</div></section>
+            <section className="mt-5"><h3 className="text-sm font-semibold text-text">识别片段</h3><div className="mt-2 max-h-64 space-y-2 overflow-y-auto">{selectedSegments.map((segment) => <div key={segment.id} className="rounded-lg bg-canvas p-3"><div className="flex justify-between text-xs"><strong className="text-text">{segment.title || "未命名片段"}</strong><span className="text-muted">{(segment.startMs / 1000).toFixed(1)}–{(segment.endMs / 1000).toFixed(1)}s</span></div><p className="mt-1 line-clamp-3 text-xs text-muted">{segment.transcript || segment.ocrText || "无文本识别"}</p></div>)}{!previewMode && segmentsQuery.isLoading && <p className="py-6 text-center text-xs text-muted">加载片段…</p>}{!segmentsQuery.isLoading && !selectedSegments.length && <p className="py-6 text-center text-xs text-muted">暂无片段</p>}</div></section>
+            <button type="button" disabled={previewMode || deleteMutation.isPending} onClick={() => deleteMutation.mutate(selected.id)} className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg border border-red/20 py-2.5 text-sm font-medium text-red disabled:opacity-50"><Trash2 size={15} />移入回收站</button>
+          </aside>
         </div>
       )}
-        </section>
-
-      {/* 素材详情面板 */}
-      {selectedAsset && (
-        <AssetDetailPanel
-          asset={selectedAsset}
-          projectName={projects.find((p) => p.id === selectedAsset.projectId)?.name ?? ""}
-          onClose={() => updateQuery("asset", null)}
-        />
-      )}
-      <DeleteConfirmModal
-        open={Boolean(deleteAssetId)}
-        entityLabel="素材"
-        loadImpact={() => assetApi.getDeleteImpact(deleteAssetId!)}
-        onDelete={() => assetApi.remove(deleteAssetId!)}
-        onClose={() => setDeleteAssetId(null)}
-        onDeleted={() => {
-          if (selectedAssetId === deleteAssetId) updateQuery("asset", null);
-          void queryClient.invalidateQueries({ queryKey: ["assets"] });
-          void queryClient.invalidateQueries({ queryKey: ["projects"] });
-          notify("素材已删除");
-        }}
-      />
-      </div>
     </div>
   );
 }
-
-const matchLabels: Record<NonNullable<Asset["matchField"]>, string> = {
-  name: "名称命中",
-  tag: "标签命中",
-  transcript: "对白命中",
-  ocr: "画面文字命中",
-  clip_title: "片段标题命中",
-  clip_transcript: "片段对白命中",
-  clip_ocr: "片段画面文字命中",
-};
-
-function AssetTags({ asset }: { asset: Asset }) {
-  const tags = (asset.tags ?? []).filter(Boolean).slice(0, 3);
-  if (!tags.length) return null;
-  return (
-    <div className="mt-2 flex flex-wrap gap-1">
-      {tags.map((tag) => (
-        <span key={tag} className="rounded bg-canvas px-1.5 py-0.5 text-[10px] text-muted">
-          {tag}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function AssetMatchInfo({ asset, compact = false }: { asset: Asset; compact?: boolean }) {
-  if (!asset.matchField || !asset.matchExcerpt) return null;
-  return (
-    <div className={`${compact ? "mt-0.5" : "mt-2 rounded-lg bg-blue-soft/50 px-2 py-1.5"} text-[11px] leading-relaxed text-blue`}>
-      <span className="font-medium">{matchLabels[asset.matchField]}：</span>
-      <span>{asset.matchExcerpt}</span>
-    </div>
-  );
-}
-
-/* ── 素材详情面板（Desktop 主从布局右栏） ── */
-function AssetDetailPanel({
-  asset,
-  projectName,
-  onClose,
-}: {
-  asset: Asset;
-  projectName: string;
-  onClose: () => void;
-}) {
-  const { data: latestAsset, refetch } = useQuery({
-    queryKey: ["asset-detail", asset.id],
-    queryFn: () => assetApi.get(asset.id),
-    initialData: asset,
-    staleTime: 30_000,
-  });
-  const [failedMediaUrl, setFailedMediaUrl] = useState<string | null>(null);
-  const [refreshingMedia, setRefreshingMedia] = useState(false);
-  const mediaError = failedMediaUrl === latestAsset.mediaUrl
-    ? `${latestAsset.mediaType === "audio" ? "音频" : "视频"}加载失败，媒体地址可能已过期`
-    : null;
-
-  async function refreshMediaUrl() {
-    setRefreshingMedia(true);
-    try {
-      await refetch();
-      setFailedMediaUrl(null);
-    } finally {
-      setRefreshingMedia(false);
-    }
-  }
-
-  return (
-      <aside className="sticky top-4 flex max-h-[calc(100vh-2rem)] min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-soft">
-        <header className="flex h-16 items-center justify-between border-b border-line px-5">
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-semibold text-text">{latestAsset.name}</h2>
-            <p className="truncate text-xs text-muted">{projectName || "未归属项目"}</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition hover:bg-canvas"
-            aria-label="关闭"
-            type="button"
-          >
-            <X size={18} />
-          </button>
-        </header>
-        <div className="flex-1 overflow-y-auto p-5">
-          <div className="flex aspect-video items-center justify-center overflow-hidden rounded-xl bg-black">
-            {latestAsset.mediaUrl && !mediaError && latestAsset.mediaType === "audio" ? (
-              <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-teal/20 via-ink to-black px-6">
-                <span className="flex h-16 w-16 items-center justify-center rounded-full bg-white/10 text-teal">
-                  <Music size={30} />
-                </span>
-                <audio
-                  key={latestAsset.mediaUrl}
-                  src={latestAsset.mediaUrl}
-                  controls
-                  preload="metadata"
-                  onError={() => setFailedMediaUrl(latestAsset.mediaUrl ?? null)}
-                  className="mt-5 w-full"
-                />
-              </div>
-            ) : latestAsset.mediaUrl && !mediaError ? (
-              <video
-                key={latestAsset.mediaUrl}
-                src={latestAsset.mediaUrl}
-                poster={latestAsset.thumbnailUrl}
-                controls
-                playsInline
-                preload="metadata"
-                onError={() => setFailedMediaUrl(latestAsset.mediaUrl ?? null)}
-                className="h-full w-full object-contain"
-              />
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center px-6 text-center text-white/60">
-                {latestAsset.mediaType === "audio" ? <Music size={30} /> : <FileVideo size={30} />}
-                <p className="mt-2 text-sm">
-                  {mediaError || `该素材暂无可播放的${latestAsset.mediaType === "audio" ? "音频" : "视频"}`}
-                </p>
-                {latestAsset.mediaUrl && (
-                  <button
-                    type="button"
-                    onClick={() => void refreshMediaUrl()}
-                    disabled={refreshingMedia}
-                    className="mt-3 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white transition hover:bg-white/20 disabled:opacity-50"
-                  >
-                    {refreshingMedia ? "刷新中…" : "刷新媒体地址"}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="mt-4 flex items-center gap-2">
-            <span className={`rounded-full px-2.5 py-0.5 text-xs ${statusBadgeClass[latestAsset.status]}`}>
-              {latestAsset.status}
-            </span>
-            <span className="rounded-full bg-blue-soft px-2.5 py-0.5 text-xs text-blue">
-              {latestAsset.mediaType === "audio" ? "音频" : "视频"}
-            </span>
-            <span className="rounded-full bg-canvas px-2.5 py-0.5 text-xs text-muted">{projectName}</span>
-          </div>
-
-          {(latestAsset.tags ?? []).length > 0 && (
-            <section className="mt-5">
-              <div className="flex items-center gap-1.5 text-sm font-medium text-text">
-                <Tag size={14} className="text-blue" />标签
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {(latestAsset.tags ?? []).map((tag) => (
-                  <span key={tag} className="rounded-full bg-blue-soft px-2.5 py-1 text-xs text-blue">{tag}</span>
-                ))}
-              </div>
-            </section>
-          )}
-
-          <dl className="mt-5 space-y-3">
-            <div className="flex justify-between border-b border-line/60 pb-2.5">
-              <dt className="text-sm text-muted">时长</dt>
-              <dd className="text-sm font-medium text-text">{latestAsset.duration}</dd>
-            </div>
-            <div className="flex justify-between border-b border-line/60 pb-2.5">
-              <dt className="text-sm text-muted">来源</dt>
-              <dd className="text-sm font-medium text-text">{latestAsset.source}</dd>
-            </div>
-            {latestAsset.mediaType === "audio" && (
-              <>
-                <div className="flex justify-between border-b border-line/60 pb-2.5">
-                  <dt className="text-sm text-muted">音频编码</dt>
-                  <dd className="text-sm font-medium uppercase text-text">{latestAsset.audioCodec || "—"}</dd>
-                </div>
-                <div className="flex justify-between border-b border-line/60 pb-2.5">
-                  <dt className="text-sm text-muted">采样率</dt>
-                  <dd className="text-sm font-medium text-text">
-                    {latestAsset.sampleRate ? `${(latestAsset.sampleRate / 1000).toFixed(1)} kHz` : "—"}
-                  </dd>
-                </div>
-                <div className="flex justify-between border-b border-line/60 pb-2.5">
-                  <dt className="text-sm text-muted">声道</dt>
-                  <dd className="text-sm font-medium text-text">
-                    {latestAsset.channels ? `${latestAsset.channels} 声道` : "—"}
-                  </dd>
-                </div>
-                <div className="flex justify-between border-b border-line/60 pb-2.5">
-                  <dt className="text-sm text-muted">码率</dt>
-                  <dd className="text-sm font-medium text-text">
-                    {latestAsset.bitrate ? `${Math.round(latestAsset.bitrate / 1000)} kbps` : "—"}
-                  </dd>
-                </div>
-              </>
-            )}
-            <div className="flex justify-between border-b border-line/60 pb-2.5">
-              <dt className="text-sm text-muted">上传时间</dt>
-              <dd className="text-sm font-medium text-text">{latestAsset.uploadedAt}</dd>
-            </div>
-            {latestAsset.mediaType === "video" && <div className="flex justify-between border-b border-line/60 pb-2.5">
-              <dt className="text-sm text-muted">镜头片段</dt>
-              <dd className="text-sm font-medium text-text">
-                {latestAsset.status === "处理完成"
-                  ? `${latestAsset.clips.length} 个片段`
-                  : latestAsset.status === "处理失败" || latestAsset.status === "失败"
-                    ? "处理失败"
-                    : "处理中"}
-              </dd>
-            </div>}
-          </dl>
-
-          {latestAsset.status === "处理完成" && latestAsset.mediaType === "video" && (
-            <div className="mt-5">
-              <strong className="text-sm font-medium text-text">完整对白转写</strong>
-              <p className="mt-2 rounded-xl bg-canvas/60 p-3 text-xs leading-relaxed text-muted">
-                {latestAsset.transcript?.trim() || "未从该素材中提取到可用语音转写。"}
-              </p>
-              <div className="mt-4 flex items-center gap-1.5 text-sm font-medium text-text">
-                <ScanText size={14} className="text-teal" />画面文字 OCR
-              </div>
-              <p className="mt-2 rounded-xl bg-canvas/60 p-3 text-xs leading-relaxed text-muted">
-                {latestAsset.ocrText?.trim() || "未从该素材中识别到可用画面文字。"}
-              </p>
-
-              <div className="mt-5 flex items-center justify-between">
-                <strong className="text-sm font-medium text-text">可搜索片段</strong>
-                <span className="text-xs text-muted">{latestAsset.clips.length} 个</span>
-              </div>
-              <div className="mt-2 space-y-2.5">
-                {latestAsset.clips.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-line py-5 text-center text-xs text-muted">
-                    该素材尚未生成可搜索片段
-                  </div>
-                ) : latestAsset.clips.map((clip) => (
-                  <article
-                    key={clip.id}
-                    className={`rounded-xl border p-3 ${latestAsset.matchedClipId === clip.id ? "border-blue bg-blue-soft/30" : "border-line"}`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <strong className="block truncate text-xs text-text">{clip.title || "未命名片段"}</strong>
-                        <span className="text-[11px] text-muted">{clip.range}</span>
-                      </div>
-                      {clip.qualityScore != null && (
-                        <span className="shrink-0 rounded bg-teal/10 px-1.5 py-0.5 text-[10px] text-teal">
-                          质量 {Math.round(clip.qualityScore)}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-2 text-xs leading-relaxed text-text">
-                      {clip.transcriptSegment?.trim() || "未识别到片段对白"}
-                    </p>
-                    {clip.ocrSegment?.trim() && (
-                      <p className="mt-1.5 text-[11px] leading-relaxed text-muted">OCR：{clip.ocrSegment}</p>
-                    )}
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {[clip.sceneType, clip.shotType, clip.cameraMotion].filter(Boolean).map((value) => (
-                        <span key={value} className="rounded bg-canvas px-1.5 py-0.5 text-[10px] text-muted">{value}</span>
-                      ))}
-                    </div>
-                    {(clip.persons?.length || clip.objects?.length) ? (
-                      <div className="mt-2 space-y-1 text-[11px] text-muted">
-                        {!!clip.persons?.length && <p className="flex gap-1"><Users size={12} className="mt-0.5 shrink-0" />人物：{clip.persons.join("、")}</p>}
-                        {!!clip.objects?.length && <p>物品：{clip.objects.join("、")}</p>}
-                      </div>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </aside>
-  );
-}
-
-export default LibraryView;

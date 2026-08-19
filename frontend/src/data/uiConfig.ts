@@ -5,9 +5,8 @@
 
 export const navItems = [
   { id: "home", label: "工作台", path: "/workspace" },
+  { id: "inspiration", label: "灵感岛", path: "/workspace/inspiration" },
   { id: "library", label: "素材库", path: "/workspace/library" },
-  { id: "script", label: "脚本中心", path: "/workspace/scripts" },
-  { id: "projects", label: "项目中心", path: "/workspace/projects" },
 ] as const;
 
 /** 缩略图渐变样式映射（避免外部图片依赖） */

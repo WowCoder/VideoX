@@ -31,7 +31,7 @@ async def dispatch_project_task(
     task: Any,
     *args: Any,
 ):
-    """Dispatch using the project owner's current plan, including collaborator requests."""
+    """按项目所有者的真实会员档位派发任务。"""
     owner = (
         await db.execute(
             select(User)
@@ -41,6 +41,25 @@ async def dispatch_project_task(
                 selectinload(User.membership),
                 selectinload(User.subscription),
             )
+        )
+    ).scalar_one()
+    await reconcile_user_subscription(db, owner)
+    rank = owner.membership.rank if owner.membership else 0
+    return task.apply_async(args=args, priority=task_priority_for_rank(rank))
+
+
+async def dispatch_owner_task(
+    db: AsyncSession,
+    owner_id: str,
+    task: Any,
+    *args: Any,
+):
+    """派发不绑定项目的全局素材或灵感岛任务。"""
+    owner = (
+        await db.execute(
+            select(User)
+            .where(User.id == owner_id)
+            .options(selectinload(User.membership), selectinload(User.subscription))
         )
     ).scalar_one()
     await reconcile_user_subscription(db, owner)

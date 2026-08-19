@@ -28,10 +28,18 @@ class Job(Base):
             name="ck_jobs_quota_assignment",
         ),
         Index("ix_jobs_quota_status", "quota_type", "status"),
+        Index("ix_jobs_status_updated_at", "status", "updated_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"job-{uuid.uuid4().hex[:12]}")
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False, index=True)
+    owner_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    subject_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    subject_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
     type: Mapped[str] = mapped_column(String(50), default="")
     # type: 素材处理 / AI 脚本生成 / 镜头匹配 / AI 生图分镜 / 分镜图 AI 生视频 / 示意图特效视频 / AI 初剪生成
@@ -45,7 +53,7 @@ class Job(Base):
     eta: Mapped[str] = mapped_column(String(100), default="预计 1-2 分钟")
     logs: Mapped[list] = mapped_column(JSON, default=list)  # 日志列表
     result: Mapped[str] = mapped_column(String(200), nullable=True)
-    # result: 打开时间线 / 打开脚本 / 查看结果 / 已进入素材库 / 查看字幕
+    # result: 打开项目工作台 / 查看结果 / 已进入素材库 / 查看字幕
     result_detail: Mapped[str] = mapped_column(Text, default="")
     result_url: Mapped[str] = mapped_column(String(1000), nullable=True)
     # 内部对象存储路径；result_url 只是短期签名地址，下载时应基于此字段重新签名/流式返回。
@@ -60,4 +68,6 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
-    project: Mapped["Project"] = relationship("Project", back_populates="jobs", foreign_keys=[project_id])  # type: ignore
+    project: Mapped["Project | None"] = relationship(  # type: ignore[name-defined]
+        "Project", back_populates="jobs", foreign_keys=[project_id]
+    )

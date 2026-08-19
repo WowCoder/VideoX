@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <rect width="32" height="32" rx="8" fill="#0c1730"/>
-  <path d="M8 22V10l4 6 4-6v12M20 10v12M24 10v12" stroke="#2865ed" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 84 84" role="img" aria-label="OpenVMA">
+  <rect width="84" height="84" rx="25" fill="#1d1d1d"/>
+  <path d="M42 25.5C43.6 34.7 47.1 39.2 58.2 41.7C47 43.6 43.8 47.4 41.8 58.5C39.6 47.8 36.2 44.1 25 41.8C36.2 39.6 40 35.5 42 25.5Z" fill="none" stroke="#fff" stroke-width="3.35" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M54.4 26.5C55 29.1 56.1 30.2 58.8 30.9C56.1 31.5 55 32.6 54.4 35.2C53.8 32.6 52.7 31.5 50 30.9C52.7 30.2 53.8 29.1 54.4 26.5Z" fill="#fff"/>
+  <path d="M29.2 47.9C29.7 50 30.5 50.8 32.6 51.3C30.5 51.8 29.7 52.6 29.2 54.7C28.7 52.6 27.9 51.8 25.8 51.3C27.9 50.8 28.7 50 29.2 47.9Z" fill="#fff"/>
 </svg>

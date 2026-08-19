@@ -18,6 +18,7 @@ celery_app = Celery(
         "app.tasks.script_tasks",
         "app.tasks.roughcut_tasks",
         "app.tasks.export_tasks",
+        "app.tasks.inspiration_tasks",
         "app.tasks.subscription_tasks",
     ],
 )
@@ -53,6 +54,10 @@ celery_app.conf.update(
         "expire-memberships-hourly": {
             "task": "app.tasks.expire_due_subscriptions",
             "schedule": 3600.0,
+        },
+        "scan-due-inspiration-tasks-every-minute": {
+            "task": "app.tasks.scan_due_inspiration_tasks",
+            "schedule": 60.0,
         },
     },
 )

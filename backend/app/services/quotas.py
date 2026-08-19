@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.job import Job
-from app.models.project import Project
 from app.models.subscription import Subscription
 from app.models.user import Membership, Usage, User
 from app.services.subscriptions import as_utc, reconcile_user_subscription, utcnow
@@ -184,9 +183,8 @@ async def _reserved_amount(
     query = (
         select(func.coalesce(func.sum(Job.quota_amount), 0))
         .select_from(Job)
-        .join(Project, Project.id == Job.project_id)
         .where(
-            Project.owner_id == user_id,
+            Job.owner_id == user_id,
             Job.quota_type == quota_type,
             Job.status.in_(ACTIVE_RESERVATION_STATUSES),
         )
@@ -267,15 +265,14 @@ async def complete_job_success(
     now = as_utc(now or utcnow())
     row = (
         await db.execute(
-            select(Job, Project.owner_id)
-            .join(Project, Project.id == Job.project_id)
-            .where(Job.id == job_id)
+            select(Job).where(Job.id == job_id)
             .with_for_update()
         )
-    ).first()
+    ).scalar_one_or_none()
     if row is None:
         return False
-    job, owner_id = row
+    job = row
+    owner_id = job.owner_id
     if job.status == "SUCCEEDED":
         return False
     if job.status not in {"QUEUED", "RUNNING"}:

@@ -10,6 +10,10 @@ interface RawNotification {
   link: string | null;
   is_read: boolean;
   created_at: string;
+  source?: "notification" | "job";
+  status?: string | null;
+  progress?: number | null;
+  action_label?: string | null;
 }
 
 interface RawNotificationList {
@@ -28,6 +32,10 @@ export interface NotificationItem {
   link?: string;
   isRead: boolean;
   createdAt: string;
+  source: "notification" | "job";
+  status?: string;
+  progress?: number;
+  actionLabel?: string;
 }
 
 export interface NotificationList {
@@ -47,6 +55,10 @@ function mapNotification(raw: RawNotification): NotificationItem {
     link: raw.link ?? undefined,
     isRead: raw.is_read,
     createdAt: raw.created_at,
+    source: raw.source ?? "notification",
+    status: raw.status ?? undefined,
+    progress: raw.progress ?? undefined,
+    actionLabel: raw.action_label ?? undefined,
   };
 }
 
@@ -62,7 +74,7 @@ export async function list(params?: {
     read_status: params?.readStatus ?? "all",
   });
   if (params?.type) query.set("type", params.type);
-  const raw = await http.get<RawNotificationList>(`/notifications?${query.toString()}`);
+  const raw = await http.get<RawNotificationList>(`/notifications/feed?${query.toString()}`);
   return {
     items: raw.items.map(mapNotification),
     total: raw.total,

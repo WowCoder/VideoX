@@ -1,576 +1,352 @@
-"""AI 生成路由：脚本生成/生图/生视频/特效。"""
+"""显式作用范围的 AI、匹配、主成片编译和导出操作。"""
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
 from typing import Literal
+
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import or_, select
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models.user import User
-from app.models.project import Project
-from app.models.asset import Asset, Clip
-from app.models.script import Script, ScriptUnit, Shot, ShotGeneration
 from app.models.job import Job
-from app.services.ai_provider import generate_script_with_ai
-from app.config import get_settings
+from app.models.project import Project
+from app.models.script import ScriptUnit, Shot
+from app.models.user import User
+from app.schemas.job import JobOut
+from app.schemas.project import ScopeSelection
 from app.services.project_access import require_project_access
-from app.services.timeline_validation import TimelineValidationError, validate_project_timeline
-from app.services.quotas import QuotaExceededError, admit_job_quota, synchronize_user_usage
+from app.services.quotas import QuotaExceededError, admit_job_quota
+from app.services.task_dispatch import dispatch_project_task
+from app.services.workspace import load_project_workspace, record_revision
+
 
 router = APIRouter()
-settings = get_settings()
 
 
-class GenerateScriptRequest(BaseModel):
-    """AI 脚本生成请求。"""
-    project_id: str
-    brief: str = Field(..., min_length=1, max_length=300, description="需求描述")
-    target_duration: int = Field(60, description="目标时长（秒）")
-    tone: str = Field("专业克制", description="表达语气")
-    reference_dialogue: bool = Field(False, description="是否参考素材对白")
-
-
-class GenerateScriptResponse(BaseModel):
-    """AI 脚本生成响应。"""
-    title: str
-    summary: str
-    units: list[dict]
-
-
-class GenerateImageRequest(BaseModel):
-    """AI 生图请求。"""
-    shot_id: str
-    prompt: str = ""
-    project_id: str = ""
-
-
-class GenerateVideoRequest(BaseModel):
-    """图生视频请求。"""
-    shot_id: str
-    prompt: str = ""
-    project_id: str = ""
-
-
-class GenerateEffectRequest(BaseModel):
-    """示意特效请求。"""
-    shot_id: str
-    sketch_data: str = Field(..., min_length=32, max_length=4_000_000)
-    motion_description: str = Field("", max_length=1000)
-    project_id: str = ""
-
-
-class GenerateJobResponse(BaseModel):
-    """AI 生成任务响应。"""
-    job_id: str
-    message: str
-
-
-class GenerationCapability(BaseModel):
-    available: bool
-    model: str = ""
-    reason: str = ""
-
-
-class GenerationCapabilitiesResponse(BaseModel):
-    image: GenerationCapability
-    image_to_video: GenerationCapability
-    effect_video: GenerationCapability
-
-
-@router.get("/capabilities", response_model=GenerationCapabilitiesResponse)
-async def generation_capabilities(_: User = Depends(get_current_user)):
-    """返回真实生成能力，供前端在操作前禁用不可用入口。"""
-    has_key = settings.has_dashscope
-    return GenerationCapabilitiesResponse(
-        image=GenerationCapability(
-            available=settings.has_image_generation,
-            model=settings.ai_image_model if settings.has_image_generation else "",
-            reason="" if settings.has_image_generation else "AI 生图服务未配置",
-        ),
-        image_to_video=GenerationCapability(
-            available=settings.has_image_to_video,
-            model=settings.ai_image_to_video_model if settings.has_image_to_video else "",
-            reason=(
-                ""
-                if settings.has_image_to_video
-                else "请配置 DASHSCOPE_API_KEY 与 AI_IMAGE_TO_VIDEO_MODEL"
-                if not has_key or not settings.ai_image_to_video_model
-                else "图生视频服务未启用"
-            ),
-        ),
-        effect_video=GenerationCapability(
-            available=settings.has_effect_video,
-            model=settings.ai_effect_video_model if settings.has_effect_video else "",
-            reason=(
-                ""
-                if settings.has_effect_video
-                else "请配置 DASHSCOPE_API_KEY 与 AI_EFFECT_VIDEO_MODEL"
-                if not has_key or not settings.ai_effect_video_model
-                else "示意特效视频服务未启用"
-            ),
-        ),
-    )
-
-
-async def _editable_shot(
-    shot_id: str, project_id: str, user: User, db: AsyncSession
-) -> tuple[Shot, Project]:
-    project = (await require_project_access(project_id, user, db, "editor")).project
-    result = await db.execute(
-        select(Shot)
-        .join(ScriptUnit, Shot.unit_id == ScriptUnit.id)
-        .join(Script, ScriptUnit.script_id == Script.id)
-        .join(Project, Script.project_id == Project.id)
-        .where(
-            Shot.id == shot_id,
-            Project.id == project_id,
-        )
-    )
-    shot = result.scalar_one_or_none()
-    if not shot:
-        raise HTTPException(status_code=404, detail="分镜不存在或不属于当前项目")
-    return shot, project
-
-
-async def _build_project_script_context(project_id: str, db: AsyncSession) -> str:
-    """读取项目真实素材摘要，并限制上下文体积以控制模型费用。"""
-    rows = (
-        await db.execute(
-            select(Asset.name, Clip)
-            .join(Clip, Clip.asset_id == Asset.id)
-            .where(
-                Asset.project_id == project_id,
-                Asset.status == "处理完成",
-                or_(
-                    Clip.transcript_segment != "",
-                    Clip.ocr_segment != "",
-                    Clip.scene_type.is_not(None),
-                ),
-            )
-            .order_by(Clip.quality_score.desc(), Clip.created_at)
-            .limit(24)
-        )
-    ).all()
-
-    entries: list[str] = []
-    total_length = 0
-    max_length = 6000
-    for asset_name, clip in rows:
-        parts = [
-            f"素材：{asset_name}",
-            f"时间：{clip.start_time:.1f}-{clip.end_time:.1f}秒",
-        ]
-        if clip.transcript_segment.strip():
-            parts.append(f"对白：{clip.transcript_segment.strip()[:500]}")
-        if clip.ocr_segment.strip():
-            parts.append(f"画面文字：{clip.ocr_segment.strip()[:300]}")
-        if clip.scene_type:
-            parts.append(f"场景：{clip.scene_type}")
-        if clip.persons:
-            parts.append(f"人物：{'、'.join(str(item) for item in clip.persons[:8])}")
-        if clip.objects:
-            parts.append(f"物品：{'、'.join(str(item) for item in clip.objects[:8])}")
-        entry = "；".join(parts)
-        if total_length + len(entry) > max_length:
-            break
-        entries.append(entry)
-        total_length += len(entry)
-
-    if entries:
-        return "\n".join(f"{index}. {entry}" for index, entry in enumerate(entries, 1))
-
-    # 兼容只保存了 Asset 级完整转写的旧素材。
-    asset_rows = (
-        await db.execute(
-            select(Asset.name, Asset.transcript, Asset.ocr_text)
-            .where(
-                Asset.project_id == project_id,
-                Asset.status == "处理完成",
-                or_(Asset.transcript.is_not(None), Asset.ocr_text.is_not(None)),
-            )
-            .order_by(Asset.uploaded_at.desc())
-            .limit(6)
-        )
-    ).all()
-    for asset_name, transcript, ocr_text in asset_rows:
-        parts = [f"素材：{asset_name}"]
-        if transcript and transcript.strip():
-            parts.append(f"对白：{transcript.strip()[:1200]}")
-        if ocr_text and ocr_text.strip():
-            parts.append(f"画面文字：{ocr_text.strip()[:500]}")
-        entry = "；".join(parts)
-        if total_length + len(entry) > max_length:
-            break
-        entries.append(entry)
-        total_length += len(entry)
-    return "\n".join(f"{index}. {entry}" for index, entry in enumerate(entries, 1))
-
-
-@router.post("/script", response_model=GenerateScriptResponse)
-async def generate_script(
-    req: GenerateScriptRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """AI 生成脚本。
-
-    调用阿里千问 LLM 生成结构化脚本，返回预览数据（不保存）。
-    前端确认后再调用 POST /api/scripts 创建。
-    """
-    await require_project_access(req.project_id, user, db, "editor")
-    if not settings.has_text_generation:
-        raise HTTPException(status_code=503, detail="文本生成服务未配置或不可用")
-    try:
-        dialogue_context = (
-            await _build_project_script_context(req.project_id, db)
-            if req.reference_dialogue
-            else ""
-        )
-        result = await generate_script_with_ai(
-            brief=req.brief,
-            target_duration=req.target_duration,
-            tone=req.tone,
-            reference_dialogue=req.reference_dialogue,
-            dialogue_context=dialogue_context,
-        )
-        return GenerateScriptResponse(
-            title=result.get("title", "AI 生成脚本"),
-            summary=result.get("summary", req.brief),
-            units=result.get("units", []),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI 生成失败：{str(e)}")
-
-
-@router.post("/image", response_model=GenerateJobResponse)
-async def generate_image_shot(
-    req: GenerateImageRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """AI 生图分镜。
-
-    创建异步任务，调用通义万相生成关键帧。
-    """
-    shot, project = await _editable_shot(req.shot_id, req.project_id, user, db)
-    if not settings.has_image_generation:
-        raise HTTPException(status_code=503, detail="AI 生图服务未配置或不可用")
-    # 创建任务
-    job = Job(
-        project_id=req.project_id,
-        name=f"AI 生图分镜：{shot.description[:20]}",
-        type="AI 生图分镜",
-        status="QUEUED",
-        stage="等待生成",
-        stages=["理解分镜", "生成构图", "筛选关键帧", "写入脚本"],
-        stage_index=0,
-        progress=0,
-        eta="预计 1-2 分钟",
-        detail="AI 生图任务已进入队列",
-        result=None,
-        result_detail="",
-        payload={"shot_id": shot.id, "prompt": req.prompt},
-        is_simulated=False,
-    )
-    try:
-        await admit_job_quota(db, job, project.owner_id, "ai_image", 1)
-    except QuotaExceededError as exc:
-        raise HTTPException(status_code=403, detail="项目所有者的 AI 生图配额已用完") from exc
-    db.add(job)
-    await db.flush()
-
-    await db.commit()
-
-    # 派发 Celery 任务
-    from app.tasks.generate_tasks import generate_image_shot as celery_generate_image
-    from app.services.task_dispatch import dispatch_project_task
-    try:
-        task = await dispatch_project_task(
-            db, project.id, celery_generate_image, shot.id, job.id, req.prompt
-        )
-        job.celery_task_id = task.id
-        await db.commit()
-    except Exception as exc:
-        job.status = "FAILED"
-        job.stage = "任务派发失败"
-        job.detail = f"AI 生图任务派发失败：{str(exc)[:200]}"
-        job.result_detail = "请确认 Redis 和 Worker 正常运行后重试"
-        await db.commit()
-
-    return GenerateJobResponse(job_id=job.id, message="AI 生图任务已创建")
-
-
-@router.post("/video", response_model=GenerateJobResponse)
-async def generate_video_shot(
-    req: GenerateVideoRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """图生视频。"""
-    shot, project = await _editable_shot(req.shot_id, req.project_id, user, db)
-    if not settings.has_image_to_video:
-        raise HTTPException(
-            status_code=503,
-            detail="图生视频模型未配置；请在百炼确认真实模型名后设置 AI_IMAGE_TO_VIDEO_MODEL",
-        )
-    image_generation = (
-        await db.execute(
-            select(ShotGeneration.id)
-            .where(
-                ShotGeneration.shot_id == shot.id,
-                ShotGeneration.kind == "image",
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if not shot.generated_image_path and not image_generation:
-        raise HTTPException(status_code=400, detail="当前分镜没有可用于图生视频的持久化关键帧")
-    job = Job(
-        project_id=req.project_id,
-        name=f"图生视频：{shot.description[:20]}",
-        type="分镜图 AI 生视频",
-        status="QUEUED",
-        stage="等待生成",
-        stages=["读取分镜图", "解析运镜", "生成视频", "加入粗剪候选"],
-        stage_index=0,
-        progress=0,
-        eta="预计 2-5 分钟",
-        detail="图生视频任务已进入队列",
-        result=None,
-        result_detail="",
-        payload={"shot_id": shot.id, "prompt": req.prompt},
-        is_simulated=False,
-    )
-    try:
-        await admit_job_quota(db, job, project.owner_id, "ai_video", 1)
-    except QuotaExceededError as exc:
-        raise HTTPException(status_code=403, detail="项目所有者的 AI 生视频配额已用完") from exc
-    db.add(job)
-    await db.flush()
-
-    await db.commit()
-
-    from app.tasks.generate_tasks import generate_video_shot as celery_generate_video
-    from app.services.task_dispatch import dispatch_project_task
-    try:
-        task = await dispatch_project_task(
-            db, project.id, celery_generate_video, shot.id, job.id, req.prompt
-        )
-        job.celery_task_id = task.id
-        await db.commit()
-    except Exception as exc:
-        job.status = "FAILED"
-        job.stage = "任务派发失败"
-        job.detail = f"图生视频任务派发失败：{str(exc)[:200]}"
-        job.result_detail = "请确认 Redis 和 Worker 正常运行后重试"
-        await db.commit()
-
-    return GenerateJobResponse(job_id=job.id, message="图生视频任务已创建")
-
-
-@router.post("/effect", response_model=GenerateJobResponse)
-async def generate_effect_shot(
-    req: GenerateEffectRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """示意特效生成。"""
-    shot, project = await _editable_shot(req.shot_id, req.project_id, user, db)
-    if not settings.has_effect_video:
-        raise HTTPException(
-            status_code=503,
-            detail="示意特效视频模型未配置；不能使用普通文生视频模型冒充该能力",
-        )
-    if not req.sketch_data.startswith("data:image/"):
-        raise HTTPException(status_code=400, detail="示意特效需要有效的 Canvas 图片")
-
-    # 草图只保存到 Shot，避免把大段 Base64 再复制进 Job payload 和消息队列。
-    shot.sketch_data = req.sketch_data
-
-    job = Job(
-        project_id=req.project_id,
-        name=f"示意特效：{shot.description[:20]}",
-        type="示意图特效视频",
-        status="QUEUED",
-        stage="等待生成",
-        stages=["识别示意图", "理解运动轨迹", "生成特效", "加入粗剪"],
-        stage_index=0,
-        progress=0,
-        eta="预计 1-3 分钟",
-        detail="示意特效任务已进入队列",
-        result=None,
-        result_detail="",
-        payload={
-            "shot_id": shot.id,
-            "has_sketch": True,
-            "motion_description": req.motion_description,
-        },
-        is_simulated=False,
-    )
-    try:
-        await admit_job_quota(db, job, project.owner_id, "ai_video", 1)
-    except QuotaExceededError as exc:
-        raise HTTPException(status_code=403, detail="项目所有者的 AI 生视频配额已用完") from exc
-    db.add(job)
-    await db.flush()
-
-    await db.commit()
-
-    from app.tasks.generate_tasks import generate_effect_shot as celery_generate_effect
-    from app.services.task_dispatch import dispatch_project_task
-    try:
-        task = await dispatch_project_task(
-            db, project.id, celery_generate_effect, shot.id, job.id, req.motion_description
-        )
-        job.celery_task_id = task.id
-        await db.commit()
-    except Exception as exc:
-        job.status = "FAILED"
-        job.stage = "任务派发失败"
-        job.detail = f"示意特效任务派发失败：{str(exc)[:200]}"
-        job.result_detail = "请确认 Redis 和 Worker 正常运行后重试"
-        await db.commit()
-
-    return GenerateJobResponse(job_id=job.id, message="示意特效任务已创建")
-
-
-# ── 导出路由 ──
-class ExportRequest(BaseModel):
-    """导出请求。"""
-    project_id: str
-    cut_version_id: str | None = None
-    format: Literal["mp4", "mov", "prores"] = "mp4"
-    resolution: Literal["480p", "720p", "1080p", "4k"] = "1080p"
-
-
-class ExportResponse(BaseModel):
-    """导出响应。"""
-    job_id: str
-    message: str
-
-
-@router.post("/export", response_model=ExportResponse)
-async def export_project(
-    req: ExportRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """导出成片。"""
-    project = (await require_project_access(req.project_id, user, db, "editor")).project
-    timeline = project.timeline or []
-    if req.cut_version_id:
-        from app.models.cut_version import CutVersion
-
-        cut_version = await db.get(CutVersion, req.cut_version_id)
-        if not cut_version or cut_version.project_id != project.id:
-            raise HTTPException(status_code=404, detail="剪辑版本不存在或不属于当前项目")
-        timeline = cut_version.timeline or []
-
-    placeholder_clips = [
-        clip for clip in timeline
-        if clip.get("track") == "video" and clip.get("origin") == "script_placeholder"
+class ProjectOperationRequest(BaseModel):
+    scope: ScopeSelection
+    operation: Literal[
+        "match_assets",
+        "complete_shots",
+        "generate_image",
+        "generate_video",
+        "generate_effect",
+        "generate_script",
+        "compose",
+        "export",
     ]
-    if placeholder_clips:
-        first_name = placeholder_clips[0].get("name") or "未命名分镜"
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"时间线仍有 {len(placeholder_clips)} 个待补素材分镜，"
-                f"请先补齐「{first_name}」后再导出"
-            ),
-        )
+    parameters: dict = Field(default_factory=dict)
+    expected_revision: int = Field(..., ge=0)
 
-    video_clips = [
-        clip for clip in timeline
-        if clip.get("track") == "video"
-        and (clip.get("asset_id") or clip.get("generated_media_path"))
-    ]
-    if not video_clips:
-        raise HTTPException(status_code=400, detail="时间线中没有可导出的视频素材")
 
-    try:
-        await validate_project_timeline(project, timeline, db, user)
-    except TimelineValidationError as exc:
-        raise HTTPException(status_code=400, detail=f"导出前检查失败：{exc}") from exc
+class OperationJobsOut(BaseModel):
+    jobs: list[JobOut]
 
-    # 创建导出任务
-    job = Job(
-        project_id=req.project_id,
-        name=f"导出：{req.format} {req.resolution}",
-        type="导出",
-        status="QUEUED",
-        stage="等待导出",
-        stages=["准备时间线", "渲染视频轨", "混合音频轨", "烧录字幕", "添加品牌水印", "编码输出"],
-        stage_index=0,
-        progress=0,
-        eta="预计 1-5 分钟",
-        detail=f"{req.format} {req.resolution} 导出任务已进入队列",
-        result=None,
-        result_detail="",
-        payload={
-            "project_id": req.project_id,
-            "cut_version_id": req.cut_version_id,
-            "format": req.format,
-            "resolution": req.resolution,
-        },
-        is_simulated=False,
-    )
-    try:
-        await admit_job_quota(db, job, project.owner_id, "export", 1)
-    except QuotaExceededError as exc:
-        raise HTTPException(status_code=403, detail="导出配额已用完，请升级会员") from exc
-    db.add(job)
-    await db.commit()
 
-    # 派发 Celery 任务
-    from app.tasks.export_tasks import export_project as celery_export
-    from app.services.task_dispatch import dispatch_project_task
-    try:
-        task = await dispatch_project_task(
+def _resolve_shot_ids(project: Project, scope: ScopeSelection) -> list[str]:
+    scenes = project.script.units
+    if scope.type == "project":
+        return [shot.id for scene in scenes for shot in scene.shots]
+    if scope.type == "scene":
+        requested = set(scope.scene_ids)
+        owned = {scene.id for scene in scenes}
+        if not requested or not requested <= owned:
+            raise HTTPException(status_code=422, detail="作用范围包含不属于当前项目的场景")
+        return [shot.id for scene in scenes if scene.id in requested for shot in scene.shots]
+    if scope.type == "shot":
+        requested = set(scope.shot_ids)
+        owned = {shot.id for scene in scenes for shot in scene.shots}
+        if not requested or not requested <= owned:
+            raise HTTPException(status_code=422, detail="作用范围包含不属于当前项目的镜头")
+        return [shot.id for scene in scenes for shot in scene.shots if shot.id in requested]
+    raise HTTPException(status_code=422, detail="该操作不支持素材级作用范围")
+
+
+async def _dispatch_job(db: AsyncSession, project: Project, job: Job):
+    if job.type == "镜头匹配":
+        from app.tasks.match_tasks import match_script_shots
+
+        return await dispatch_project_task(
             db,
             project.id,
-            celery_export,
-            req.project_id,
+            match_script_shots,
+            project.script.id,
+            job.payload["shot_ids"],
             job.id,
-            req.format,
-            req.resolution,
-            req.cut_version_id or "",
         )
-        job.celery_task_id = task.id
-        await db.commit()
-    except Exception as exc:
-        job.status = "FAILED"
-        job.stage = "任务派发失败"
-        job.detail = f"导出任务派发失败：{str(exc)[:200]}"
-        job.result_detail = "请确认 Redis 和 Worker 正常运行后重试"
-        await db.commit()
+    if job.type == "AI 分镜完善":
+        from app.tasks.script_tasks import complete_shot_descriptions
 
-    return ExportResponse(job_id=job.id, message="导出任务已创建")
+        return await dispatch_project_task(
+            db,
+            project.id,
+            complete_shot_descriptions,
+            project.script.id,
+            job.payload["shot_ids"],
+            job.id,
+        )
+    if job.type == "AI 脚本生成":
+        from app.tasks.script_tasks import generate_project_script
+
+        return await dispatch_project_task(
+            db,
+            project.id,
+            generate_project_script,
+            project.id,
+            job.id,
+        )
+    if job.type == "AI 生图分镜":
+        from app.tasks.generate_tasks import generate_image_shot
+
+        return await dispatch_project_task(
+            db,
+            project.id,
+            generate_image_shot,
+            job.payload["shot_id"],
+            job.id,
+            job.payload.get("prompt", ""),
+        )
+    if job.type == "分镜图 AI 生视频":
+        from app.tasks.generate_tasks import generate_video_shot
+
+        return await dispatch_project_task(
+            db,
+            project.id,
+            generate_video_shot,
+            job.payload["shot_id"],
+            job.id,
+            job.payload.get("prompt", ""),
+        )
+    if job.type == "示意图特效视频":
+        from app.tasks.generate_tasks import generate_effect_shot
+
+        return await dispatch_project_task(
+            db,
+            project.id,
+            generate_effect_shot,
+            job.payload["shot_id"],
+            job.id,
+            job.payload.get("motion_description", ""),
+        )
+    if job.type == "AI 初剪生成":
+        from app.tasks.roughcut_tasks import run_rough_cut
+
+        return await dispatch_project_task(
+            db, project.id, run_rough_cut, job.id, project.id
+        )
+    if job.type == "导出":
+        from app.tasks.export_tasks import export_project
+
+        return await dispatch_project_task(
+            db,
+            project.id,
+            export_project,
+            project.id,
+            job.id,
+            job.payload.get("format", "mp4"),
+            job.payload.get("resolution", "1080p"),
+            job.payload.get("aspect_ratio"),
+        )
+    raise HTTPException(status_code=422, detail="不支持该任务类型")
 
 
-# ── 会员与用量路由 ──
-from app.schemas.auth import MembershipOut, UsageOut
-from fastapi import Body
-
-
-@router.get("/memberships", response_model=list[MembershipOut])
-async def list_memberships(
+@router.post("/projects/{project_id}/operations", response_model=OperationJobsOut, status_code=202)
+async def execute_project_operation(
+    project_id: str,
+    request: ProjectOperationRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取会员方案列表。"""
-    from app.models.user import Membership
-    result = await db.execute(select(Membership).order_by(Membership.rank))
-    return [MembershipOut.model_validate(m) for m in result.scalars().all()]
+    await require_project_access(project_id, user, db, "editor")
+    project = await load_project_workspace(db, project_id, user.id, for_update=True)
+    if project.script.revision != request.expected_revision:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "项目版本已变化，请刷新后重新选择操作范围",
+                "client_revision": request.expected_revision,
+                "server_revision": project.script.revision,
+            },
+        )
 
+    project_level_operations = {"compose", "export", "generate_script"}
+    shot_ids = (
+        _resolve_shot_ids(project, request.scope)
+        if request.operation not in project_level_operations
+        else []
+    )
+    if request.operation not in project_level_operations and not shot_ids:
+        raise HTTPException(status_code=422, detail="当前作用范围内没有镜头")
+    if request.operation in project_level_operations and request.scope.type != "project":
+        raise HTTPException(status_code=422, detail="该操作只能作用于整个项目")
 
-@router.get("/usage", response_model=UsageOut)
-async def get_usage(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """获取当前用量。"""
-    usage = await synchronize_user_usage(db, user)
-    return UsageOut.model_validate(usage)
+    jobs: list[Job] = []
+    if request.operation == "generate_script":
+        prompt = str(request.parameters.get("prompt") or "").strip()
+        tone = str(request.parameters.get("tone") or "专业清晰").strip()[:50]
+        try:
+            duration_seconds = int(request.parameters.get("duration_seconds") or 60)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="目标时长必须是整数秒") from exc
+        if not 10 <= len(prompt) <= 2000:
+            raise HTTPException(status_code=422, detail="脚本需求需为 10–2000 个字符")
+        if not 15 <= duration_seconds <= 300:
+            raise HTTPException(status_code=422, detail="目标时长需为 15–300 秒")
+        jobs.append(
+            Job(
+                owner_id=user.id,
+                project_id=project.id,
+                subject_type="project",
+                subject_id=project.id,
+                name="AI 生成项目脚本",
+                type="AI 脚本生成",
+                status="QUEUED",
+                stage="等待生成",
+                stages=["理解目标", "生成结构", "写入场景与镜头"],
+                detail=f"目标 {duration_seconds} 秒 · {tone}",
+                payload={
+                    "project_id": project.id,
+                    "prompt": prompt,
+                    "tone": tone,
+                    "duration_seconds": duration_seconds,
+                    "include_asset_context": bool(request.parameters.get("include_asset_context", True)),
+                },
+            )
+        )
+    elif request.operation == "match_assets":
+        jobs.append(
+            Job(
+                owner_id=user.id,
+                project_id=project.id,
+                subject_type="project",
+                subject_id=project.id,
+                name="镜头素材匹配",
+                type="镜头匹配",
+                status="QUEUED",
+                stage="等待匹配",
+                stages=["语义检索", "候选排序", "保存结果"],
+                payload={"script_id": project.script.id, "shot_ids": shot_ids},
+                detail=f"将匹配 {len(shot_ids)} 个镜头",
+            )
+        )
+    elif request.operation == "complete_shots":
+        jobs.append(
+            Job(
+                owner_id=user.id,
+                project_id=project.id,
+                subject_type="project",
+                subject_id=project.id,
+                name="AI 完善分镜",
+                type="AI 分镜完善",
+                status="QUEUED",
+                stage="等待生成",
+                stages=["完善描述", "保存结果"],
+                payload={"script_id": project.script.id, "shot_ids": shot_ids},
+            )
+        )
+    elif request.operation in {"generate_image", "generate_video", "generate_effect"}:
+        config = {
+            "generate_image": ("AI 生图分镜", "ai_image", "prompt"),
+            "generate_video": ("分镜图 AI 生视频", "ai_video", "prompt"),
+            "generate_effect": ("示意图特效视频", "ai_video", "motion_description"),
+        }[request.operation]
+        for shot_id in shot_ids:
+            job = Job(
+                owner_id=user.id,
+                project_id=project.id,
+                subject_type="shot",
+                subject_id=shot_id,
+                name=config[0],
+                type=config[0],
+                status="QUEUED",
+                stage="等待生成",
+                stages=["提交生成", "等待结果", "保存素材"],
+                payload={
+                    "shot_id": shot_id,
+                    config[2]: str(request.parameters.get(config[2]) or ""),
+                },
+            )
+            try:
+                await admit_job_quota(db, job, user.id, config[1], 1)
+            except QuotaExceededError as exc:
+                raise HTTPException(status_code=403, detail="当前会员生成额度不足") from exc
+            jobs.append(job)
+    elif request.operation == "compose":
+        jobs.append(
+            Job(
+                owner_id=user.id,
+                project_id=project.id,
+                subject_type="composition",
+                subject_id=project.id,
+                name="生成主成片",
+                type="AI 初剪生成",
+                status="QUEUED",
+                stage="等待编排",
+                stages=["检查镜头", "编排主成片", "保存结果"],
+                payload={"project_id": project.id},
+            )
+        )
+    else:
+        export_format = str(request.parameters.get("format") or "mp4")
+        resolution = str(request.parameters.get("resolution") or "1080p")
+        aspect_ratio = str(request.parameters.get("aspect_ratio") or project.composition.aspect_ratio or "16:9")
+        if export_format not in {"mp4", "mov"}:
+            raise HTTPException(status_code=422, detail="导出格式仅支持 mp4 或 mov")
+        if resolution not in {"480p", "720p", "1080p", "4k"}:
+            raise HTTPException(status_code=422, detail="导出清晰度不受支持")
+        if aspect_ratio not in {"16:9", "9:16", "1:1", "4:3"}:
+            raise HTTPException(status_code=422, detail="导出画幅不受支持")
+        job = Job(
+            owner_id=user.id,
+            project_id=project.id,
+            subject_type="composition",
+            subject_id=project.id,
+            name="导出主成片",
+            type="导出",
+            status="QUEUED",
+            stage="等待导出",
+            stages=["准备素材", "渲染", "上传结果"],
+            payload={
+                "project_id": project.id,
+                "format": export_format,
+                "resolution": resolution,
+                "aspect_ratio": aspect_ratio,
+            },
+        )
+        try:
+            await admit_job_quota(db, job, user.id, "export", 1)
+        except QuotaExceededError as exc:
+            raise HTTPException(status_code=403, detail="当前会员导出额度不足") from exc
+        jobs.append(job)
+
+    project.status = "processing" if request.operation != "export" else "exporting"
+    project.script.revision += 1
+    project.composition.revision = project.script.revision
+    for job in jobs:
+        job.payload = {**(job.payload or {}), "base_revision": project.script.revision}
+        db.add(job)
+    await db.flush()
+    await record_revision(
+        db,
+        project,
+        user.id,
+        "before_ai_operation",
+        {
+            "operation": request.operation,
+            "scope": request.scope.model_dump(mode="json"),
+            "job_ids": [job.id for job in jobs],
+        },
+    )
+    await db.commit()
+
+    for job in jobs:
+        try:
+            task = await _dispatch_job(db, project, job)
+            job.celery_task_id = task.id
+        except Exception as exc:
+            job.status = "FAILED"
+            job.stage = "派发失败"
+            job.detail = f"任务派发失败：{str(exc)[:200]}"
+    await db.commit()
+    return OperationJobsOut(jobs=[JobOut.model_validate(job) for job in jobs])

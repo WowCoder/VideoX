@@ -1,117 +1,94 @@
+"""唯一主脚本、主成片和镜头媒体版本契约测试。"""
+
 import unittest
-from types import SimpleNamespace
+from datetime import datetime, timezone
 
-from app.api.projects import router as projects_router
-from app.api.scripts import _compute_metrics, router as scripts_router
-from app.models.cut_version import CutVersion
-from app.models.script import ShotGeneration
-from app.tasks.generate_tasks import _record_generation
-
-
-class _ScalarResult:
-    def __init__(self, value=None):
-        self.value = value
-
-    def scalar_one_or_none(self):
-        return self.value
+from app.models.project import ProjectComposition, ProjectRevision, ProjectUndoToken
+from app.models.script import Script, ScriptUnit, Shot, ShotMediaVersion
+from app.schemas.project import ShotDocument
+from app.services.workspace import _restore_shot
+from app.tasks.generate_tasks import _can_auto_select_media_version
 
 
-class _FakeSession:
-    def __init__(self):
-        self.added = []
+class VersionModelContractTests(unittest.TestCase):
+    def test_ai_result_only_auto_selects_for_unchanged_document(self):
+        self.assertTrue(_can_auto_select_media_version(7, 7))
+        self.assertFalse(_can_auto_select_media_version(8, 7))
 
-    async def execute(self, _statement):
-        return _ScalarResult()
+    def test_script_is_unique_per_project(self):
+        constraints = {constraint.name for constraint in Script.__table__.constraints}
+        self.assertIn("uq_scripts_project_id", constraints)
 
-    def add(self, value):
-        self.added.append(value)
+    def test_composition_project_id_is_the_primary_key(self):
+        self.assertTrue(ProjectComposition.__table__.c.project_id.primary_key)
 
-    async def flush(self):
-        return None
-
-
-class ScriptMetricsTests(unittest.TestCase):
-    def test_metrics_count_shots_and_all_selected_visual_types(self):
-        units = [
-            SimpleNamespace(
-                duration=8,
-                selected_clip_id=None,
-                shots=[
-                    SimpleNamespace(duration=4, selected_clip_id="clip-1", generated_image_path=None, generated_video_path=None, generated_effect_video_path=None),
-                    SimpleNamespace(duration=5, selected_clip_id=None, generated_image_path="image.png", generated_video_path=None, generated_effect_video_path=None),
-                    SimpleNamespace(duration=6, selected_clip_id=None, generated_image_path=None, generated_video_path=None, generated_effect_video_path=None),
-                ],
-            )
-        ]
-        metrics = _compute_metrics(units)
-        self.assertEqual(metrics["unit_count"], 3)
-        self.assertEqual(metrics["matched_count"], 2)
-        self.assertEqual(metrics["progress"], 67)
-        self.assertEqual(metrics["duration"], "00:15")
-
-
-class GenerationHistoryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_first_generation_is_selected_when_shot_has_no_visual(self):
-        session = _FakeSession()
-        shot = SimpleNamespace(
-            id="shot-1",
-            selected_clip_id=None,
-            generated_image_path=None,
-            generated_video_path=None,
-            generated_effect_video_path=None,
-            visual_mode=None,
-            status="待编辑",
-        )
-        generation = await _record_generation(
-            session,
-            shot,
-            job_id="job-1",
-            kind="image",
-            storage_path="generated/image-1.png",
-            prompt="第一版",
-        )
-        self.assertTrue(generation.is_selected)
-        self.assertEqual(shot.generated_image_path, "generated/image-1.png")
-        self.assertEqual(shot.status, "已选择")
-        self.assertEqual(len(session.added), 1)
-
-    async def test_later_generation_becomes_candidate_without_overwriting_selection(self):
-        session = _FakeSession()
-        shot = SimpleNamespace(
-            id="shot-1",
-            selected_clip_id=None,
-            generated_image_path="generated/image-1.png",
-            generated_video_path=None,
-            generated_effect_video_path=None,
-            visual_mode="image",
-            status="已选择",
-        )
-        generation = await _record_generation(
-            session,
-            shot,
-            job_id="job-2",
-            kind="image",
-            storage_path="generated/image-2.png",
-            prompt="第二版",
-        )
-        self.assertFalse(generation.is_selected)
-        self.assertEqual(shot.generated_image_path, "generated/image-1.png")
-        self.assertEqual(shot.status, "待确认")
-
-
-class VersionContractTests(unittest.TestCase):
-    def test_cut_version_has_project_scoped_unique_name(self):
-        constraints = {constraint.name for constraint in CutVersion.__table__.constraints}
-        self.assertIn("uq_cut_version_project_name", constraints)
+    def test_project_revision_number_is_unique_inside_project(self):
+        constraints = {constraint.name for constraint in ProjectRevision.__table__.constraints}
+        self.assertIn("uq_project_revision_number", constraints)
 
     def test_generation_job_kind_is_idempotent(self):
-        constraints = {constraint.name for constraint in ShotGeneration.__table__.constraints}
-        self.assertIn("uq_shot_generation_job_kind", constraints)
+        constraints = {constraint.name for constraint in ShotMediaVersion.__table__.constraints}
+        self.assertIn("uq_shot_media_version_job_kind", constraints)
 
-    def test_new_editor_and_version_routes_are_registered(self):
-        script_paths = {route.path for route in scripts_router.routes}
-        project_paths = {route.path for route in projects_router.routes}
-        self.assertIn("/{script_id}/editor-state", script_paths)
-        self.assertIn("/{script_id}/shots/{shot_id}/generations/{generation_id}/select", script_paths)
-        self.assertIn("/{project_id}/versions", project_paths)
-        self.assertIn("/{project_id}/assets/import", project_paths)
+    def test_selected_media_version_is_a_real_foreign_key(self):
+        foreign_keys = {
+            foreign_key.target_fullname
+            for foreign_key in Shot.__table__.c.selected_media_version_id.foreign_keys
+        }
+        self.assertEqual(foreign_keys, {"shot_media_versions.id"})
+
+    def test_undo_token_is_project_scoped_and_expires(self):
+        self.assertFalse(ProjectUndoToken.__table__.c.project_id.nullable)
+        self.assertFalse(ProjectUndoToken.__table__.c.expires_at.nullable)
+
+
+class RestoreVersionHistoryTests(unittest.TestCase):
+    def test_restore_shot_rebuilds_candidates_and_media_versions(self):
+        scene = ScriptUnit(id="scene-restore", narration_text="恢复字幕")
+        created_at = datetime(2026, 8, 17, tzinfo=timezone.utc)
+        data = ShotDocument.model_validate(
+            {
+                "id": "shot-restore",
+                "index": 0,
+                "description": "恢复的镜头",
+                "duration_ms": 5000,
+                "subtitle_text": "恢复字幕",
+                "selected_media_version_id": "version-1",
+                "candidates": [
+                    {
+                        "id": "candidate-1",
+                        "segment_id": "segment-1",
+                        "title": "候选素材",
+                        "score": 88,
+                    }
+                ],
+                "media_versions": [
+                    {
+                        "id": "version-1",
+                        "asset_id": "asset-1",
+                        "job_id": "job-1",
+                        "parent_version_id": "version-source",
+                        "kind": "generated_image",
+                        "operation": "image",
+                        "parameters": {"prompt": "测试"},
+                        "status": "ready",
+                        "is_selected": True,
+                        "created_at": created_at.isoformat(),
+                    }
+                ],
+            }
+        )
+
+        restored = _restore_shot(scene, data)
+
+        self.assertEqual(restored.id, "shot-restore")
+        self.assertEqual(restored.candidates[0].segment_id, "segment-1")
+        self.assertEqual(restored.media_versions[0].asset_id, "asset-1")
+        self.assertEqual(restored.media_versions[0].parent_version_id, "version-source")
+        self.assertTrue(restored.media_versions[0].is_selected)
+        # 循环外键必须等媒体版本 flush 后再由 undo_mutation 恢复。
+        self.assertIsNone(restored.selected_media_version_id)
+
+
+if __name__ == "__main__":
+    unittest.main()

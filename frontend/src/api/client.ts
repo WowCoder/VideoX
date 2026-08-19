@@ -251,7 +251,11 @@ async function request<T>(
 
     try {
       const errorData: ApiError = await response.json();
-      errorDetail = errorData.detail ?? errorDetail;
+      if (typeof errorData.detail === "string") errorDetail = errorData.detail;
+      else if (errorData.detail && typeof errorData.detail === "object") {
+        const message = (errorData.detail as { message?: unknown }).message;
+        errorDetail = typeof message === "string" ? message : JSON.stringify(errorData.detail);
+      }
       errorCode = errorData.code;
     } catch {
       // 响应非 JSON，使用状态文本
@@ -322,7 +326,7 @@ export const http = {
       let detail = `下载失败 (${response.status})`;
       try {
         const payload = (await response.json()) as ApiError;
-        detail = payload.detail ?? detail;
+        if (typeof payload.detail === "string") detail = payload.detail;
       } catch {
         // 非 JSON 错误响应保留状态信息。
       }

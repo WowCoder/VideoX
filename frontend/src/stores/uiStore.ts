@@ -4,8 +4,10 @@
 // ──────────────────────────────────────────────
 
 import { create } from "zustand";
+import type { Project } from "@/api/projects";
 
 export type ToastTone = "success" | "info" | "error";
+export type ProjectStartMethod = "write-script" | "upload-assets" | "ai-script" | "blank";
 
 export interface ToastMessage {
   id: number;
@@ -26,10 +28,10 @@ interface UIState {
   /** 各类弹窗 / 抽屉 */
   authModalMode: "login" | "register" | null;
   uploadDrawerOpen: boolean;
-  scriptCreateOpen: boolean;
-  aiScriptOpen: boolean;
-  aiScriptInitialTitle: string;
+  uploadProjectId: string | null;
   projectCreateOpen: boolean;
+  projectCreateIntent: ProjectStartMethod;
+  projectEditing: Project | null;
 
   /** Toast 队列 */
   toasts: ToastMessage[];
@@ -43,13 +45,10 @@ interface UIState {
 
   openAuth: (mode: "login" | "register") => void;
   closeAuth: () => void;
-  openUploadDrawer: () => void;
+  openUploadDrawer: (projectId?: string | null) => void;
   closeUploadDrawer: () => void;
-  openScriptCreate: () => void;
-  closeScriptCreate: () => void;
-  openAIScript: (initialTitle?: string) => void;
-  closeAIScript: () => void;
-  openProjectCreate: () => void;
+  openProjectCreate: (intent?: ProjectStartMethod) => void;
+  openProjectEdit: (project: Project) => void;
   closeProjectCreate: () => void;
 
   notify: (text: string, tone?: ToastTone) => void;
@@ -66,10 +65,10 @@ export const useUIStore = create<UIState>((set) => ({
 
   authModalMode: null,
   uploadDrawerOpen: false,
-  scriptCreateOpen: false,
-  aiScriptOpen: false,
-  aiScriptInitialTitle: "",
+  uploadProjectId: null,
   projectCreateOpen: false,
+  projectCreateIntent: "blank",
+  projectEditing: null,
 
   toasts: [],
 
@@ -91,15 +90,22 @@ export const useUIStore = create<UIState>((set) => ({
   openAuth: (mode) =>
     set({ authModalMode: mode, accountMenuOrigin: null, mobileNavOpen: false }),
   closeAuth: () => set({ authModalMode: null }),
-  openUploadDrawer: () => set({ uploadDrawerOpen: true }),
-  closeUploadDrawer: () => set({ uploadDrawerOpen: false }),
-  openScriptCreate: () => set({ scriptCreateOpen: true }),
-  closeScriptCreate: () => set({ scriptCreateOpen: false }),
-  openAIScript: (initialTitle = "") =>
-    set({ aiScriptOpen: true, aiScriptInitialTitle: initialTitle }),
-  closeAIScript: () => set({ aiScriptOpen: false, aiScriptInitialTitle: "" }),
-  openProjectCreate: () => set({ projectCreateOpen: true }),
-  closeProjectCreate: () => set({ projectCreateOpen: false }),
+  openUploadDrawer: (projectId = null) => set({ uploadDrawerOpen: true, uploadProjectId: projectId }),
+  closeUploadDrawer: () => set({ uploadDrawerOpen: false, uploadProjectId: null }),
+  openProjectCreate: (intent = "blank") => set({
+    projectCreateOpen: true,
+    projectCreateIntent: intent,
+    projectEditing: null,
+    accountMenuOrigin: null,
+    mobileNavOpen: false,
+  }),
+  openProjectEdit: (project) => set({
+    projectCreateOpen: true,
+    projectCreateIntent: "blank",
+    projectEditing: project,
+    accountMenuOrigin: null,
+  }),
+  closeProjectCreate: () => set({ projectCreateOpen: false, projectEditing: null }),
 
   notify: (text, tone = "success") => {
     toastIdCounter += 1;

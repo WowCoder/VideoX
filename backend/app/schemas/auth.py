@@ -64,7 +64,6 @@ class MembershipOut(BaseModel):
     ai_video_quota: int
     storage_gb: int
     export_quota: int
-    seat_quota: int
     price: float
 
     class Config:

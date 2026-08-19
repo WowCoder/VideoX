@@ -4,15 +4,12 @@ import { useBackNavigation } from "@/router";
 function routeLabel(path: string | null): string | null {
   if (!path) return null;
   const pathname = path.split(/[?#]/, 1)[0];
-  if (pathname === "/workspace") return "综合工作台";
-  if (pathname === "/workspace/scripts") return "脚本中心";
-  if (pathname === "/workspace/projects") return "项目中心";
+  if (pathname === "/workspace") return "工作台";
   if (pathname === "/workspace/library") return "素材库";
-  if (pathname === "/workspace/notifications") return "通知中心";
+  if (pathname === "/workspace/inspiration") return "灵感岛";
+  if (pathname === "/workspace/notifications") return "消息中心";
   if (pathname === "/workspace/help") return "帮助中心";
-  if (/^\/workspace\/projects\/[^/]+\/editor$/.test(pathname)) return "剪辑工作区";
-  if (/^\/workspace\/projects\/[^/]+$/.test(pathname)) return "项目主页";
-  if (/^\/workspace\/scripts\/[^/]+\/editor$/.test(pathname)) return "脚本编辑器";
+  if (/^\/workspace\/projects\/[^/]+$/.test(pathname)) return "项目工作台";
   return "上一页";
 }
 

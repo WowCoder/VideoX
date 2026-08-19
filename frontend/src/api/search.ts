@@ -1,6 +1,6 @@
 import { http } from "./client";
 
-export type GlobalSearchType = "project" | "script" | "asset" | "clip";
+export type GlobalSearchType = "project" | "project_script" | "asset" | "segment";
 
 export interface GlobalSearchItem {
   type: GlobalSearchType;

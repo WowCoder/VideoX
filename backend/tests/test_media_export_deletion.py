@@ -10,81 +10,7 @@ from fastapi import UploadFile
 
 from app.api.assets import _detect_container, _probe_upload_stream
 from app.api.jobs import _export_result_path
-from app.services.deletion import _timeline_asset_references
-from app.services.project_media import generated_kind
-from app.services.timeline_validation import validate_timeline_layout
 from app.tasks import export_tasks
-
-
-class ProjectMediaTests(unittest.TestCase):
-    def test_generated_kind_distinguishes_image_video_and_effect(self):
-        self.assertEqual(generated_kind("generated/images/a.png", "image"), "ai_image")
-        self.assertEqual(generated_kind("generated/videos/a.mp4", "video"), "ai_video")
-        self.assertEqual(generated_kind("generated/effects/a.mp4", "video"), "ai_effect_video")
-
-    def test_manual_generated_media_is_valid_without_asset(self):
-        issues = validate_timeline_layout(
-            [
-                {
-                    "id": "clip-1",
-                    "name": "素材箱 AI 视频",
-                    "track": "video",
-                    "start": 0,
-                    "duration": 5,
-                    "origin": "manual_generated",
-                    "generated_media_path": "generated/videos/a.mp4",
-                    "generated_media_type": "video",
-                }
-            ],
-            {},
-        )
-        self.assertEqual(issues, [])
-
-    def test_manual_generated_media_requires_storage_path(self):
-        issues = validate_timeline_layout(
-            [
-                {
-                    "name": "缺失文件",
-                    "track": "video",
-                    "start": 0,
-                    "duration": 5,
-                    "origin": "manual_generated",
-                    "generated_media_type": "video",
-                }
-            ],
-            {},
-        )
-        self.assertEqual(issues, ["AI 生成片段「缺失文件」缺少可用媒体"])
-
-    def test_audio_asset_is_rejected_on_video_track(self):
-        asset = SimpleNamespace(id="audio-1", duration=12, media_type="audio", has_audio=True)
-        issues = validate_timeline_layout(
-            [{
-                "name": "背景音乐",
-                "track": "video",
-                "asset_id": "audio-1",
-                "start": 0,
-                "duration": 5,
-                "source_start": 0,
-            }],
-            {"audio-1": asset},
-        )
-        self.assertIn("视频片段「背景音乐」引用的是音频素材", issues)
-
-    def test_silent_video_is_rejected_on_audio_track(self):
-        asset = SimpleNamespace(id="video-1", duration=12, media_type="video", has_audio=False)
-        issues = validate_timeline_layout(
-            [{
-                "name": "无声素材",
-                "track": "audio",
-                "asset_id": "video-1",
-                "start": 0,
-                "duration": 5,
-                "source_start": 0,
-            }],
-            {"video-1": asset},
-        )
-        self.assertIn("音频片段「无声素材」引用的素材没有可用音轨", issues)
 
 
 class AudioUploadDetectionTests(unittest.TestCase):
@@ -122,7 +48,10 @@ class AudioUploadDetectionTests(unittest.TestCase):
         self.assertEqual(result["openvma"], {
             "media_type": "audio",
             "has_audio": True,
-            "duration": 12.5,
+            "duration_ms": 12500,
+            "width": None,
+            "height": None,
+            "codec": None,
             "audio_codec": "flac",
             "sample_rate": 48000,
             "channels": 2,
@@ -177,6 +106,7 @@ class AudioExportFilterTests(unittest.TestCase):
                 "source_start": 2,
                 "start": 3,
                 "duration": 10,
+                "loop": True,
                 "audio": {
                     "volume": 80,
                     "muted": False,
@@ -190,6 +120,7 @@ class AudioExportFilterTests(unittest.TestCase):
         )
         command = mock_run.call_args.args[0]
         filter_complex = command[command.index("-filter_complex") + 1]
+        self.assertIn("-stream_loop", command)
         self.assertIn("asetpts=PTS-STARTPTS+3.000000/TB", filter_complex)
         self.assertIn("afade=t=in:st=0:d=1.000000", filter_complex)
         self.assertIn("afade=t=out:st=8.000000:d=2.000000", filter_complex)
@@ -241,7 +172,7 @@ class ExportResultPathTests(unittest.TestCase):
             result_path=None,
             type="导出",
             status="SUCCEEDED",
-            payload={"format": "prores"},
+            payload={"format": "mov"},
             project_id="project-1",
             id="job-1",
         )
@@ -257,18 +188,6 @@ class ExportResultPathTests(unittest.TestCase):
             id="job-1",
         )
         self.assertIsNone(_export_result_path(job))
-
-
-class DeletionImpactHelpersTests(unittest.TestCase):
-    def test_counts_only_matching_timeline_asset_references(self):
-        timeline = [
-            {"asset_id": "asset-1"},
-            {"asset_id": "asset-2"},
-            {"asset_id": "asset-1"},
-            {"generated_media_path": "generated/images/a.png"},
-        ]
-        self.assertEqual(_timeline_asset_references(timeline, "asset-1"), 2)
-        self.assertEqual(_timeline_asset_references(timeline, "asset-3"), 0)
 
 
 if __name__ == "__main__":

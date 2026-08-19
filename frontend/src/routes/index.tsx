@@ -1,53 +1,30 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import AppShell from "@/components/AppShell";
-import {
-  AuthModal,
-  UploadDrawer,
-  ScriptCreateModal,
-  AIScriptModal,
-  ProjectCreateModal,
-} from "@/components";
+import { AuthModal, ProjectCreateModal, ToastContainer, UploadDrawer } from "@/components";
 import { Navigate, RouteParams, matchPath, useLocation } from "@/router";
 import { useAuthStore } from "@/stores/authStore";
 
 const SiteHome = lazy(() => import("@/views/SiteHome"));
 const HomeDashboard = lazy(() => import("@/views/HomeDashboard"));
 const LibraryView = lazy(() => import("@/views/LibraryView"));
-const ScriptCenterView = lazy(() => import("@/views/ScriptCenterView"));
-const ScriptDetailView = lazy(() => import("@/views/ScriptDetailView"));
-const ProjectDetailView = lazy(() => import("@/views/ProjectDetailView"));
-const ProjectEditorView = lazy(() => import("@/views/ProjectEditorView"));
-const ProjectsView = lazy(() =>
-  import("@/views/SecondaryViews").then((module) => ({ default: module.ProjectsView })),
-);
+const ProjectWorkspaceView = lazy(() => import("@/views/ProjectWorkspaceView"));
+const InspirationView = lazy(() => import("@/views/InspirationView"));
 const AccountCenter = lazy(() => import("@/views/AccountCenter"));
 const HelpCenterView = lazy(() => import("@/views/HelpCenterView"));
 const WechatCallbackView = lazy(() => import("@/views/WechatCallbackView"));
 const NotificationsView = lazy(() => import("@/views/NotificationsView"));
-const TasksCenterView = lazy(() => import("@/views/TasksCenterView"));
-const InvitationView = lazy(() => import("@/views/InvitationView"));
+const ProductPreviewView = import.meta.env.DEV
+  ? lazy(() => import("@/dev/ProductPreviewView"))
+  : null;
 
 function RouteView({ children }: { children: ReactNode }) {
-  return (
-    <Suspense
-      fallback={(
-        <main className="flex min-h-screen items-center justify-center bg-canvas text-sm text-muted">
-          正在加载工作区…
-        </main>
-      )}
-    >
-      {children}
-    </Suspense>
-  );
+  return <Suspense fallback={<main className="flex min-h-screen items-center justify-center bg-canvas text-sm text-muted">正在加载工作区…</main>}>{children}</Suspense>;
 }
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const location = useLocation();
-  if (!isAuthenticated) {
-    return <Navigate to="/" replace state={{ from: location }} />;
-  }
-  return children;
+  return isAuthenticated ? children : <Navigate to="/" replace state={{ from: location }} />;
 }
 
 function WorkspaceLayout({ children }: { children: ReactNode }) {
@@ -56,9 +33,18 @@ function WorkspaceLayout({ children }: { children: ReactNode }) {
       <AppShell>{children}</AppShell>
       <AuthModal />
       <UploadDrawer />
-      <ScriptCreateModal />
-      <AIScriptModal />
       <ProjectCreateModal />
+    </RequireAuth>
+  );
+}
+
+function ProjectWorkspaceLayout({ children }: { children: ReactNode }) {
+  return (
+    <RequireAuth>
+      <div className="h-screen overflow-hidden bg-canvas">{children}</div>
+      <UploadDrawer />
+      <ProjectCreateModal />
+      <ToastContainer />
     </RequireAuth>
   );
 }
@@ -66,74 +52,38 @@ function WorkspaceLayout({ children }: { children: ReactNode }) {
 function workspaceView(pathname: string): ReactNode | null {
   if (pathname === "/workspace") return <HomeDashboard />;
   if (pathname === "/workspace/library") return <LibraryView />;
-  if (pathname === "/workspace/scripts") return <ScriptCenterView />;
-  if (pathname === "/workspace/projects") return <ProjectsView />;
+  if (pathname === "/workspace/inspiration") return <InspirationView />;
   if (pathname === "/workspace/help") return <HelpCenterView />;
   if (pathname === "/workspace/account") return <AccountCenter />;
   if (pathname === "/workspace/notifications") return <NotificationsView />;
-  if (pathname === "/workspace/tasks") return <TasksCenterView />;
-
-  const projectParams = matchPath("/workspace/projects/:projectId", pathname);
-  if (projectParams) {
-    return <RouteParams params={projectParams}><ProjectDetailView /></RouteParams>;
-  }
   return null;
 }
 
 export default function AppRouter() {
   const { pathname } = useLocation();
-
-  if (pathname === "/") {
-    return <><RouteView><SiteHome /></RouteView><AuthModal /></>;
+  if (pathname === "/") return <><RouteView><SiteHome /></RouteView><AuthModal /></>;
+  if (pathname === "/auth/wechat/callback") return <RouteView><WechatCallbackView /></RouteView>;
+  if (ProductPreviewView && pathname === "/workspace/library/__preview__") {
+    return <RouteView><ProductPreviewView type="library" /></RouteView>;
   }
-  if (pathname === "/workspace/scripts/editor") {
-    return <Navigate to="/workspace/scripts" replace />;
-  }
-  if (pathname === "/workspace/project" || pathname === "/workspace/project/editor") {
-    return <Navigate to="/workspace/projects" replace />;
+  if (ProductPreviewView && pathname === "/workspace/inspiration/__preview__") {
+    return <RouteView><ProductPreviewView type="inspiration" /></RouteView>;
   }
 
-  const scriptEditorParams = matchPath("/workspace/scripts/:scriptId/editor", pathname);
-  if (scriptEditorParams) {
+  const projectParams = matchPath("/workspace/projects/:projectId", pathname);
+  if (projectParams) {
+    const previewMode = import.meta.env.DEV && projectParams.projectId === "__preview__";
     return (
-      <RequireAuth>
-        <RouteParams params={scriptEditorParams}>
-          <RouteView><ScriptDetailView /></RouteView>
-        </RouteParams>
-      </RequireAuth>
-    );
-  }
-
-  const projectEditorParams = matchPath("/workspace/projects/:projectId/editor", pathname);
-  if (projectEditorParams) {
-    return (
-      <RequireAuth>
-        <RouteParams params={projectEditorParams}>
-          <RouteView><ProjectEditorView /></RouteView>
-        </RouteParams>
-        <UploadDrawer />
-      </RequireAuth>
+      previewMode ? <div className="h-screen overflow-hidden bg-canvas">
+        <RouteView><RouteParams params={projectParams}><ProjectWorkspaceView /></RouteParams></RouteView>
+      </div> : <ProjectWorkspaceLayout>
+        <RouteView><RouteParams params={projectParams}><ProjectWorkspaceView /></RouteParams></RouteView>
+      </ProjectWorkspaceLayout>
     );
   }
 
   const workspace = workspaceView(pathname);
-  if (workspace) {
-    return <WorkspaceLayout><RouteView>{workspace}</RouteView></WorkspaceLayout>;
-  }
-
-  if (pathname === "/auth/wechat/callback") {
-    return <RouteView><WechatCallbackView /></RouteView>;
-  }
-
-  const invitationParams = matchPath("/invite/:token", pathname);
-  if (invitationParams) {
-    return (
-      <RouteParams params={invitationParams}>
-        <RouteView><InvitationView /></RouteView>
-        <AuthModal />
-      </RouteParams>
-    );
-  }
-
-  return <Navigate to="/" replace />;
+  return workspace
+    ? <WorkspaceLayout><RouteView>{workspace}</RouteView></WorkspaceLayout>
+    : <Navigate to="/" replace />;
 }

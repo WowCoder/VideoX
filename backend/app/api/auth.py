@@ -48,7 +48,6 @@ async def _ensure_default_membership(db: AsyncSession):
             ai_video_quota=5,
             storage_gb=5,
             export_quota=10,
-            seat_quota=1,
             price=0.0,
         )
         db.add(free)

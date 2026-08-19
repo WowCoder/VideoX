@@ -4,20 +4,20 @@
 
 /* ── 设计令牌（CSS 变量，与 Tailwind 配置互补）── */
 :root {
-  --ink: #0c1730;
-  --ink-2: #132143;
-  --blue: #2865ed;
-  --blue-2: #1e53d5;
-  --blue-soft: #eaf1ff;
-  --teal: #17a890;
-  --amber: #d98a14;
-  --red: #d75151;
-  --text: #172036;
-  --muted: #68738a;
-  --line: #e2e7f0;
+  --ink: #171717;
+  --ink-2: #242424;
+  --blue: #171717;
+  --blue-2: #000000;
+  --blue-soft: #f0f0f1;
+  --teal: #357a58;
+  --amber: #9a681f;
+  --red: #b94747;
+  --text: #171717;
+  --muted: #73757b;
+  --line: #e5e5e7;
   --surface: #ffffff;
-  --canvas: #f3f6fb;
-  --shadow-soft: 0 8px 24px rgba(23, 35, 63, 0.07);
+  --canvas: #f7f7f8;
+  --shadow-soft: 0 16px 40px rgba(0, 0, 0, 0.08);
 }
 
 /* ── 全局重置 ── */
@@ -28,7 +28,7 @@
 }
 
 body {
-  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   color: var(--text);
   background: var(--canvas);
   -webkit-font-smoothing: antialiased;
@@ -40,6 +40,15 @@ button {
   cursor: pointer;
   border: none;
   background: none;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid #171717;
+  outline-offset: 2px;
 }
 
 input,
@@ -61,10 +70,101 @@ a {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(104, 115, 138, 0.3);
+  background: rgba(23, 23, 23, 0.22);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+::selection {
+  color: #fff;
+  background: #171717;
+}
+
+@layer components {
+  .workspace-page {
+    @apply mx-auto w-full max-w-[1440px] px-6 py-9 lg:px-9 lg:py-10;
+  }
+
+  .workspace-page-title {
+    @apply text-[30px] font-semibold leading-tight tracking-[-0.04em] text-text md:text-[34px];
+  }
+
+  .workspace-page-copy {
+    @apply mt-2 text-sm leading-6 text-muted;
+  }
+
+  .workspace-primary-button {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-[10px] bg-ink px-4 text-sm font-semibold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .workspace-secondary-button {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-[10px] border border-line bg-surface px-4 text-sm font-medium text-text transition hover:border-[#c8c8cb] hover:bg-canvas;
+  }
+
+  .workspace-panel {
+    @apply rounded-2xl border border-line bg-surface;
+  }
+
+  .account-section-tabs {
+    @apply flex gap-1 overflow-x-auto border-b border-line;
+    scrollbar-width: none;
+  }
+
+  .account-section-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .account-section-tab {
+    @apply relative inline-flex min-h-12 shrink-0 items-center gap-2 px-4 text-sm font-medium text-muted transition hover:text-text;
+  }
+
+  .account-section-tab::after {
+    content: "";
+    @apply absolute bottom-[-1px] left-4 right-4 h-0.5 bg-transparent;
+  }
+
+  .account-section-tab.is-active {
+    @apply text-text;
+  }
+
+  .account-section-tab.is-active::after {
+    @apply bg-ink;
+  }
+}
+
+/*
+ * 运行中的 Vite/Tailwind 开发容器会缓存配置文件生成的工具类。这里用稳定的
+ * 语义覆盖确保开发态、生产构建和热更新看到完全一致的黑白主题。
+ */
+.bg-ink,
+.bg-blue {
+  background-color: #171717 !important;
+}
+
+.hover\:bg-blue-2:hover {
+  background-color: #000 !important;
+}
+
+.bg-blue-soft,
+.bg-blue-soft\/20,
+.bg-blue-soft\/30,
+.bg-blue-soft\/40,
+.bg-blue-soft\/60 {
+  background-color: #f0f0f1 !important;
+}
+
+.text-blue,
+.hover\:text-blue:hover {
+  color: #171717 !important;
+}
+
+.border-blue,
+.border-blue\/20,
+.border-blue\/30,
+.hover\:border-blue:hover,
+.focus\:border-blue:focus {
+  border-color: #171717 !important;
 }

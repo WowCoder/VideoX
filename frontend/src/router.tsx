@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { temporaryId } from "@/stores/workspaceTransforms";
 
 export interface AppLocation {
   pathname: string;
@@ -57,9 +58,7 @@ const SESSION_ID_KEY = "openvma:navigation-session";
 const SCROLL_STORAGE_PREFIX = "openvma:scroll:";
 
 function createKey(): string {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return temporaryId("navigation");
 }
 
 function getSessionId(): string {

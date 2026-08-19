@@ -1,75 +1,83 @@
-"""素材 Schema。"""
+"""全局素材库 Schema。"""
 
 from datetime import datetime
-from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class ClipOut(BaseModel):
+MediaType = Literal["image", "video", "audio"]
+
+
+class AssetSegmentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     asset_id: str
-    start_time: float
-    end_time: float
-    duration: float
+    start_ms: int
+    end_ms: int
+    duration_ms: int
     title: str
-    transcript_segment: str
-    ocr_segment: str = ""
-    scene_type: Optional[str] = None
-    shot_type: Optional[str] = None
-    camera_motion: Optional[str] = None
-    persons: list = []
-    objects: list = []
-    thumbnail_path: Optional[str] = None
-    thumbnail_url: Optional[str] = None
-    variant: str
+    transcript: str
+    ocr_text: str
+    tags: list = []
+    recognition: dict = {}
     quality_score: float
-
-    class Config:
-        from_attributes = True
+    thumbnail_url: str | None = None
 
 
 class AssetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
-    project_id: str
-    imported_from_asset_id: Optional[str] = None
+    owner_id: str
     name: str
-    duration: float
+    media_type: MediaType
+    source_type: str
+    source_category: Literal["ai", "non-ai"] = "non-ai"
+    content_types: list[Literal["scene", "role", "object", "event"]] = []
     status: str
-    source: str
-    variant: str
-    media_type: str = "video"
-    has_audio: bool = False
-    media_url: Optional[str] = None
-    thumbnail_url: Optional[str] = None
+    processing_status: str
+    mime_type: str | None = None
+    duration_ms: int
+    width: int | None = None
+    height: int | None = None
+    has_audio: bool
     file_size_mb: float
-    resolution: Optional[str] = None
-    fps: float
-    codec: Optional[str] = None
-    audio_codec: Optional[str] = None
-    sample_rate: Optional[int] = None
-    channels: Optional[int] = None
-    bitrate: Optional[int] = None
-    transcript: Optional[str] = None
-    ocr_text: Optional[str] = None
     tags: list = []
-    match_field: Optional[str] = None
-    match_excerpt: Optional[str] = None
-    matched_clip_id: Optional[str] = None
-    uploaded_at: datetime
-    created_at: Optional[datetime] = None
-    clips: list[ClipOut] = []
+    recognition: dict = {}
+    media_url: str | None = None
+    thumbnail_url: str | None = None
+    match_field: str | None = None
+    match_excerpt: str | None = None
+    matched_segment_id: str | None = None
+    project_ids: list[str] = []
+    segments: list[AssetSegmentOut] = []
+    created_at: datetime
+    updated_at: datetime
 
-    class Config:
-        from_attributes = True
 
-
-class AssetListOut(BaseModel):
+class AssetCursorListOut(BaseModel):
     items: list[AssetOut]
-    total: int
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 class UploadResponse(BaseModel):
     asset_id: str
     name: str
+    media_type: MediaType
     status: str
-    job_id: str
+    job_id: str | None = None
+
+
+class AssetLinkRequest(BaseModel):
+    role: str = Field("source", pattern="^(source|reference|shot_media|audio|cover|render_output)$")
+
+
+class AssetDeleteImpactOut(BaseModel):
+    can_delete: bool
+    project_count: int
+    shot_count: int
+    composition_count: int
+    blockers: list[str] = []
