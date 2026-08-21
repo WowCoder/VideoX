@@ -15,7 +15,7 @@ from app.api.assets import (
     asset_out,
 )
 from app.api.billing import InvoiceCreateRequest, UpgradeRequest
-from app.api.generate import _resolve_shot_ids, router as generate_router
+from app.api.generate import _generation_prompt, _resolve_shot_ids, router as generate_router
 from app.api.inspiration import router as inspiration_router
 from app.api.notifications import _job_feed_link, _job_feed_type, router as notifications_router
 from app.api.projects import _idempotent_project_id, router as projects_router
@@ -65,6 +65,51 @@ class TaskPriorityTests(unittest.TestCase):
         self.assertLess(team, pro)
         self.assertLess(pro, free)
         self.assertEqual((team, pro, free), (0, 4, 9))
+
+
+class GenerationPromptTests(unittest.TestCase):
+    def test_bulk_generation_uses_each_shot_description(self):
+        scene = ScriptUnit(intent="展示产品能力", narration_text="旁白内容")
+        shot = Shot(description="机器人在未来实验室中启动", unit=scene)
+
+        prompt = _generation_prompt(
+            shot,
+            {
+                "use_shot_descriptions": True,
+                "additional_instruction": "保持主角外观一致",
+                "style": "电影质感",
+            },
+            "prompt",
+        )
+
+        self.assertEqual(
+            prompt,
+            "机器人在未来实验室中启动。全局补充要求：保持主角外观一致。视觉风格：电影质感。",
+        )
+
+    def test_bulk_generation_falls_back_to_scene_intent(self):
+        scene = ScriptUnit(intent="展示产品能力", narration_text="旁白内容")
+        shot = Shot(description="", unit=scene)
+
+        prompt = _generation_prompt(
+            shot,
+            {"use_shot_descriptions": True, "style": "真实纪实"},
+            "prompt",
+        )
+
+        self.assertEqual(prompt, "展示产品能力。视觉风格：真实纪实。")
+
+    def test_single_shot_generation_keeps_explicit_description(self):
+        scene = ScriptUnit(intent="不应覆盖显式描述")
+        shot = Shot(description="数据库中的旧描述", unit=scene)
+
+        prompt = _generation_prompt(
+            shot,
+            {"prompt": "用户为当前镜头修改的描述", "style": "科技未来"},
+            "prompt",
+        )
+
+        self.assertEqual(prompt, "用户为当前镜头修改的描述。视觉风格：科技未来。")
 
 
 class UploadSizeValidationTests(unittest.TestCase):
@@ -603,6 +648,8 @@ class ScopeAndRouteTests(unittest.TestCase):
         self.assertIn("/{project_id}/scenes/{scene_id}", project_paths)
         self.assertIn("/{project_id}/undo", project_paths)
         self.assertIn("/projects/{project_id}/operations", generate_paths)
+        self.assertIn("/creation-previews/script", generate_paths)
+        self.assertIn("/creation-previews/assets", generate_paths)
         self.assertIn("/tasks/{task_id}/run", inspiration_paths)
         self.assertIn("/feed", notification_paths)
 

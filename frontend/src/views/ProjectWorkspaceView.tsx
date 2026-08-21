@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -22,6 +22,10 @@ import { useProjectStore } from "@/stores/projectStore";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { MvpScriptComposer } from "./MvpScriptComposer";
 import { AIScriptGeneratorModal, type AIScriptRequest } from "@/components/AIScriptGeneratorModal";
+import { QuickAIGenerateModal, type GenerationKind } from "@/components/QuickAIGenerateModal";
+import { ProjectTaskButton, ProjectTaskPanel } from "@/components/ProjectTaskPanel";
+import { ProjectOverview } from "./ProjectOverview";
+import type { Job } from "@/types/models";
 
 const saveLabels = {
   idle: "尚未加载",
@@ -50,16 +54,19 @@ export default function ProjectWorkspaceView() {
   const queryClient = useQueryClient();
   const notify = useUIStore((state) => state.notify);
   const openUploadDrawer = useUIStore((state) => state.openUploadDrawer);
+  const openProjectEdit = useUIStore((state) => state.openProjectEdit);
   const setCurrentProject = useProjectStore((state) => state.setCurrentProject);
   const store = useWorkspaceStore();
-  const [scopeType] = useState<OperationScope["type"]>("shot");
   const [operationError, setOperationError] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportAspectRatio, setExportAspectRatio] = useState("16:9");
   const [exportResolution, setExportResolution] = useState("1080p");
-  const [aiScriptOpen, setAiScriptOpen] = useState(
-    () => new URLSearchParams(location.search).get("start") === "ai-script",
-  );
+  const [aiScriptOpen, setAiScriptOpen] = useState(false);
+  const [quickAIOpen, setQuickAIOpen] = useState(false);
+  const [quickAIKind, setQuickAIKind] = useState<GenerationKind>("image");
+  const [quickAIScope, setQuickAIScope] = useState<"project" | "scene" | "shot">("shot");
+  const [taskPanelOpen, setTaskPanelOpen] = useState(false);
+  const [submittedJobs, setSubmittedJobs] = useState<Job[]>([]);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -122,7 +129,7 @@ export default function ProjectWorkspaceView() {
           : null;
 
   const operationMutation = useMutation({
-    mutationFn: async ({ operation, parameters = {} }: { operation: ProjectOperation; parameters?: Record<string, unknown> }) => {
+    mutationFn: async ({ operation, parameters = {}, scope }: { operation: ProjectOperation; parameters?: Record<string, unknown>; scope?: OperationScope }) => {
       if (!workspace) throw new Error("项目尚未加载");
       await store.save("before_ai_operation");
       const currentState = useWorkspaceStore.getState();
@@ -132,13 +139,14 @@ export default function ProjectWorkspaceView() {
         ?? current.document.storyboard.scenes[0];
       const currentShot = currentScene?.shots.find((shot) => shot.id === currentState.selectedShotId)
         ?? currentScene?.shots[0];
-      const operationScope: OperationScope = ["compose", "export", "match_assets", "generate_script"].includes(operation)
-        ? { type: "project" }
-        : scopeType === "scene" && currentScene?.id
-          ? { type: "scene", sceneIds: [currentScene.id] }
-          : scopeType === "shot" && currentShot?.id
+      const operationScope: OperationScope = scope
+        ?? (["compose", "export", "match_assets", "generate_script"].includes(operation)
+          ? { type: "project" }
+          : currentShot?.id
             ? { type: "shot", shotIds: [currentShot.id] }
-            : { type: "project" };
+            : currentScene?.id
+              ? { type: "scene", sceneIds: [currentScene.id] }
+              : { type: "project" });
       return executeProjectOperation(current.project.id, {
         scope: operationScope,
         operation,
@@ -150,7 +158,10 @@ export default function ProjectWorkspaceView() {
       setOperationError(null);
       if (variables.operation === "export") setExportOpen(false);
       if (variables.operation === "generate_script") setAiScriptOpen(false);
-      notify(`${operationLabels[variables.operation]}已创建 ${jobs.length} 个任务`);
+      if (["generate_image", "generate_video", "generate_effect"].includes(variables.operation)) setQuickAIOpen(false);
+      setSubmittedJobs(jobs);
+      setTaskPanelOpen(true);
+      notify(`${operationLabels[variables.operation]}已创建 ${jobs.length} 个任务，可在任务面板持续查看`);
       if (variables.operation === "generate_script" && jobs[0]) {
         void refreshWhenScriptJobFinishes(jobs[0].id);
       }
@@ -164,6 +175,18 @@ export default function ProjectWorkspaceView() {
       notify(message, "error");
     },
   });
+
+  const refreshAfterTaskUpdate = useCallback(() => {
+    void useWorkspaceStore.getState().reloadServer();
+    void queryClient.invalidateQueries({ queryKey: ["projects"] });
+    void queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    void queryClient.invalidateQueries({ queryKey: ["notifications-page"] });
+  }, [queryClient]);
+
+  const focusedJobId = new URLSearchParams(location.search).get("job") ?? undefined;
+  useEffect(() => {
+    if (focusedJobId) setTaskPanelOpen(true);
+  }, [focusedJobId]);
 
   if (store.loading) {
     return <div className="flex min-h-[60vh] items-center justify-center text-sm text-muted"><Loader2 size={20} className="mr-2 animate-spin" />正在加载项目工作台…</div>;
@@ -208,13 +231,66 @@ export default function ProjectWorkspaceView() {
     }
   }
 
+  // 项目的主任务是继续创作，因此默认进入编辑器；概览只作为显式的辅助视图。
+  const editorMode = new URLSearchParams(location.search).get("view") !== "overview";
+
+  function openQuickAI(scope: "project" | "scene" | "shot" = "shot", kind: GenerationKind = "image") {
+    setOperationError(null);
+    setQuickAIKind(kind);
+    setQuickAIScope(scope);
+    setQuickAIOpen(true);
+  }
+
+  const taskPanel = (
+    <ProjectTaskPanel
+      projectId={workspace.project.id}
+      projectName={workspace.project.name}
+      scenes={workspace.document.storyboard.scenes}
+      open={taskPanelOpen}
+      submittedJobs={submittedJobs}
+      focusJobId={focusedJobId}
+      onClose={() => setTaskPanelOpen(false)}
+      onTerminalUpdate={refreshAfterTaskUpdate}
+    />
+  );
+
+  if (!editorMode) {
+    return (
+      <div className="h-full min-h-0 bg-canvas">
+        <ProjectOverview
+          workspace={workspace}
+          onBack={() => navigate("/workspace")}
+          onEnterEditor={() => navigate(`/workspace/projects/${workspace.project.id}`)}
+          onEditProject={() => openProjectEdit(workspace.project)}
+          onUpload={() => openUploadDrawer(workspace.project.id)}
+          onOpenQuickAI={() => openQuickAI("project")}
+          onOpenTasks={() => setTaskPanelOpen(true)}
+        />
+        <QuickAIGenerateModal
+          open={quickAIOpen}
+          projectName={workspace.project.name}
+          scenes={workspace.document.storyboard.scenes}
+          selectedScene={selectedScene}
+          selectedShot={selectedShot}
+          initialKind={quickAIKind}
+          initialScope={quickAIScope}
+          pending={operationMutation.isPending}
+          error={operationError}
+          onClose={() => !operationMutation.isPending && setQuickAIOpen(false)}
+          onGenerate={(operation, scope, parameters) => operationMutation.mutate({ operation, scope, parameters })}
+        />
+        {taskPanel}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-canvas">
       <header className="relative z-20 shrink-0 border-b border-line bg-surface/95 px-4 py-2.5 backdrop-blur-xl">
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
-          <div className="flex min-w-0 items-center gap-3"><button type="button" onClick={() => navigate("/workspace")} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted hover:bg-canvas hover:text-text" aria-label="返回工作台"><ArrowLeft size={17} /></button><button type="button" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-ink text-xs font-bold text-white" aria-label="当前项目">{workspace.project.initial}</button><label className="min-w-0"><span className="sr-only">影片名称</span><input value={workspace.project.name} onChange={(event) => store.updateProject({ name: event.target.value })} className="w-full min-w-[180px] bg-transparent text-sm font-semibold text-text outline-none" aria-label="影片名称" /></label></div>
+          <div className="flex min-w-0 items-center gap-3"><button type="button" onClick={() => navigate("/workspace")} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted hover:bg-canvas hover:text-text" aria-label="返回工作台"><ArrowLeft size={17} /></button><button type="button" onClick={() => navigate(`/workspace/projects/${workspace.project.id}?view=overview`)} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-ink text-xs font-bold text-white" aria-label="打开项目概览" title="项目概览">{workspace.project.initial}</button><label className="min-w-0"><span className="sr-only">影片名称</span><input value={workspace.project.name} onChange={(event) => store.updateProject({ name: event.target.value })} className="w-full min-w-[180px] bg-transparent text-sm font-semibold text-text outline-none" aria-label="影片名称" /></label></div>
           <div className="flex items-center gap-2 rounded-full bg-canvas px-3 py-1.5 text-xs text-muted"><FileText size={13} /><span>脚本编排</span><i className="h-1 w-1 rounded-full bg-line" /><strong className="flex items-center gap-1 font-medium text-teal"><span className="h-1.5 w-1.5 rounded-full bg-teal" />实时预览</strong></div>
-          <div className="flex items-center justify-end gap-3"><span className={`flex items-center gap-1.5 text-xs ${saveTone}`}>{store.saveState === "saving" ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}{saveLabels[store.saveState]}</span><button type="button" onClick={openExportDialog} disabled={operationMutation.isPending} className="flex items-center gap-1.5 rounded-lg bg-blue px-3.5 py-2 text-xs font-semibold text-white disabled:opacity-50"><Download size={14} />导出</button></div>
+          <div className="flex items-center justify-end gap-2"><span className={`mr-1 flex items-center gap-1.5 text-xs ${saveTone}`}>{store.saveState === "saving" ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}{saveLabels[store.saveState]}</span><ProjectTaskButton projectId={workspace.project.id} submittedJobs={submittedJobs} open={taskPanelOpen} onOpen={() => setTaskPanelOpen(true)} /><button type="button" onClick={openExportDialog} disabled={operationMutation.isPending} className="flex items-center gap-1.5 rounded-lg bg-blue px-3.5 py-2 text-xs font-semibold text-white disabled:opacity-50"><Download size={14} />导出</button></div>
         </div>
         {(store.saveError || operationError) && <div className="mt-2 flex items-center gap-2 rounded-lg bg-red/5 px-3 py-2 text-xs text-red"><AlertTriangle size={14} />{store.saveError ?? operationError}{store.saveState === "conflict" && <button type="button" onClick={() => void store.reloadServer()} className="ml-auto font-semibold underline">重新加载服务器版本</button>}</div>}
       </header>
@@ -245,10 +321,13 @@ export default function ProjectWorkspaceView() {
         onDeleteScene={() => void deleteScene()}
         onDeleteShot={() => void deleteShot()}
         onUpload={() => openUploadDrawer(workspace.project.id)}
-        onRunOperation={(operation) => operationMutation.mutate({ operation })}
+        onRunOperation={(operation, parameters, scope) => operationMutation.mutate({ operation, parameters, scope })}
+        onOpenQuickAI={(scope, kind) => openQuickAI(scope, kind)}
       />
+      {taskPanel}
       {exportOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-ink/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="export-dialog-title"><section className="w-full max-w-md overflow-hidden rounded-2xl border border-line bg-white shadow-2xl"><header className="flex items-start justify-between border-b border-line px-5 py-4"><div className="flex gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-blue-soft text-blue"><Download size={17} /></span><div><h2 id="export-dialog-title" className="text-sm font-semibold text-text">导出主成片</h2><p className="mt-1 text-[11px] leading-5 text-muted">一个项目对应一支主成片，导出时可以适配其他画幅。</p></div></div><button type="button" aria-label="关闭导出设置" onClick={() => setExportOpen(false)} disabled={operationMutation.isPending} className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-canvas disabled:opacity-40"><X size={15} /></button></header><div className="space-y-5 px-5 py-5"><fieldset><legend className="text-xs font-semibold text-text">导出画幅</legend><div className="mt-2 grid grid-cols-3 gap-2">{["16:9", "9:16", "1:1"].map((aspectRatio) => <button key={aspectRatio} type="button" onClick={() => setExportAspectRatio(aspectRatio)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${exportAspectRatio === aspectRatio ? "border-blue bg-blue-soft text-blue" : "border-line text-muted hover:border-blue/40"}`}>{aspectRatio}</button>)}</div></fieldset><fieldset><legend className="text-xs font-semibold text-text">清晰度</legend><div className="mt-2 grid grid-cols-2 gap-2">{[["1080p", "1080P"], ["4k", "4K"]].map(([value, label]) => <button key={value} type="button" onClick={() => setExportResolution(value)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${exportResolution === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted hover:border-blue/40"}`}>{label}</button>)}</div></fieldset><div className="rounded-xl bg-canvas px-4 py-3"><strong className="block truncate text-xs text-text">{workspace.project.name}</strong><span className="mt-1 block text-[11px] text-muted">{Math.round(workspace.document.timeline.durationMs / 1000)} 秒 · MP4 · {exportAspectRatio} · {exportResolution === "4k" ? "4K" : "1080P"} · 自动适配字幕安全区</span></div></div><footer className="flex justify-end gap-2 border-t border-line bg-canvas/60 px-5 py-4"><button type="button" onClick={() => setExportOpen(false)} disabled={operationMutation.isPending} className="rounded-lg border border-line bg-white px-4 py-2 text-xs font-medium text-text disabled:opacity-40">取消</button><button type="button" onClick={() => operationMutation.mutate({ operation: "export", parameters: { format: "mp4", resolution: exportResolution, aspect_ratio: exportAspectRatio } })} disabled={operationMutation.isPending || workspace.project.id === "__preview__"} className="flex items-center gap-1.5 rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{operationMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}{workspace.project.id === "__preview__" ? "预览模式" : operationMutation.isPending ? "正在创建任务…" : "开始导出"}</button></footer></section></div>}
       <AIScriptGeneratorModal open={aiScriptOpen} projectName={workspace.project.name} existingSceneCount={workspace.document.storyboard.scenes.length} pending={operationMutation.isPending} error={operationError} onClose={() => !operationMutation.isPending && setAiScriptOpen(false)} onGenerate={(request: AIScriptRequest) => operationMutation.mutate({ operation: "generate_script", parameters: request })} />
+      <QuickAIGenerateModal open={quickAIOpen} projectName={workspace.project.name} scenes={workspace.document.storyboard.scenes} selectedScene={selectedScene} selectedShot={selectedShot} initialKind={quickAIKind} initialScope={quickAIScope} pending={operationMutation.isPending} error={operationError} onClose={() => !operationMutation.isPending && setQuickAIOpen(false)} onGenerate={(operation, scope, parameters) => operationMutation.mutate({ operation, scope, parameters })} />
     </div>
   );
 }

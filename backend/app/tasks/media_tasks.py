@@ -251,6 +251,87 @@ async def _recognize_image(local_path: str) -> str:
         delete_file(temporary_path)
 
 
+def _recognition_tags(recognition: dict) -> list[str]:
+    tags = [str(item).strip() for item in recognition.get("tags", []) if str(item).strip()]
+    for key in ("spaces", "people", "objects", "actions"):
+        for entity in recognition.get(key, []) if isinstance(recognition.get(key), list) else []:
+            if isinstance(entity, dict):
+                tags.extend(
+                    value for value in (
+                        str(entity.get("label") or "").strip(),
+                        str(entity.get("role") or "").strip(),
+                    ) if value
+                )
+    return list(dict.fromkeys(tags))[:20]
+
+
+def _aggregate_recognition(recognitions: list[dict], status: str = "ready") -> dict:
+    summaries = [
+        summary
+        for summary in dict.fromkeys(str(item.get("summary") or "").strip() for item in recognitions)
+        if summary
+    ]
+    aggregate: dict = {
+        "analysis_status": status,
+        "summary": "；".join(summaries)[:2000],
+        "spaces": [],
+        "people": [],
+        "objects": [],
+        "actions": [],
+        "tags": [],
+    }
+    for key in ("spaces", "people", "objects", "actions"):
+        seen: set[tuple[str, str]] = set()
+        for recognition in recognitions:
+            for entity in recognition.get(key, []) if isinstance(recognition.get(key), list) else []:
+                if not isinstance(entity, dict):
+                    continue
+                identity = (
+                    str(entity.get("label") or "").strip().casefold(),
+                    str(entity.get("role") or "").strip().casefold(),
+                )
+                if not identity[0] or identity in seen:
+                    continue
+                seen.add(identity)
+                aggregate[key].append(entity)
+        aggregate[key] = aggregate[key][:50]
+    aggregate["tags"] = list(dict.fromkeys(
+        tag for recognition in recognitions for tag in _recognition_tags(recognition)
+    ))[:30]
+    if recognitions:
+        aggregate["provider"] = recognitions[0].get("provider")
+        aggregate["model"] = recognitions[0].get("model")
+        quality_values: dict[str, list[float]] = {
+            "sharpness": [], "stability": [], "exposure": [], "usable_score": [],
+        }
+        for recognition in recognitions:
+            quality = recognition.get("quality") if isinstance(recognition.get("quality"), dict) else {}
+            for key in quality_values:
+                if isinstance(quality.get(key), (int, float)):
+                    quality_values[key].append(float(quality[key]))
+        aggregate["quality"] = {
+            key: round(sum(values) / len(values), 2)
+            for key, values in quality_values.items() if values
+        }
+        representative = max(
+            recognitions,
+            key=lambda item: float((item.get("quality") or {}).get("usable_score") or 0),
+        )
+        if isinstance(representative.get("shot"), dict):
+            aggregate["shot"] = representative["shot"]
+    return aggregate
+
+
+async def _visual_recognitions(items: list[dict]) -> dict[int, dict]:
+    from app.services.ai_provider import analyze_visual_segments
+
+    results: dict[int, dict] = {}
+    for offset in range(0, len(items), 12):
+        for recognition in await analyze_visual_segments(items[offset:offset + 12]):
+            results[int(recognition["index"])] = recognition
+    return results
+
+
 @celery_app.task(bind=True, name="app.tasks.process_asset")
 def process_asset(self, asset_id: str, job_id: str):
     run_async(_process_asset_async(asset_id, job_id))
@@ -297,7 +378,30 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
                     asset.ocr_text = (await _recognize_image(local_path)).strip()
                 except Exception:
                     asset.ocr_text = ""
-                embedding_text = " ".join(value for value in (asset.name, asset.ocr_text or "") if value)
+                await _update_job(job_id, stage="视觉理解", progress=60)
+                try:
+                    visual = (await _visual_recognitions([{
+                        "index": 0,
+                        "local_path": thumbnail_local,
+                        "ocr": asset.ocr_text or "",
+                    }])).get(0, {})
+                    if not visual:
+                        raise RuntimeError("视觉模型没有返回图片识别结果")
+                    asset.recognition = _aggregate_recognition([visual])
+                    asset.tags = list(dict.fromkeys([*(asset.tags or []), *_recognition_tags(visual)]))[:20]
+                except Exception as exc:
+                    asset.recognition = {
+                        "analysis_status": "failed" if settings.has_vision else "disabled",
+                        "summary": "",
+                        "error": str(exc)[:300],
+                    }
+                    visual = asset.recognition
+                embedding_text = " ".join(value for value in (
+                    asset.name,
+                    asset.ocr_text or "",
+                    str(visual.get("summary") or ""),
+                    " ".join(asset.tags or []),
+                ) if value)
                 embedding, embedding_status, embedding_model = await _embedding(embedding_text)
                 session.add(
                     AssetSegment(
@@ -306,6 +410,8 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
                         end_ms=0,
                         title=asset.name,
                         ocr_text=asset.ocr_text or "",
+                        tags=asset.tags or [],
+                        recognition=visual,
                         thumbnail_path=thumbnail_path,
                         embedding=embedding,
                         embedding_model=embedding_model,
@@ -313,7 +419,7 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
                         embedding_status=embedding_status,
                         embedding_source_hash=hashlib.sha256(embedding_text.encode()).hexdigest(),
                         embedding_updated_at=datetime.now(timezone.utc) if embedding else None,
-                        quality_score=min(100.0, ((asset.width or 0) * (asset.height or 0)) / 20736),
+                        quality_score=float((visual.get("quality") or {}).get("usable_score") or min(100.0, ((asset.width or 0) * (asset.height or 0)) / 20736)),
                     )
                 )
 
@@ -345,6 +451,15 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
                         )
                 except Exception:
                     asset.transcript = ""
+                asset.recognition = {
+                    "analysis_status": "text_only",
+                    "summary": (asset.transcript or "")[:1000],
+                    "spaces": [],
+                    "people": [],
+                    "objects": [],
+                    "actions": [],
+                    "tags": [],
+                }
                 embedding_text = " ".join(value for value in (asset.name, asset.transcript or "") if value)
                 embedding, embedding_status, embedding_model = await _embedding(embedding_text)
                 session.add(
@@ -354,6 +469,7 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
                         end_ms=asset.duration_ms,
                         title=asset.name,
                         transcript=asset.transcript or "",
+                        recognition=asset.recognition,
                         embedding=embedding,
                         embedding_model=embedding_model,
                         embedding_dimensions=settings.ai_embedding_dimensions if embedding else None,
@@ -413,6 +529,7 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
 
                 await _update_job(job_id, stage="镜头切分", progress=65)
                 scenes = _detect_scenes(local_path, info["duration"])
+                segment_drafts: list[dict] = []
                 for index, (start, end) in enumerate(scenes):
                     start_ms, end_ms = round(start * 1000), round(end * 1000)
                     transcript = ""
@@ -424,9 +541,10 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
                         dict.fromkeys(text for timestamp, text in observations if start_ms <= timestamp < end_ms)
                     )
                     thumbnail_path = None
+                    thumbnail_local = None
                     try:
                         thumbnail_local = os.path.join(temp_dir, f"thumb-{index}.jpg")
-                        _extract_thumbnail(local_path, start, thumbnail_local)
+                        _extract_thumbnail(local_path, (start + end) / 2, thumbnail_local)
                         thumbnail_path = f"thumbnails/{asset.id}/{index:04d}.jpg"
                         with open(thumbnail_local, "rb") as stream:
                             upload_file(thumbnail_path, stream.read(), "image/jpeg")
@@ -434,28 +552,82 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
                             asset.thumbnail_path = thumbnail_path
                     except Exception:
                         pass
+                    segment_drafts.append({
+                        "index": index,
+                        "start_ms": start_ms,
+                        "end_ms": end_ms,
+                        "transcript": transcript,
+                        "ocr_text": ocr_text,
+                        "thumbnail_path": thumbnail_path,
+                        "thumbnail_local": thumbnail_local if thumbnail_local and os.path.exists(thumbnail_local) else None,
+                    })
+
+                await _update_job(job_id, stage="视觉理解", progress=78)
+                visual_inputs = [
+                    {
+                        "index": draft["index"],
+                        "local_path": draft["thumbnail_local"],
+                        "transcript": draft["transcript"],
+                        "ocr": draft["ocr_text"],
+                    }
+                    for draft in segment_drafts if draft["thumbnail_local"]
+                ]
+                visual_failure = ""
+                try:
+                    visual_by_index = await _visual_recognitions(visual_inputs) if visual_inputs else {}
+                except Exception as exc:
+                    visual_by_index = {}
+                    visual_failure = str(exc)[:300]
+
+                completed_recognitions: list[dict] = []
+                for draft in segment_drafts:
+                    index = draft["index"]
+                    recognition = visual_by_index.get(index, {
+                        "analysis_status": "failed" if settings.has_vision else "disabled",
+                        "summary": "",
+                        "error": visual_failure or "没有可用代表帧",
+                    })
+                    if "analysis_status" not in recognition:
+                        recognition["analysis_status"] = "ready"
+                    if recognition.get("analysis_status") == "ready":
+                        completed_recognitions.append(recognition)
+                    segment_tags = list(dict.fromkeys([*(asset.tags or []), *_recognition_tags(recognition)]))[:20]
                     embedding_text = " ".join(
-                        value for value in (transcript, ocr_text, " ".join(asset.tags or [])) if value
+                        value for value in (
+                            draft["transcript"],
+                            draft["ocr_text"],
+                            str(recognition.get("summary") or ""),
+                            " ".join(segment_tags),
+                        ) if value
                     )
                     embedding, embedding_status, embedding_model = await _embedding(embedding_text)
                     session.add(
                         AssetSegment(
                             asset_id=asset.id,
-                            start_ms=start_ms,
-                            end_ms=end_ms,
-                            title=f"片段 {index + 1}",
-                            transcript=transcript,
-                            ocr_text=ocr_text,
-                            tags=asset.tags or [],
-                            thumbnail_path=thumbnail_path,
+                            start_ms=draft["start_ms"],
+                            end_ms=draft["end_ms"],
+                            title=(str(recognition.get("summary") or "").strip()[:120] or f"片段 {index + 1}"),
+                            transcript=draft["transcript"],
+                            ocr_text=draft["ocr_text"],
+                            tags=segment_tags,
+                            recognition=recognition,
+                            thumbnail_path=draft["thumbnail_path"],
                             embedding=embedding,
                             embedding_model=embedding_model,
                             embedding_dimensions=settings.ai_embedding_dimensions if embedding else None,
                             embedding_status=embedding_status,
                             embedding_source_hash=hashlib.sha256(embedding_text.encode()).hexdigest() if embedding_text else None,
                             embedding_updated_at=datetime.now(timezone.utc) if embedding else None,
+                            quality_score=float((recognition.get("quality") or {}).get("usable_score") or 0),
                         )
                     )
+                asset.recognition = _aggregate_recognition(
+                    completed_recognitions,
+                    "ready" if completed_recognitions else ("failed" if settings.has_vision else "disabled"),
+                )
+                if visual_failure:
+                    asset.recognition["error"] = visual_failure
+                asset.tags = list(dict.fromkeys([*(asset.tags or []), *(asset.recognition.get("tags") or [])]))[:20]
 
             asset.status = "ready"
             asset.processing_status = "ready"

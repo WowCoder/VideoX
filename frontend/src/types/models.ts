@@ -47,6 +47,8 @@ export interface JobLog {
 export interface Job {
   id: string;
   projectId?: string;
+  subjectType?: string;
+  subjectId?: string;
   name: string;
   type: JobType;
   status: JobStatus;
@@ -67,6 +69,7 @@ export interface Job {
   };
   isSimulated: boolean;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface PaginatedResponse<T> {

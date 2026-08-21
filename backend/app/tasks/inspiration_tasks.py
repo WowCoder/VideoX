@@ -297,7 +297,7 @@ async def _run_inspiration_task(task_id: str, run_id: str, job_id: str) -> None:
                     content=content,
                     citations=citations,
                     model_provider=get_settings().ai_text_provider,
-                    model_name=get_settings().ai_text_model,
+                    model_name=get_settings().active_text_model,
                 )
                 session.add(result)
 

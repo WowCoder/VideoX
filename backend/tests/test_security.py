@@ -61,6 +61,33 @@ class ProductionSettingsTests(unittest.TestCase):
         settings = Settings(_env_file=None, compose_only_value="ignored")
         self.assertEqual(settings.environment, "development")
 
+    def test_agnes_is_accepted_and_uses_provider_specific_models(self):
+        settings = Settings(
+            _env_file=None,
+            agnes_api_key="test-agnes-key",
+            ai_text_provider="agnes",
+            ai_vision_provider="agnes",
+            ai_image_provider="agnes",
+            ai_text_to_video_provider="agnes",
+            ai_image_to_video_provider="agnes",
+        )
+        self.assertTrue(settings.has_text_generation)
+        self.assertTrue(settings.has_vision)
+        self.assertTrue(settings.has_image_generation)
+        self.assertTrue(settings.has_text_to_video)
+        self.assertTrue(settings.has_image_to_video)
+        self.assertEqual(settings.active_text_model, "agnes-2.5-flash")
+        self.assertEqual(settings.active_image_model, "agnes-image-2.1-flash")
+        self.assertEqual(settings.active_text_to_video_model, "agnes-video-v2.0")
+
+    def test_agnes_availability_requires_agnes_key(self):
+        settings = Settings(
+            _env_file=None,
+            dashscope_api_key="configured-dashscope-key",
+            ai_text_provider="agnes",
+        )
+        self.assertFalse(settings.has_text_generation)
+
 
 class ReadinessTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_dependencies_ready(self):

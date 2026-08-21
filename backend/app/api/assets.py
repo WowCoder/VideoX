@@ -536,9 +536,11 @@ async def upload_asset(
         status="QUEUED",
         stage="等待处理",
         stages=(
-            ["图片识别", "OCR", "语义索引", "完成"]
+            ["图片解析", "OCR", "视觉理解", "语义索引", "完成"]
             if media_info["media_type"] == "image"
-            else ["转码", "语音转写", "OCR", "镜头切分", "语义索引"]
+            else ["音频标准化", "语音转写", "语义索引", "完成"]
+            if media_info["media_type"] == "audio"
+            else ["媒体解析", "语音转写", "OCR", "镜头切分", "视觉理解", "语义索引", "完成"]
         ),
         progress=0,
         detail=f"{safe_name} 已进入处理队列",

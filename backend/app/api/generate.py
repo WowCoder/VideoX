@@ -6,9 +6,12 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.config import get_settings
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.models.asset import Asset
 from app.models.job import Job
 from app.models.project import Project
 from app.models.script import ScriptUnit, Shot
@@ -22,6 +25,132 @@ from app.services.workspace import load_project_workspace, record_revision
 
 
 router = APIRouter()
+settings = get_settings()
+
+
+class CreationPreviewShot(BaseModel):
+    description: str
+    duration_ms: int = Field(..., ge=100)
+    asset_id: str | None = None
+    segment_id: str | None = None
+    source_start_ms: int = Field(0, ge=0)
+    source_end_ms: int = Field(0, ge=0)
+
+
+class CreationPreviewScene(BaseModel):
+    title: str
+    narration: str
+    visual: str
+    duration_ms: int = Field(..., ge=100)
+    shots: list[CreationPreviewShot]
+
+
+class CreationPreviewOut(BaseModel):
+    title: str
+    summary: str
+    scenes: list[CreationPreviewScene]
+
+
+class ScriptCreationPreviewRequest(BaseModel):
+    prompt: str = Field(..., min_length=10, max_length=2000)
+    duration_seconds: int = Field(60, ge=15, le=300)
+    tone: str = Field("专业克制", min_length=1, max_length=50)
+
+
+class AssetCreationPreviewRequest(BaseModel):
+    asset_ids: list[str] = Field(..., min_length=1, max_length=50)
+    brief: str = Field("", max_length=2000)
+
+
+@router.post("/creation-previews/script", response_model=CreationPreviewOut)
+async def create_script_preview(
+    request: ScriptCreationPreviewRequest,
+    user: User = Depends(get_current_user),
+):
+    del user
+    if not settings.has_text_generation:
+        raise HTTPException(status_code=503, detail="AI 脚本服务未配置，请先配置 DashScope 文本模型")
+    from app.services.creation_preview import generate_script_preview
+
+    try:
+        result = await generate_script_preview(
+            request.prompt.strip(), request.duration_seconds, request.tone.strip()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return CreationPreviewOut.model_validate(result)
+
+
+@router.post("/creation-previews/assets", response_model=CreationPreviewOut)
+async def create_asset_preview(
+    request: AssetCreationPreviewRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not settings.has_text_generation:
+        raise HTTPException(status_code=503, detail="AI 编排服务未配置，请先配置 DashScope 文本模型")
+    requested_ids = list(dict.fromkeys(request.asset_ids))
+    assets = (
+        await db.execute(
+            select(Asset)
+            .where(
+                Asset.id.in_(requested_ids),
+                Asset.owner_id == user.id,
+                Asset.deleted_at.is_(None),
+                Asset.processing_status == "ready",
+            )
+            .options(selectinload(Asset.segments))
+        )
+    ).scalars().all()
+    if len(assets) != len(requested_ids):
+        raise HTTPException(status_code=422, detail="部分素材不存在、尚未处理完成或无权访问")
+
+    asset_context: list[dict] = []
+    available_segments: dict[str, dict] = {}
+    for asset in assets:
+        for segment in sorted(asset.segments, key=lambda item: (item.start_ms, item.id)):
+            recognition = segment.recognition or {}
+            summary = str(recognition.get("summary") or "").strip()
+            eligible_as_visual = asset.media_type in {"image", "video"}
+            if eligible_as_visual:
+                available_segments[segment.id] = {
+                    "asset_id": asset.id,
+                    "start_ms": segment.start_ms,
+                    "end_ms": segment.end_ms,
+                    "title": segment.title,
+                    "summary": summary,
+                }
+            asset_context.append({
+                "asset_id": asset.id,
+                "asset_name": asset.name,
+                "media_type": asset.media_type,
+                "eligible_as_visual": eligible_as_visual,
+                "segment_id": segment.id,
+                "start_ms": segment.start_ms,
+                "end_ms": segment.end_ms,
+                "title": segment.title,
+                "summary": summary,
+                "transcript": (segment.transcript or "")[:1200],
+                "ocr": (segment.ocr_text or "")[:600],
+                "tags": (segment.tags or [])[:20],
+                "recognition": {
+                    key: recognition.get(key, [] if key != "shot" and key != "quality" else {})
+                    for key in ("spaces", "people", "objects", "actions", "shot", "quality")
+                },
+                "quality_score": segment.quality_score,
+            })
+    if not available_segments:
+        raise HTTPException(status_code=422, detail="所选素材中没有已识别的图片或视频片段；音频只能作为叙事参考")
+
+    from app.services.creation_preview import generate_asset_preview
+
+    try:
+        result = await generate_asset_preview(
+            asset_context, available_segments, request.brief.strip()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return CreationPreviewOut.model_validate(result)
 
 
 class ProjectOperationRequest(BaseModel):
@@ -61,6 +190,23 @@ def _resolve_shot_ids(project: Project, scope: ScopeSelection) -> list[str]:
             raise HTTPException(status_code=422, detail="作用范围包含不属于当前项目的镜头")
         return [shot.id for scene in scenes for shot in scene.shots if shot.id in requested]
     raise HTTPException(status_code=422, detail="该操作不支持素材级作用范围")
+
+
+def _generation_prompt(shot: Shot, parameters: dict, prompt_key: str) -> str:
+    """为批量生成逐镜头组装提示词，避免用同一段画面描述覆盖所有镜头。"""
+    use_shot_descriptions = bool(parameters.get("use_shot_descriptions"))
+    if use_shot_descriptions:
+        base = (shot.description or shot.unit.intent or shot.unit.narration_text or "").strip()
+    else:
+        base = str(parameters.get(prompt_key) or "").strip()
+    additional = str(parameters.get("additional_instruction") or "").strip()
+    style = str(parameters.get("style") or "").strip()
+    parts = [base]
+    if additional:
+        parts.append(f"全局补充要求：{additional}")
+    if style:
+        parts.append(f"视觉风格：{style}")
+    return "。".join(part.rstrip("。") for part in parts if part) + ("。" if any(parts) else "")
 
 
 async def _dispatch_job(db: AsyncSession, project: Project, job: Job):
@@ -251,7 +397,11 @@ async def execute_project_operation(
             "generate_video": ("分镜图 AI 生视频", "ai_video", "prompt"),
             "generate_effect": ("示意图特效视频", "ai_video", "motion_description"),
         }[request.operation]
+        shots_by_id = {
+            shot.id: shot for scene in project.script.units for shot in scene.shots
+        }
         for shot_id in shot_ids:
+            shot = shots_by_id[shot_id]
             job = Job(
                 owner_id=user.id,
                 project_id=project.id,
@@ -264,7 +414,8 @@ async def execute_project_operation(
                 stages=["提交生成", "等待结果", "保存素材"],
                 payload={
                     "shot_id": shot_id,
-                    config[2]: str(request.parameters.get(config[2]) or ""),
+                    config[2]: _generation_prompt(shot, request.parameters, config[2]),
+                    "base_shot_revision": shot.revision,
                 },
             )
             try:

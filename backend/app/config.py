@@ -48,8 +48,10 @@ class Settings(BaseSettings):
     auth_rate_limit_per_minute: int = 20
     upload_rate_limit_per_minute: int = 30
 
-    # DashScope 生成结果通常位于阿里云 OSS；可按实际供应商补充域名后缀。
-    ai_media_allowed_hosts: str = ".aliyuncs.com,.aliyun.com"
+    # 只允许从已配置的供应商结果域名回收生成媒体，防止服务端请求伪造。
+    ai_media_allowed_hosts: str = (
+        ".aliyuncs.com,.aliyun.com,.agnes-ai.cn,.agnes-ai.space"
+    )
 
     # ── AI Provider ──
     # 高频基础能力默认走本地模型；生成式能力默认走 DashScope。
@@ -59,6 +61,7 @@ class Settings(BaseSettings):
     ai_rerank_provider: str = "local"
     ai_asr_provider: str = "local"
     ai_ocr_provider: str = "local"
+    ai_vision_provider: str = "dashscope"
     ai_image_provider: str = "dashscope"
     ai_text_to_video_provider: str = "dashscope"
     ai_image_to_video_provider: str = "dashscope"
@@ -86,6 +89,7 @@ class Settings(BaseSettings):
     dashscope_poll_interval_seconds: float = 2.0
     dashscope_generation_timeout_seconds: int = 600
     ai_text_model: str = "qwen-plus"
+    ai_vision_model: str = "qwen-vl-plus"
     ai_image_model: str = "wanx2.1-t2i-turbo"
     ai_text_to_video_model: str = "wanx2.1-t2v-turbo"
     ai_image_to_video_model: str = ""
@@ -97,6 +101,20 @@ class Settings(BaseSettings):
     dashscope_embedding_model: str = "text-embedding-v3"
     dashscope_asr_model: str = "paraformer-v2"
     dashscope_ocr_model: str = "qwen-vl-ocr"
+
+    # ── Agnes AI 中国站（线上生成式 AI）──
+    # 文档：https://www.agnes-ai.cn/zh-Hans/docs/overview
+    agnes_api_key: str = ""
+    agnes_base_url: str = "https://api.agnes-ai.cn/v1"
+    agnes_poll_interval_seconds: float = 2.0
+    agnes_generation_timeout_seconds: int = 600
+    agnes_video_submit_interval_seconds: float = 61.0
+    agnes_video_submit_max_attempts: int = 4
+    agnes_video_submit_retry_seconds: float = 2.0
+    agnes_text_model: str = "agnes-2.5-flash"
+    agnes_vision_model: str = "agnes-2.5-flash"
+    agnes_image_model: str = "agnes-image-2.1-flash"
+    agnes_video_model: str = "agnes-video-v2.0"
 
     # ── 微信开放平台（扫码登录）──
     # 填入后启用：微信扫码登录/注册
@@ -140,19 +158,20 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_production_security(self):
         provider_groups = {
-            "AI_TEXT_PROVIDER": (self.ai_text_provider, {"dashscope", "disabled"}),
+            "AI_TEXT_PROVIDER": (self.ai_text_provider, {"agnes", "dashscope", "disabled"}),
             "AI_EMBEDDING_PROVIDER": (self.ai_embedding_provider, {"local", "dashscope", "disabled"}),
             "AI_RERANK_PROVIDER": (self.ai_rerank_provider, {"local", "disabled"}),
             "AI_ASR_PROVIDER": (self.ai_asr_provider, {"local", "dashscope", "disabled"}),
             "AI_OCR_PROVIDER": (self.ai_ocr_provider, {"local", "dashscope", "disabled"}),
-            "AI_IMAGE_PROVIDER": (self.ai_image_provider, {"dashscope", "disabled"}),
+            "AI_VISION_PROVIDER": (self.ai_vision_provider, {"agnes", "dashscope", "disabled"}),
+            "AI_IMAGE_PROVIDER": (self.ai_image_provider, {"agnes", "dashscope", "disabled"}),
             "AI_TEXT_TO_VIDEO_PROVIDER": (
                 self.ai_text_to_video_provider,
-                {"dashscope", "disabled"},
+                {"agnes", "dashscope", "disabled"},
             ),
             "AI_IMAGE_TO_VIDEO_PROVIDER": (
                 self.ai_image_to_video_provider,
-                {"dashscope", "disabled"},
+                {"agnes", "dashscope", "disabled"},
             ),
             "AI_EFFECT_VIDEO_PROVIDER": (
                 self.ai_effect_video_provider,
@@ -176,6 +195,16 @@ class Settings(BaseSettings):
             raise ValueError("DASHSCOPE_POLL_INTERVAL_SECONDS 不能小于 0.2")
         if self.dashscope_generation_timeout_seconds < 30:
             raise ValueError("DASHSCOPE_GENERATION_TIMEOUT_SECONDS 不能小于 30")
+        if self.agnes_poll_interval_seconds < 0.2:
+            raise ValueError("AGNES_POLL_INTERVAL_SECONDS 不能小于 0.2")
+        if self.agnes_generation_timeout_seconds < 30:
+            raise ValueError("AGNES_GENERATION_TIMEOUT_SECONDS 不能小于 30")
+        if self.agnes_video_submit_interval_seconds < 1:
+            raise ValueError("AGNES_VIDEO_SUBMIT_INTERVAL_SECONDS 不能小于 1")
+        if not 1 <= self.agnes_video_submit_max_attempts <= 10:
+            raise ValueError("AGNES_VIDEO_SUBMIT_MAX_ATTEMPTS 必须在 1 到 10 之间")
+        if self.agnes_video_submit_retry_seconds < 0.2:
+            raise ValueError("AGNES_VIDEO_SUBMIT_RETRY_SECONDS 不能小于 0.2")
         if self.ai_video_resolution not in {"720P", "1080P"}:
             raise ValueError("AI_VIDEO_RESOLUTION 必须是 720P 或 1080P")
         if not 2 <= self.ai_video_duration_seconds <= 15:
@@ -215,8 +244,19 @@ class Settings(BaseSettings):
         return bool(self.dashscope_api_key)
 
     @property
+    def has_agnes(self) -> bool:
+        return bool(self.agnes_api_key)
+
+    def _provider_available(self, provider: str) -> bool:
+        if provider.lower() == "dashscope":
+            return self.has_dashscope
+        if provider.lower() == "agnes":
+            return self.has_agnes
+        return False
+
+    @property
     def has_text_generation(self) -> bool:
-        return self.ai_text_provider.lower() == "dashscope" and self.has_dashscope
+        return self._provider_available(self.ai_text_provider) and bool(self.active_text_model)
 
     @property
     def has_embedding(self) -> bool:
@@ -247,23 +287,25 @@ class Settings(BaseSettings):
         return False
 
     @property
+    def has_vision(self) -> bool:
+        return self._provider_available(self.ai_vision_provider) and bool(self.active_vision_model)
+
+    @property
     def has_image_generation(self) -> bool:
-        return self.ai_image_provider.lower() == "dashscope" and self.has_dashscope
+        return self._provider_available(self.ai_image_provider) and bool(self.active_image_model)
 
     @property
     def has_text_to_video(self) -> bool:
         return (
-            self.ai_text_to_video_provider.lower() == "dashscope"
-            and self.has_dashscope
-            and bool(self.ai_text_to_video_model)
+            self._provider_available(self.ai_text_to_video_provider)
+            and bool(self.active_text_to_video_model)
         )
 
     @property
     def has_image_to_video(self) -> bool:
         return (
-            self.ai_image_to_video_provider.lower() == "dashscope"
-            and self.has_dashscope
-            and bool(self.ai_image_to_video_model)
+            self._provider_available(self.ai_image_to_video_provider)
+            and bool(self.active_image_to_video_model)
         )
 
     @property
@@ -279,6 +321,46 @@ class Settings(BaseSettings):
         if self.ai_embedding_provider.lower() == "dashscope":
             return self.dashscope_embedding_model
         return self.ai_embedding_model
+
+    @property
+    def active_text_model(self) -> str:
+        return (
+            self.agnes_text_model
+            if self.ai_text_provider.lower() == "agnes"
+            else self.ai_text_model
+        )
+
+    @property
+    def active_vision_model(self) -> str:
+        return (
+            self.agnes_vision_model
+            if self.ai_vision_provider.lower() == "agnes"
+            else self.ai_vision_model
+        )
+
+    @property
+    def active_image_model(self) -> str:
+        return (
+            self.agnes_image_model
+            if self.ai_image_provider.lower() == "agnes"
+            else self.ai_image_model
+        )
+
+    @property
+    def active_text_to_video_model(self) -> str:
+        return (
+            self.agnes_video_model
+            if self.ai_text_to_video_provider.lower() == "agnes"
+            else self.ai_text_to_video_model
+        )
+
+    @property
+    def active_image_to_video_model(self) -> str:
+        return (
+            self.agnes_video_model
+            if self.ai_image_to_video_provider.lower() == "agnes"
+            else self.ai_image_to_video_model
+        )
 
     @property
     def has_wechat(self) -> bool:

@@ -11,6 +11,7 @@ import {
   Loader2,
   Search,
   SlidersHorizontal,
+  Sparkles,
   Trash2,
   Unlink,
   Upload,
@@ -101,6 +102,58 @@ function AssetTaxonomy({ asset }: { asset: assetApi.Asset }) {
   );
 }
 
+interface RecognitionEntity {
+  label: string;
+  role?: string;
+  confidence?: number;
+}
+
+function recognitionEntities(recognition: Record<string, unknown>, key: string): RecognitionEntity[] {
+  const value = recognition[key];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item === "string" && item.trim()) return [{ label: item.trim() }];
+    if (!item || typeof item !== "object") return [];
+    const entity = item as Record<string, unknown>;
+    const label = typeof entity.label === "string" ? entity.label.trim() : "";
+    if (!label) return [];
+    return [{
+      label,
+      role: typeof entity.role === "string" ? entity.role.trim() : undefined,
+      confidence: typeof entity.confidence === "number" ? entity.confidence : undefined,
+    }];
+  });
+}
+
+function RecognitionDetails({ recognition }: { recognition: Record<string, unknown> }) {
+  const status = typeof recognition.analysis_status === "string" ? recognition.analysis_status : "";
+  const summary = typeof recognition.summary === "string" ? recognition.summary : "";
+  const shot = recognition.shot && typeof recognition.shot === "object" ? recognition.shot as Record<string, unknown> : {};
+  const quality = recognition.quality && typeof recognition.quality === "object" ? recognition.quality as Record<string, unknown> : {};
+  const groups = [
+    ["场景空间", recognitionEntities(recognition, "spaces")],
+    ["人物 / 角色", recognitionEntities(recognition, "people")],
+    ["物体", recognitionEntities(recognition, "objects")],
+    ["动作 / 事件", recognitionEntities(recognition, "actions")],
+  ] as const;
+  const shotLabels: Record<string, string> = {
+    scale: "景别", camera_motion: "运镜", composition: "构图", lighting: "光线", style: "风格",
+  };
+  const error = typeof recognition.error === "string" ? recognition.error : "";
+  const statusCopy: Record<string, string> = { ready: "视觉理解完成", text_only: "仅完成语音文本识别", disabled: "视觉理解未启用", failed: "视觉理解失败" };
+  return (
+    <section className="mt-5 rounded-xl border border-line p-4">
+      <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-text">AI 内容理解</h3><span className={`rounded-full px-2 py-1 text-[10px] font-medium ${status === "ready" ? "bg-teal/10 text-teal" : "bg-canvas text-muted"}`}>{statusCopy[status] ?? "暂无视觉理解结果"}</span></div>
+      {summary && <p className="mt-3 text-xs leading-5 text-text">{summary}</p>}
+      <div className="mt-3 space-y-3">{groups.map(([label, entities]) => entities.length ? <div key={label}><p className="mb-1.5 text-[10px] font-semibold text-muted">{label}</p><div className="flex flex-wrap gap-1.5">{entities.map((entity, index) => <span key={`${entity.label}-${index}`} title={entity.confidence === undefined ? undefined : `置信度 ${Math.round(entity.confidence * 100)}%`} className="rounded-full bg-canvas px-2 py-1 text-[10px] text-text">{entity.label}{entity.role ? ` · ${entity.role}` : ""}</span>)}</div></div> : null)}</div>
+      {Object.keys(shot).length > 0 && <div className="mt-3"><p className="mb-1.5 text-[10px] font-semibold text-muted">镜头语言</p><div className="flex flex-wrap gap-1.5">{Object.entries(shot).map(([key, value]) => value ? <span key={key} className="rounded-full border border-line px-2 py-1 text-[10px] text-muted">{shotLabels[key] ?? key}：{String(value)}</span> : null)}</div></div>}
+      {typeof quality.usable_score === "number" && <p className="mt-3 text-[11px] text-muted">素材可用性评分：<strong className="text-text">{Math.round(quality.usable_score)} / 100</strong></p>}
+      {error && <p className="mt-3 rounded-lg bg-red/5 p-2 text-[11px] leading-5 text-red">{error}</p>}
+      {!summary && !groups.some(([, entities]) => entities.length) && !error && <p className="mt-3 text-xs text-muted">当前素材没有可展示的结构化视觉识别结果。</p>}
+    </section>
+  );
+}
+
 export default function LibraryView({
   previewAssets,
   previewProjects,
@@ -111,6 +164,7 @@ export default function LibraryView({
   const previewMode = Boolean(previewAssets);
   const queryClient = useQueryClient();
   const openUploadDrawer = useUIStore((state) => state.openUploadDrawer);
+  const openProjectCreate = useUIStore((state) => state.openProjectCreate);
   const notify = useUIStore((state) => state.notify);
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
@@ -225,6 +279,17 @@ export default function LibraryView({
         <button type="button" onClick={() => openUploadDrawer(null)} className="workspace-primary-button"><Upload size={16} />上传素材</button>
       </header>
 
+      <section className="mb-5 grid gap-5 overflow-hidden rounded-2xl border border-[#c7e4e8] bg-gradient-to-br from-[#f8fdfd] to-[#eaf8fa] p-5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center sm:p-6" aria-labelledby="library-ai-analysis-title">
+        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#d9f0f2] text-[#147f88]"><Sparkles size={22} /></span>
+        <div className="min-w-0">
+          <small className="text-[10px] font-semibold tracking-[0.12em] text-[#237e85]">核心功能</small>
+          <h2 id="library-ai-analysis-title" className="mt-1 text-xl font-semibold tracking-[-0.025em] text-text">一键 AI 分析编排影片</h2>
+          <p className="mt-1.5 max-w-3xl text-xs leading-5 text-muted">从素材库选择已有图片、音频或视频，AI 自动理解内容、提取叙事线索并生成可继续编辑的影片结构；确认结果后再创建项目。</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] font-medium text-[#317d83]"><span className="rounded-full bg-white/70 px-2.5 py-1">理解素材</span><span>→</span><span className="rounded-full bg-white/70 px-2.5 py-1">提取线索</span><span>→</span><span className="rounded-full bg-white/70 px-2.5 py-1">编排影片</span></div>
+        </div>
+        <button type="button" disabled={previewMode} onClick={() => openProjectCreate("upload-assets")} className="workspace-primary-button whitespace-nowrap bg-[#147f88] disabled:opacity-45"><Sparkles size={16} />选择素材开始</button>
+      </section>
+
       <section className="mb-5 overflow-hidden rounded-2xl border border-line bg-surface">
         <form
           onSubmit={(event) => { event.preventDefault(); setSearch(searchDraft.trim()); setSelectedId(null); }}
@@ -306,8 +371,9 @@ export default function LibraryView({
             <div className="mt-5"><VideoThumb imageUrl={selected.thumbnailUrl ?? (selected.mediaType === "image" ? selected.mediaUrl : undefined)} videoUrl={selected.mediaType === "video" ? selected.mediaUrl : undefined} showPlay={selected.mediaType === "video"} /></div>
             <div className="mt-4"><AssetTaxonomy asset={selected} /></div>
             <div className="mt-5 grid grid-cols-3 gap-2 text-center text-xs">{[["尺寸", selected.width && selected.height ? `${selected.width}×${selected.height}` : "—"], ["时长", formatDuration(selected.durationMs)], ["大小", `${selected.fileSizeMb.toFixed(1)} MB`]].map(([label, value]) => <div key={label} className="rounded-lg bg-canvas p-3"><strong className="block text-text">{value}</strong><span className="text-muted">{label}</span></div>)}</div>
+            <RecognitionDetails recognition={selected.recognition} />
             <section className="mt-5"><h3 className="text-sm font-semibold text-text">项目关联</h3><div className="mt-2 space-y-2">{projects.map((project) => { const linked = selected.projectIds.includes(project.id); return <div key={project.id} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2"><span className="min-w-0 flex-1 truncate text-xs text-text">{project.name}</span><button type="button" disabled={previewMode} onClick={() => linkMutation.mutate({ targetProjectId: project.id, unlink: linked })} className={`flex items-center gap-1 text-xs font-medium disabled:opacity-45 ${linked ? "text-red" : "text-blue"}`}>{linked ? <><Unlink size={12} />解除</> : <><Link2 size={12} />关联</>}</button></div>; })}</div></section>
-            <section className="mt-5"><h3 className="text-sm font-semibold text-text">识别片段</h3><div className="mt-2 max-h-64 space-y-2 overflow-y-auto">{selectedSegments.map((segment) => <div key={segment.id} className="rounded-lg bg-canvas p-3"><div className="flex justify-between text-xs"><strong className="text-text">{segment.title || "未命名片段"}</strong><span className="text-muted">{(segment.startMs / 1000).toFixed(1)}–{(segment.endMs / 1000).toFixed(1)}s</span></div><p className="mt-1 line-clamp-3 text-xs text-muted">{segment.transcript || segment.ocrText || "无文本识别"}</p></div>)}{!previewMode && segmentsQuery.isLoading && <p className="py-6 text-center text-xs text-muted">加载片段…</p>}{!segmentsQuery.isLoading && !selectedSegments.length && <p className="py-6 text-center text-xs text-muted">暂无片段</p>}</div></section>
+            <section className="mt-5"><h3 className="text-sm font-semibold text-text">识别片段</h3><div className="mt-2 max-h-72 space-y-2 overflow-y-auto">{selectedSegments.map((segment) => { const visualSummary = typeof segment.recognition.summary === "string" ? segment.recognition.summary : ""; return <div key={segment.id} className="rounded-lg bg-canvas p-3"><div className="flex justify-between gap-3 text-xs"><strong className="line-clamp-1 text-text">{segment.title || "未命名片段"}</strong><span className="shrink-0 text-muted">{(segment.startMs / 1000).toFixed(1)}–{(segment.endMs / 1000).toFixed(1)}s</span></div>{visualSummary && <p className="mt-1 line-clamp-2 text-xs text-text">{visualSummary}</p>}<p className="mt-1 line-clamp-3 text-xs text-muted">{segment.transcript || segment.ocrText || "无语音或画面文字"}</p></div>; })}{!previewMode && segmentsQuery.isLoading && <p className="py-6 text-center text-xs text-muted">加载片段…</p>}{!segmentsQuery.isLoading && !selectedSegments.length && <p className="py-6 text-center text-xs text-muted">暂无片段</p>}</div></section>
             <button type="button" disabled={previewMode || deleteMutation.isPending} onClick={() => deleteMutation.mutate(selected.id)} className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg border border-red/20 py-2.5 text-sm font-medium text-red disabled:opacity-50"><Trash2 size={15} />移入回收站</button>
           </aside>
         </div>

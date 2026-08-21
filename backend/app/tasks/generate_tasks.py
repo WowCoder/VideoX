@@ -13,7 +13,7 @@ from app.tasks.celery_app import celery_app
 
 
 def _can_auto_select_media_version(current_revision: int, base_revision: int) -> bool:
-    """Only an AI result based on the still-current document may replace the active media."""
+    """Only an AI result based on the still-current shot may replace that shot's media."""
     return current_revision == base_revision
 
 
@@ -76,14 +76,6 @@ def _persist_remote_media(
             os.unlink(local_path)
         except OSError:
             pass
-
-
-def _provider_media_url(path_or_url: str) -> str:
-    if path_or_url.startswith(("http://", "https://")):
-        return path_or_url
-    from app.utils.storage import get_file_url
-
-    return get_file_url(path_or_url, expires_hours=1)
 
 
 async def _mark_failure(job_id: str, label: str, error: Exception) -> None:
@@ -170,8 +162,9 @@ async def _generate_media(
         if not shot:
             raise RuntimeError("镜头不存在")
         base_revision = int((job.payload or {}).get("base_revision", project.script.revision))
-        if project.script.revision != base_revision:
-            raise RuntimeError("项目已继续编辑，本次生成结果已过期")
+        base_shot_revision = int((job.payload or {}).get("base_shot_revision", shot.revision))
+        if shot.revision != base_shot_revision:
+            raise RuntimeError("当前镜头已继续编辑，本次生成结果已过期")
         job.status = "RUNNING"
         job.stage = "提交生成"
         job.progress = 10
@@ -196,27 +189,41 @@ async def _generate_media(
             remote_url = await generate_image(prompt=prompt, size=size)
             media_type = "image"
             media_kind = "generated_image"
-            provider_model = settings.ai_image_model
+            provider_name = settings.ai_image_provider
+            provider_model = settings.active_image_model
         elif kind == "video":
-            image_url = ""
+            image_source = ""
             if shot.asset_id:
                 source_asset = await session.get(Asset, shot.asset_id)
                 if source_asset and source_asset.media_type == "image" and source_asset.file_path:
-                    image_url = _provider_media_url(source_asset.file_path)
+                    # Provider 层各自准备首帧：DashScope 上传临时 OSS，Agnes
+                    # 对私有对象执行图生图公网中转；任务层不耦合供应商协议。
+                    image_source = source_asset.file_path
             remote_url = await generate_video(
                 prompt=prompt,
-                image_url=image_url,
+                image_url=image_source,
                 duration=max(2, min(15, round(shot.duration_ms / 1000))),
+                aspect_ratio=project.composition.aspect_ratio,
             )
             media_type = "video"
             media_kind = "generated_video"
-            provider_model = settings.ai_image_to_video_model if image_url else settings.ai_text_to_video_model
+            provider_name = (
+                settings.ai_image_to_video_provider
+                if image_source
+                else settings.ai_text_to_video_provider
+            )
+            provider_model = (
+                settings.active_image_to_video_model
+                if image_source
+                else settings.active_text_to_video_model
+            )
         else:
             if not shot.sketch_data:
                 raise RuntimeError("示意特效视频需要先保存 Canvas 草图")
             remote_url = await generate_effect_video(prompt=prompt, sketch_data=shot.sketch_data)
             media_type = "video"
             media_kind = "effect_video"
+            provider_name = settings.ai_effect_video_provider
             provider_model = settings.ai_effect_video_model
 
         job.stage = "保存素材"
@@ -227,6 +234,28 @@ async def _generate_media(
             f"generated/{project.id}/{shot.id}/{media_type}",
             media_type,
         )
+
+        # 外部生成期间初始事务早已提交并释放项目锁。写入结果前必须重新锁定
+        # 项目并刷新整个聚合，否则多个并发镜头会从同一个旧 revision 递增，
+        # 最终撞上 uq_project_revision_number。
+        project = await load_project_workspace(
+            session,
+            project_id,
+            job.owner_id,
+            for_update=True,
+        )
+        shot = next(
+            (
+                item
+                for scene in project.script.units
+                for item in scene.shots
+                if item.id == shot_id
+            ),
+            None,
+        )
+        if not shot:
+            raise RuntimeError("镜头已被删除，本次生成结果无法写入项目")
+
         asset = Asset(
             owner_id=job.owner_id,
             name=f"{shot.description or 'AI 生成镜头'}-{kind}",
@@ -241,7 +270,7 @@ async def _generate_media(
             file_size_mb=round(storage_bytes / (1024 * 1024), 2),
             duration_ms=0 if media_type == "image" else shot.duration_ms,
             has_audio=False,
-            ai_provider="dashscope",
+            ai_provider=provider_name,
             ai_model=provider_model,
             ai_prompt=prompt,
             asset_metadata={"shot_id": shot.id, "job_id": job.id, "operation": kind},
@@ -265,8 +294,8 @@ async def _generate_media(
                 linked_by=job.owner_id,
             )
         )
-        await session.refresh(project.script, attribute_names=["revision"])
-        selected = _can_auto_select_media_version(project.script.revision, base_revision)
+        await session.refresh(shot, attribute_names=["revision"])
+        selected = _can_auto_select_media_version(shot.revision, base_shot_revision)
         if selected:
             for existing_version in shot.media_versions:
                 existing_version.is_selected = False
@@ -281,6 +310,7 @@ async def _generate_media(
                 "prompt": prompt,
                 "source_snapshot": source_snapshot,
                 "base_revision": base_revision,
+                "base_shot_revision": base_shot_revision,
                 "stale_result": not selected,
             },
             status="ready",

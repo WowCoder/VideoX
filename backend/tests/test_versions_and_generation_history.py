@@ -2,16 +2,18 @@
 
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from app.models.project import ProjectComposition, ProjectRevision, ProjectUndoToken
 from app.models.script import Script, ScriptUnit, Shot, ShotMediaVersion
 from app.schemas.project import ShotDocument
-from app.services.workspace import _restore_shot
+from app.services.workspace import _restore_shot, load_project_workspace
 from app.tasks.generate_tasks import _can_auto_select_media_version
 
 
 class VersionModelContractTests(unittest.TestCase):
-    def test_ai_result_only_auto_selects_for_unchanged_document(self):
+    def test_ai_result_only_auto_selects_for_unchanged_shot(self):
         self.assertTrue(_can_auto_select_media_version(7, 7))
         self.assertFalse(_can_auto_select_media_version(8, 7))
 
@@ -40,6 +42,25 @@ class VersionModelContractTests(unittest.TestCase):
     def test_undo_token_is_project_scoped_and_expires(self):
         self.assertFalse(ProjectUndoToken.__table__.c.project_id.nullable)
         self.assertFalse(ProjectUndoToken.__table__.c.expires_at.nullable)
+
+
+class WorkspaceLockingContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_for_update_refreshes_cached_project_aggregate(self):
+        project = SimpleNamespace(script=object(), composition=object())
+        result = SimpleNamespace(scalar_one_or_none=lambda: project)
+        session = SimpleNamespace(execute=AsyncMock(return_value=result))
+
+        loaded = await load_project_workspace(
+            session,
+            "project-concurrent",
+            "user-concurrent",
+            for_update=True,
+        )
+
+        self.assertIs(loaded, project)
+        statement = session.execute.await_args.args[0]
+        self.assertIsNotNone(statement._for_update_arg)
+        self.assertTrue(statement.get_execution_options()["populate_existing"])
 
 
 class RestoreVersionHistoryTests(unittest.TestCase):

@@ -7,7 +7,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, update
+from sqlalchemy import select, func, desc, update, delete
 from datetime import datetime, timezone
 
 from app.database import get_db
@@ -15,11 +15,19 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.project import Project
 from app.models.job import Job
+from app.models.notification import Notification
+from app.models.script import ShotMediaVersion
+from app.models.inspiration import InspirationRun
 from app.schemas.job import JobOut, JobListOut
 from app.services.quotas import QuotaExceededError, readmit_existing_job_quota
 from app.services.task_dispatch import dispatch_owner_task, dispatch_project_task
 
 router = APIRouter()
+
+
+def _job_can_delete(status: str) -> bool:
+    """运行中的记录不能删除；暂停后可删除，产物本身仍保留。"""
+    return status not in {"QUEUED", "RUNNING"}
 
 
 def _export_result_path(job: Job) -> str | None:
@@ -149,6 +157,39 @@ async def get_job(
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     return JobOut.model_validate(job)
+
+
+@router.delete("/{job_id}", status_code=204)
+async def delete_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """删除非运行中的任务记录，不删除已经生成的素材或镜头版本。"""
+    result = await db.execute(
+        select(Job).where(Job.id == job_id, Job.owner_id == user.id)
+        .with_for_update()
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if not _job_can_delete(job.status):
+        raise HTTPException(status_code=409, detail="进行中的任务不能删除，请先暂停任务")
+
+    # 显式解除或清理引用，保证不同数据库的外键行为一致；生成产物本身不删除。
+    await db.execute(
+        update(ShotMediaVersion)
+        .where(ShotMediaVersion.job_id == job.id)
+        .values(job_id=None)
+    )
+    await db.execute(
+        update(InspirationRun)
+        .where(InspirationRun.job_id == job.id)
+        .values(job_id=None)
+    )
+    await db.execute(delete(Notification).where(Notification.job_id == job.id))
+    await db.delete(job)
+    await db.commit()
 
 
 @router.post("/{job_id}/retry", response_model=JobOut)

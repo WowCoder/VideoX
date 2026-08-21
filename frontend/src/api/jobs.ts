@@ -4,7 +4,11 @@
 // ──────────────────────────────────────────────
 
 import { http } from "./client";
-import type { Job, JobStatus, JobType, PaginatedResponse } from "@/types/models";
+import type { Job, JobStatus, PaginatedResponse } from "@/types/models";
+import { mapJob, type RawJob } from "./jobMapper";
+
+export { mapJob } from "./jobMapper";
+export type { RawJob } from "./jobMapper";
 
 export interface JobListParams {
   projectId?: string;
@@ -14,70 +18,9 @@ export interface JobListParams {
   pageSize?: number;
 }
 
-/* ── 后端原始类型（snake_case）── */
-
-export interface RawJob {
-  id: string;
-  project_id: string | null;
-  name: string;
-  type: string;
-  status: string;
-  stage: string;
-  stages: string[];
-  stage_index: number;
-  progress: number;
-  detail: string;
-  eta: string;
-  logs: string[];
-  result: string | null;
-  result_detail: string;
-  result_url: string | null;
-  export_metadata: {
-    format: string;
-    resolution: string;
-    aspect_ratio: string;
-  } | null;
-  is_simulated: boolean;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
 interface RawJobList {
   items: RawJob[];
   total: number;
-}
-
-/* ── 映射函数 ── */
-
-export function mapJob(raw: RawJob): Job {
-  return {
-    id: raw.id,
-    projectId: raw.project_id ?? undefined,
-    name: raw.name,
-    type: raw.type as JobType,
-    status: raw.status as JobStatus,
-    stage: raw.stage,
-    stages: raw.stages ?? [],
-    stageIndex: raw.stage_index ?? 0,
-    progress: raw.progress ?? 0,
-    detail: raw.detail,
-    eta: raw.eta,
-    logs: (raw.logs ?? []).map((msg) => ({
-      message: msg,
-      timestamp: "",
-      level: "info" as const,
-    })),
-    result: raw.result ?? undefined,
-    resultDetail: raw.result_detail,
-    resultUrl: raw.result_url ?? undefined,
-    exportMetadata: raw.export_metadata ? {
-      format: raw.export_metadata.format,
-      resolution: raw.export_metadata.resolution,
-      aspectRatio: raw.export_metadata.aspect_ratio,
-    } : undefined,
-    isSimulated: raw.is_simulated,
-    createdAt: raw.created_at ?? "",
-  };
 }
 
 /* ── API 方法 ── */
@@ -142,6 +85,11 @@ export async function resume(id: string): Promise<Job> {
   return mapJob(raw);
 }
 
+/** 删除非运行中的任务记录；不会删除任务已经生成的素材。 */
+export async function remove(id: string): Promise<void> {
+  return http.delete<void>(`/jobs/${id}`);
+}
+
 export async function downloadResult(id: string): Promise<void> {
   const { blob, filename } = await http.download(`/jobs/${id}/download`);
   const url = URL.createObjectURL(blob);
@@ -151,5 +99,5 @@ export async function downloadResult(id: string): Promise<void> {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }

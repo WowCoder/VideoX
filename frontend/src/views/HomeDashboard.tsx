@@ -50,7 +50,7 @@ const startPaths = [
     title: ["从素材开始，", "AI 辅助编排影片"],
     description: "导入已有图片、音频或视频，先完成素材理解，再围绕脚本场景组织可编辑主成片。",
     scenarios: ["素材太多", "缺少剪辑灵感", "不擅长剪辑"],
-    action: "从素材开始",
+    action: "导入素材并编辑影片",
     icon: Images,
     tone: "assets",
   },
@@ -97,7 +97,7 @@ function ProjectCard({
       onClick={onOpen}
       onKeyDown={openFromKeyboard}
       className={`group relative cursor-pointer overflow-hidden rounded-2xl border border-line bg-white text-left transition hover:-translate-y-0.5 hover:border-[#c6c6c9] hover:shadow-[0_16px_42px_rgba(0,0,0,.09)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink ${list ? "grid min-h-[174px] grid-cols-[220px_minmax(0,1fr)] max-md:grid-cols-1" : ""}`}
-      aria-label={`打开项目：${project.name}`}
+      aria-label={`继续编辑项目：${project.name}`}
     >
       <div className={`relative overflow-hidden bg-canvas ${list ? "h-full min-h-[174px] max-md:aspect-video max-md:min-h-0" : "aspect-[16/9]"}`}>
         <VideoThumb

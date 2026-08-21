@@ -246,7 +246,9 @@ async def load_project_workspace(
         )
     )
     if for_update:
-        query = query.with_for_update()
+        # 同一 Session 可能在外部 AI/渲染完成后仍缓存旧聚合；加锁写入必须
+        # 用数据库当前值覆盖 identity map，避免并发任务复用旧 revision。
+        query = query.with_for_update().execution_options(populate_existing=True)
     project = (await db.execute(query)).scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
