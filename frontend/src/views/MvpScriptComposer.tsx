@@ -1,23 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
-  AlignLeft, ArrowDown, ArrowUp, AudioLines, CloudUpload, Copy, Film, Image as ImageIcon, Library, Maximize2,
-  Mic2, Music2, Pause, Play, Plus, RotateCcw, Search, SlidersHorizontal, Sparkles,
-  Trash2, Volume2, VolumeX, WandSparkles,
+  AlignLeft, ArrowDown, ArrowUp, AudioLines, Copy, Film, History, Image as ImageIcon, Library, Maximize2,
+  Mic2, MoreHorizontal, Music2, Pause, Pencil, Play, Plus, RotateCcw, Scissors, Search, SlidersHorizontal, Sparkles,
+  Trash2, Volume2, VolumeX, WandSparkles, X,
 } from "lucide-react";
 import type { CSSProperties } from "react";
 import type { Asset } from "@/api/assets";
 import type { ProjectOperation } from "@/api/generate";
+import { getVoiceoverWorkspace } from "@/api/voiceover";
 import type { GenerationKind } from "@/components/QuickAIGenerateModal";
-import type { GlobalScopeLayers, ProjectAudioMix, ProjectDocumentSettings, Scene, ScopeAssetReference, Shot, Workspace } from "@/api/projects";
+import type { Project, ProjectAudioMix, ProjectDocumentSettings, Scene, ScopeAssetReference, Shot, Workspace } from "@/api/projects";
 import { VideoThumb } from "@/components/VideoThumb";
+import { Select } from "@/components/ui/Select";
 import {
   buildCompositionModel, clamp, compositionShotAt, nextCompositionShot, numeric,
-  shotVisualStyle, subtitleStyle, transitionLayerStyle, transitionState,
+  effectiveShotAdjust, shotVisualStyle, subtitleStyle, transitionLayerStyle, transitionState,
   type CompositionShot,
 } from "@/lib/compositionPreview";
 
-type ResourceTab = "outline" | "assets" | "audio" | "global";
-type InspectorTab = "visual" | "audio" | "caption" | "process";
+type ResourceTab = "outline" | "assets" | "settings";
+type InspectorTab = "visual" | "audio" | "caption";
 
 interface Props {
   workspace: Workspace;
@@ -27,11 +30,11 @@ interface Props {
   onSelectScene: (id: string | null) => void;
   onSelectShot: (id: string | null) => void;
   onUpdateDocumentSettings: (patch: Partial<ProjectDocumentSettings>) => void;
-  onUpdateGlobalScope: (scope: "film" | "scene", sceneId: string | undefined, patch: Partial<GlobalScopeLayers>) => void;
+  onApplyGlobalColorGrade: (colorGrade: Record<string, unknown>, clearShotOverrides: boolean) => void;
+  onUpdateProject: (patch: Partial<Project>) => void;
   onUpdateScene: (sceneId: string, patch: Partial<Scene>) => void;
   onMoveScene: (sceneId: string, direction: -1 | 1) => void;
   onUpdateShot: (sceneId: string, shotId: string, patch: Partial<Shot>) => void;
-  onMoveShot: (sceneId: string, shotId: string, direction: -1 | 1) => void;
   onSplitShot: (sceneId: string, shotId: string, offsetMs: number) => void;
   onRemoveShotAsset: (sceneId: string, shotId: string) => void;
   onDuplicateShot: (sceneId: string, shotId: string) => void;
@@ -40,23 +43,22 @@ interface Props {
   onAddShot: (sceneId: string) => void;
   onDeleteScene: () => void;
   onDeleteShot: () => void;
-  onUpload: () => void;
   onRunOperation: (operation: ProjectOperation, parameters?: Record<string, unknown>, scope?: { type: "project" | "scene" | "shot"; sceneIds?: string[]; shotIds?: string[] }) => void;
   onOpenQuickAI: (scope: "project" | "scene" | "shot", kind?: GenerationKind) => void;
+  onOpenVoiceover: () => void;
+  onApplyVoiceoverMaster: (assetId: string) => Promise<void>;
 }
 
 const resources = [
   { id: "outline", label: "结构", icon: AlignLeft },
   { id: "assets", label: "素材", icon: Library },
-  { id: "audio", label: "声音", icon: AudioLines },
-  { id: "global", label: "全局", icon: SlidersHorizontal },
+  { id: "settings", label: "项目设置", icon: SlidersHorizontal },
 ] as const;
 
 const inspectors = [
   { id: "visual", label: "画面" },
-  { id: "audio", label: "声音" },
+  { id: "audio", label: "音频" },
   { id: "caption", label: "字幕" },
-  { id: "process", label: "处理" },
 ] as const;
 
 const filterPresets = [
@@ -79,14 +81,16 @@ function formatTime(ms: number) {
   return `${String(minutes).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}.${Math.floor((seconds % 1) * 10)}`;
 }
 
-function aspectRatioStyle(aspectRatio: ProjectDocumentSettings["aspectRatio"]): CSSProperties {
+function aspectRatioNumbers(aspectRatio: ProjectDocumentSettings["aspectRatio"]): [number, number] {
   const [width, height] = aspectRatio.split(":").map(Number);
-  return { aspectRatio: `${width} / ${height}` };
+  return [width || 16, height || 9];
 }
 
-function stageSizeClass(aspectRatio: ProjectDocumentSettings["aspectRatio"]): string {
-  const [width, height] = aspectRatio.split(":").map(Number);
-  return width < height ? "h-full w-auto max-w-full" : "h-auto w-full max-h-full max-w-4xl";
+function stageFrameStyle(aspectRatio: ProjectDocumentSettings["aspectRatio"], available: { width: number; height: number }): CSSProperties {
+  const [width, height] = aspectRatioNumbers(aspectRatio);
+  const ratio = width / height;
+  const frameWidth = Math.max(1, Math.min(available.width || 1, (available.height || 1) * ratio));
+  return { aspectRatio: `${width} / ${height}`, width: frameWidth, height: frameWidth / ratio };
 }
 
 function scopeReference(value: unknown): ScopeAssetReference | null {
@@ -99,26 +103,54 @@ function scopeReferenceList(value: unknown): ScopeAssetReference[] {
   return Array.isArray(value) ? value.map(scopeReference).filter((item): item is ScopeAssetReference => Boolean(item)) : [];
 }
 
+function seekMedia(element: HTMLMediaElement, seconds: number, toleranceSeconds = 0.12) {
+  if (!Number.isFinite(seconds) || element.readyState === HTMLMediaElement.HAVE_NOTHING) return;
+  const maximum = Number.isFinite(element.duration) ? Math.max(0, element.duration - 0.001) : seconds;
+  const target = clamp(seconds, 0, maximum);
+  if (Math.abs(element.currentTime - target) <= toleranceSeconds) return;
+  try { element.currentTime = target; } catch { /* the media source is not seekable yet */ }
+}
+
 function CompositionAudioTrack({ asset, volume, playheadMs, playing, muted, startMs = 0, endMs, atMs = 0, loop = false }: {
   asset?: Asset; volume: number; playheadMs: number; playing: boolean; muted: boolean;
   startMs?: number; endMs?: number; atMs?: number; loop?: boolean;
 }) {
   const ref = useRef<HTMLAudioElement | null>(null);
   const active = Boolean(asset?.mediaUrl) && playheadMs >= startMs + atMs && (endMs === undefined || playheadMs < endMs);
+  const elapsedMs = Math.max(0, playheadMs - startMs - atMs);
+  const localSeconds = (loop && (asset?.durationMs ?? 0) > 0 ? elapsedMs % asset!.durationMs : elapsedMs) / 1000;
+  const desiredSecondsRef = useRef(localSeconds);
+  useEffect(() => { desiredSecondsRef.current = localSeconds; }, [localSeconds]);
+
   useEffect(() => {
     const audio = ref.current;
     if (!audio) return;
-    const localSeconds = Math.max(0, playheadMs - startMs - atMs) / 1000;
-    if (Math.abs(audio.currentTime - localSeconds) > 0.2) {
-      try { audio.currentTime = localSeconds; } catch { /* metadata is not ready yet */ }
-    }
     audio.volume = clamp(volume, 0, 100) / 100;
     audio.muted = muted || volume <= 0;
-    if (playing && active) void audio.play().catch(() => undefined);
-    else audio.pause();
-  }, [active, atMs, muted, playheadMs, playing, startMs, volume]);
+  }, [muted, volume]);
+
+  useEffect(() => {
+    const audio = ref.current;
+    if (!audio) return;
+    if (!playing || !active) {
+      audio.pause();
+      return;
+    }
+    seekMedia(audio, desiredSecondsRef.current, 0.35);
+    void audio.play().catch(() => undefined);
+  }, [active, asset?.mediaUrl, atMs, loop, playing, startMs]);
+
+  useEffect(() => {
+    const audio = ref.current;
+    if (!audio || playing || !active) return;
+    seekMedia(audio, localSeconds);
+  }, [active, localSeconds, playing]);
+
   if (!asset?.mediaUrl) return null;
-  return <audio ref={ref} src={asset.mediaUrl} loop={loop} preload="metadata" />;
+  return <audio ref={ref} src={asset.mediaUrl} loop={loop} preload="auto" onLoadedMetadata={(event) => {
+    seekMedia(event.currentTarget, desiredSecondsRef.current, 0);
+    if (playing && active) void event.currentTarget.play().catch(() => undefined);
+  }} />;
 }
 
 function CompositionAudioMix({ workspace, model, activeShot, playheadMs, playing, muted }: {
@@ -140,7 +172,10 @@ function CompositionAudioMix({ workspace, model, activeShot, playheadMs, playing
   const musicStart = shotMusic ? activeShot?.startMs ?? 0 : sceneMusic ? sceneStart : 0;
   const musicEnd = shotMusic ? activeShot?.endMs : sceneMusic ? sceneEnd : model.durationMs;
   const voice = mix.voiceAssetId ? assets.get(mix.voiceAssetId) : undefined;
-  const voiceActive = Boolean(voice?.mediaUrl) && !mix.voiceMuted && numeric(mix.voiceVolume, 100) > 0;
+  const voiceActive = Boolean(voice?.mediaUrl)
+    && !mix.voiceMuted
+    && numeric(mix.voiceVolume, 100) > 0
+    && (numeric(voice?.durationMs) <= 0 || playheadMs < numeric(voice?.durationMs));
   const musicVolume = mix.musicMuted ? 0 : numeric(music?.volume, numeric(mix.musicVolume, 24));
   const duckedMusicVolume = mix.duckingEnabled !== false && voiceActive ? musicVolume * 0.52 : musicVolume;
   const effects = [
@@ -155,31 +190,42 @@ function CompositionAudioMix({ workspace, model, activeShot, playheadMs, playing
   </div>;
 }
 
-function CompositionOverlayVideo({ asset, item, startMs, playheadMs, style, className }: {
-  asset: Asset; item: ScopeAssetReference; startMs: number; playheadMs: number;
+function CompositionOverlayVideo({ asset, item, startMs, playheadMs, playing, style, className }: {
+  asset: Asset; item: ScopeAssetReference; startMs: number; playheadMs: number; playing: boolean;
   style: CSSProperties; className: string;
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
-  const previousPlayhead = useRef(playheadMs);
+  const elapsed = Math.max(0, playheadMs - startMs);
+  const localMs = item.loop !== false && asset.durationMs > 0 ? elapsed % asset.durationMs : elapsed;
+  const desiredSecondsRef = useRef(localMs / 1000);
+  useEffect(() => { desiredSecondsRef.current = localMs / 1000; }, [localMs]);
+
   useEffect(() => {
     const video = ref.current;
     if (!video) return;
-    const elapsed = Math.max(0, playheadMs - startMs);
-    const localMs = item.loop !== false && asset.durationMs > 0 ? elapsed % asset.durationMs : elapsed;
-    if (Math.abs(video.currentTime - localMs / 1000) > 0.2) {
-      try { video.currentTime = localMs / 1000; } catch { /* metadata is not ready yet */ }
+    if (!playing) {
+      video.pause();
+      seekMedia(video, desiredSecondsRef.current);
+      return;
     }
-    const delta = playheadMs - previousPlayhead.current;
-    previousPlayhead.current = playheadMs;
-    if (delta > 0 && delta < 500) void video.play().catch(() => undefined);
-    const pauseTimer = window.setTimeout(() => video.pause(), 180);
-    return () => window.clearTimeout(pauseTimer);
-  }, [asset.durationMs, item.loop, playheadMs, startMs]);
-  return <video ref={ref} src={asset.mediaUrl} muted loop={item.loop !== false} playsInline preload="metadata" style={style} className={className} />;
+    seekMedia(video, desiredSecondsRef.current, 0.35);
+    void video.play().catch(() => undefined);
+  }, [asset.mediaUrl, item.loop, playing, startMs]);
+
+  useEffect(() => {
+    const video = ref.current;
+    if (!video || playing) return;
+    seekMedia(video, localMs / 1000);
+  }, [localMs, playing]);
+
+  return <video ref={ref} src={asset.mediaUrl} muted loop={item.loop !== false} playsInline preload="auto" onLoadedMetadata={(event) => {
+    seekMedia(event.currentTarget, desiredSecondsRef.current, 0);
+    if (playing) void event.currentTarget.play().catch(() => undefined);
+  }} style={style} className={className} />;
 }
 
-function CompositionOverlays({ workspace, model, activeShot, playheadMs }: {
-  workspace: Workspace; model: ReturnType<typeof buildCompositionModel>; activeShot?: CompositionShot; playheadMs: number;
+function CompositionOverlays({ workspace, model, activeShot, playheadMs, playing }: {
+  workspace: Workspace; model: ReturnType<typeof buildCompositionModel>; activeShot?: CompositionShot; playheadMs: number; playing: boolean;
 }) {
   const assets = new Map(workspace.linkedAssets.map((asset) => [asset.id, asset]));
   const film = scopeReferenceList(workspace.document.globalScopes.film.visualAssets);
@@ -207,13 +253,13 @@ function CompositionOverlays({ workspace, model, activeShot, playheadMs }: {
     const style: CSSProperties = { opacity: clamp(numeric(item.opacity, 32), 0, 100) / 100, mixBlendMode: String(item.blendMode ?? "normal") as CSSProperties["mixBlendMode"] };
     const className = `pointer-events-none absolute inset-0 z-[5] h-full w-full ${item.fitMode === "contain" ? "object-contain" : "object-cover"}`;
     return asset.mediaType === "video"
-      ? <CompositionOverlayVideo key={`${item.id ?? item.assetId}-${index}`} asset={asset} item={item} startMs={startMs} playheadMs={playheadMs} style={style} className={className} />
+      ? <CompositionOverlayVideo key={`${item.id ?? item.assetId}-${index}`} asset={asset} item={item} startMs={startMs} playheadMs={playheadMs} playing={playing} style={style} className={className} />
       : <img key={`${item.id ?? item.assetId}-${index}`} src={source} alt="" style={style} className={className} />;
   })}</>;
 }
 
-function CompositionMedia({ meta, playheadMs, playing, muted }: {
-  meta?: CompositionShot; playheadMs: number; playing: boolean; muted: boolean;
+function CompositionMedia({ meta, playheadMs, playing, muted, globalVisualSettings }: {
+  meta?: CompositionShot; playheadMs: number; playing: boolean; muted: boolean; globalVisualSettings?: Record<string, unknown>;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const localMs = meta ? clamp(playheadMs - meta.startMs, 0, meta.durationMs) : 0;
@@ -221,25 +267,44 @@ function CompositionMedia({ meta, playheadMs, playing, muted }: {
     ? clamp(meta.sourceStartMs + localMs, meta.sourceStartMs, Math.max(meta.sourceStartMs, meta.sourceEndMs - 30))
     : 0;
   const progress = meta ? localMs / Math.max(1, meta.durationMs) : 0;
-  const visualStyle = meta ? shotVisualStyle(meta.shot, progress) : undefined;
+  const visualStyle = meta ? shotVisualStyle(meta.shot, progress, globalVisualSettings) : undefined;
   const originalVolume = clamp(numeric(meta?.shot.audioSettings.originalVolume, 100), 0, 100) / 100;
+  const desiredSecondsRef = useRef(sourceMs / 1000);
+  useEffect(() => { desiredSecondsRef.current = sourceMs / 1000; }, [sourceMs]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = originalVolume;
+    video.muted = muted || originalVolume <= 0;
+  }, [muted, originalVolume]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !meta) return;
-    const seconds = sourceMs / 1000;
-    if (Math.abs(video.currentTime - seconds) > 0.16) {
-      try { video.currentTime = seconds; } catch { /* metadata is not ready yet */ }
+    if (!playing) {
+      video.pause();
+      return;
     }
-    video.volume = originalVolume;
-    video.muted = muted || originalVolume <= 0;
-    if (playing) void video.play().catch(() => undefined);
-    else video.pause();
-  }, [meta, muted, originalVolume, playing, sourceMs]);
+    // Continuous playback is owned by the browser decoder. Only align once when
+    // playback starts or the active shot/source changes; per-frame seeking makes
+    // long-GOP and remote media repeatedly decode from a keyframe.
+    seekMedia(video, desiredSecondsRef.current, 0.35);
+    void video.play().catch(() => undefined);
+  }, [meta, playing]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !meta || playing) return;
+    seekMedia(video, sourceMs / 1000);
+  }, [meta, playing, sourceMs]);
 
   if (!meta) return <div className="absolute inset-0 grid place-items-center bg-[#111318] text-center text-sm text-white/55"><div><Film size={36} className="mx-auto mb-3 opacity-40" />时间线中还没有镜头</div></div>;
   if (meta.asset?.mediaType === "video" && meta.mediaUrl) {
-    return <video ref={videoRef} src={meta.mediaUrl} poster={meta.thumbnailUrl} playsInline preload="metadata" style={visualStyle} onLoadedMetadata={(event) => { event.currentTarget.currentTime = sourceMs / 1000; }} className="absolute inset-0 h-full w-full object-cover will-change-transform" />;
+    return <video ref={videoRef} src={meta.mediaUrl} poster={meta.thumbnailUrl} playsInline preload="auto" style={visualStyle} onLoadedMetadata={(event) => {
+      seekMedia(event.currentTarget, desiredSecondsRef.current, 0);
+      if (playing) void event.currentTarget.play().catch(() => undefined);
+    }} className="absolute inset-0 h-full w-full object-cover will-change-transform" />;
   }
   if ((meta.asset?.mediaType === "image" || meta.thumbnailUrl) && (meta.mediaUrl || meta.thumbnailUrl)) {
     return <img src={meta.mediaUrl ?? meta.thumbnailUrl} alt="" style={visualStyle} className="absolute inset-0 h-full w-full object-cover will-change-transform" />;
@@ -247,37 +312,159 @@ function CompositionMedia({ meta, playheadMs, playing, muted }: {
   return <div className="absolute inset-0 overflow-hidden bg-[radial-gradient(circle_at_25%_20%,#314b77_0%,#1b2334_32%,#111318_72%)]" style={visualStyle}><div className="absolute inset-0 opacity-30 [background-image:linear-gradient(rgba(255,255,255,.06)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.06)_1px,transparent_1px)] [background-size:32px_32px]" /><div className="absolute inset-0 grid place-items-center px-8 text-center text-white/75"><div><Film size={32} className="mx-auto mb-3 opacity-60" /><strong className="block text-sm">{meta.shot.description || "镜头占位"}</strong><span className="mt-1 block text-[11px] text-white/45">{meta.asset ? "素材尚无可播放预览" : "等待匹配或生成素材"}</span></div></div></div>;
 }
 
-function RangeControl({ label, value, minimum, maximum, suffix = "", onChange }: {
-  label: string; value: number; minimum: number; maximum: number; suffix?: string;
+function RangeControl({ label, value, minimum, maximum, suffix = "", step = 1, formatValue, onChange }: {
+  label: string; value: number; minimum: number; maximum: number; suffix?: string; step?: number;
+  formatValue?: (value: number) => string;
   onChange: (value: number) => void;
 }) {
-  return <label className="block text-[11px] text-muted"><span className="flex justify-between"><span>{label}</span><strong className="font-medium text-text">{value}{suffix}</strong></span><input type="range" min={minimum} max={maximum} value={value} onChange={(event) => onChange(Number(event.target.value))} className="mt-1.5 w-full accent-blue" /></label>;
+  return <label className="block text-[11px] text-muted"><span className="flex justify-between"><span>{label}</span><strong className="font-medium text-text">{formatValue ? formatValue(value) : `${value}${suffix}`}</strong></span><input type="range" min={minimum} max={maximum} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} className="mt-1.5 w-full accent-blue" /></label>;
 }
 
-function SourceTrimControl({ shot, assetDurationMs, onChange }: {
-  shot: Shot; assetDurationMs: number; onChange: (patch: Partial<Shot>) => void;
+function SourceTrimControl({ shot, asset, onChange, onOpen, onReplace, onRemove }: {
+  shot: Shot;
+  asset?: Asset;
+  onChange: (patch: Partial<Shot>) => void;
+  onOpen: () => void;
+  onReplace: () => void;
+  onRemove: () => void;
 }) {
-  const duration = Math.max(100, assetDurationMs);
   return <section className="rounded-xl border border-line p-3">
-    <header className="flex items-center justify-between"><strong className="text-xs text-text">素材裁切</strong><label className="flex items-center gap-1 text-[10px] text-muted"><input type="checkbox" checked={shot.locked} onChange={(event) => onChange({ locked: event.target.checked })} />锁定镜头</label></header>
-    <div className="mt-3 grid grid-cols-2 gap-2"><label className="text-[10px] text-muted">入点（秒）<input aria-label="素材入点" type="number" min={0} max={Math.max(0, shot.sourceEndMs - 100) / 1000} step={0.1} value={(shot.sourceStartMs / 1000).toFixed(1)} disabled={!shot.assetId || shot.locked} onChange={(event) => onChange({ sourceStartMs: clamp(Math.round(Number(event.target.value) * 1000), 0, Math.max(0, shot.sourceEndMs - 100)) })} className="mt-1 w-full rounded-lg border border-line p-2 text-xs text-text disabled:opacity-50" /></label><label className="text-[10px] text-muted">出点（秒）<input aria-label="素材出点" type="number" min={(shot.sourceStartMs + 100) / 1000} max={duration / 1000} step={0.1} value={(shot.sourceEndMs / 1000).toFixed(1)} disabled={!shot.assetId || shot.locked} onChange={(event) => onChange({ sourceEndMs: clamp(Math.round(Number(event.target.value) * 1000), shot.sourceStartMs + 100, duration) })} className="mt-1 w-full rounded-lg border border-line p-2 text-xs text-text disabled:opacity-50" /></label></div>
-    <div className="relative mt-3 h-1.5 overflow-hidden rounded-full bg-canvas"><span className="absolute inset-y-0 rounded-full bg-blue" style={{ left: `${shot.sourceStartMs / duration * 100}%`, right: `${100 - shot.sourceEndMs / duration * 100}%` }} /></div>
+    <header className="flex items-start justify-between gap-3"><div className="min-w-0"><span className="block text-[10px] text-muted">当前画面素材</span><strong className="mt-1 block truncate text-xs text-text">{asset?.name ?? "尚未选择素材"}</strong></div><details className="relative shrink-0"><summary aria-label="更多素材操作" className="grid h-7 w-7 cursor-pointer list-none place-items-center rounded-md text-muted hover:bg-canvas"><MoreHorizontal size={14} /></summary><div className="absolute right-0 top-8 z-20 w-32 rounded-lg border border-line bg-white p-1 shadow-lg"><button type="button" onClick={onRemove} disabled={shot.locked || (!asset && !shot.selectedMediaVersionId)} className="w-full rounded-md px-2 py-1.5 text-left text-[10px] text-red hover:bg-red/5 disabled:opacity-35">移除当前素材</button></div></details></header>
+    {!asset ? <p className="mt-3 text-[11px] text-muted">从项目素材中选择画面，应用后才会替换当前镜头。</p> : asset.mediaType === "image" ? <div className="mt-3 rounded-lg bg-canvas px-3 py-2 text-[11px] text-muted">静态图片没有可裁剪的源片段，当前展示时长为 {(shot.durationMs / 1000).toFixed(1)} 秒。</div> : <div className="mt-3 flex items-end justify-between gap-3"><div><span className="block text-[10px] text-muted">当前使用片段</span><strong className="mt-1 block text-xs tabular-nums text-text">{formatTime(shot.sourceStartMs)}–{formatTime(shot.sourceStartMs + shot.durationMs)}</strong></div><div className="text-right"><span className="block text-[10px] text-muted">片段长度</span><strong className="mt-1 block text-xs text-text">{(shot.durationMs / 1000).toFixed(1)} 秒</strong></div></div>}
+    <div className="mt-3 grid grid-cols-2 gap-2"><button type="button" onClick={onReplace} disabled={shot.locked} className="rounded-lg bg-blue-soft py-2 text-[10px] font-semibold text-blue disabled:opacity-35">{asset ? "更换素材" : "选择素材"}</button><button type="button" onClick={onOpen} disabled={!asset || asset.mediaType !== "video" || shot.locked} className="rounded-lg border border-line py-2 text-[10px] font-medium text-text disabled:opacity-35">调整片段</button></div>
+    <label className="mt-3 flex items-center gap-1 text-[10px] text-muted"><input type="checkbox" checked={shot.locked} onChange={(event) => onChange({ locked: event.target.checked })} />锁定画面素材，防止误替换或裁剪</label>
   </section>;
+}
+
+function ClipTrimModal({ open, shot, asset, onClose, onApply }: {
+  open: boolean; shot?: Shot; asset?: Asset; onClose: () => void;
+  onApply: (patch: Partial<Shot>) => void;
+}) {
+  const [startMs, setStartMs] = useState(0);
+  const [durationMs, setDurationMs] = useState(1000);
+  const [loopPreview, setLoopPreview] = useState(true);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (!open || !shot || !asset) return;
+    const maximumDuration = Math.max(100, asset.durationMs - shot.sourceStartMs);
+    setStartMs(clamp(shot.sourceStartMs, 0, Math.max(0, asset.durationMs - 100)));
+    setDurationMs(clamp(shot.durationMs, 100, maximumDuration));
+  }, [asset, open, shot]);
+  function previewAt(nextStartMs: number) {
+    setStartMs(nextStartMs);
+    setDurationMs((current) => Math.min(current, Math.max(100, (asset?.durationMs ?? 100) - nextStartMs)));
+    if (videoRef.current) seekMedia(videoRef.current, nextStartMs / 1000, 0);
+  }
+  if (!open || !shot || !asset || asset.mediaType !== "video") return null;
+  const sourceDuration = Math.max(100, asset.durationMs);
+  const maxStart = Math.max(0, sourceDuration - 100);
+  const maxDuration = Math.max(100, sourceDuration - startMs);
+  const endMs = startMs + durationMs;
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-ink/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="trim-dialog-title"><section className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-2xl"><header className="shrink-0 flex items-start justify-between border-b border-line px-5 py-4"><div><h2 id="trim-dialog-title" className="text-sm font-semibold text-text">调整素材片段</h2><p className="mt-1 text-[11px] text-muted">预览只播放当前使用范围；调整入点和镜头时长后会立即更新。</p></div><button type="button" aria-label="关闭片段调整" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-canvas"><X size={15} /></button></header><div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5"><div className="overflow-hidden rounded-xl bg-[#111318]">{asset.mediaUrl ? <video ref={videoRef} src={asset.mediaUrl} controls preload="metadata" className="aspect-video w-full object-contain" onLoadedMetadata={() => previewAt(startMs)} onPlay={(event) => { const currentMs = event.currentTarget.currentTime * 1000; if (currentMs < startMs || currentMs >= endMs) seekMedia(event.currentTarget, startMs / 1000, 0); }} onTimeUpdate={(event) => { if (event.currentTarget.currentTime * 1000 < endMs - 30) return; if (loopPreview) { seekMedia(event.currentTarget, startMs / 1000, 0); void event.currentTarget.play().catch(() => undefined); } else { event.currentTarget.pause(); seekMedia(event.currentTarget, endMs / 1000, 0); } }} /> : <div className="grid aspect-video place-items-center text-xs text-white/45">当前素材没有可播放预览</div>}</div><div><div className="flex items-center justify-between text-[11px]"><span className="text-muted">当前使用范围</span><strong className="tabular-nums text-text">{formatTime(startMs)}–{formatTime(endMs)} · {(durationMs / 1000).toFixed(1)} 秒</strong></div><div className="relative mt-3 h-3 overflow-hidden rounded-full bg-canvas"><span className="absolute inset-y-0 rounded-full bg-blue" style={{ left: `${startMs / sourceDuration * 100}%`, width: `${durationMs / sourceDuration * 100}%` }} /></div><div className="mt-1 flex justify-between text-[9px] text-muted"><span>00:00.0</span><span>{formatTime(sourceDuration)}</span></div></div><RangeControl label="素材入点" value={startMs} minimum={0} maximum={maxStart} step={100} formatValue={formatTime} onChange={previewAt} /><RangeControl label="镜头时长" value={durationMs} minimum={100} maximum={maxDuration} step={100} formatValue={(value) => `${(value / 1000).toFixed(1)} 秒`} onChange={(value) => { setDurationMs(value); if (videoRef.current) seekMedia(videoRef.current, startMs / 1000, 0); }} /><label className="flex items-center gap-2 rounded-lg bg-canvas px-3 py-2 text-[10px] text-muted"><input type="checkbox" checked={loopPreview} onChange={(event) => setLoopPreview(event.target.checked)} />循环预览裁剪后的片段</label><p className="rounded-lg bg-canvas px-3 py-2 text-[10px] leading-4 text-muted">最终使用范围始终等于“素材入点 + 镜头时长”，预览与导出会使用同一组时间参数。</p></div><footer className="shrink-0 flex justify-end gap-2 border-t border-line bg-canvas/60 px-5 py-4"><button type="button" onClick={onClose} className="rounded-lg border border-line bg-white px-4 py-2 text-xs text-text">取消</button><button type="button" onClick={() => { onApply({ sourceStartMs: startMs, sourceEndMs: endMs, durationMs }); onClose(); }} className="rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white">应用片段</button></footer></section></div>;
+}
+
+function MaterialHistoryModal({ open, shot, assets, onClose, onApply }: {
+  open: boolean;
+  shot?: Shot;
+  assets: Asset[];
+  onClose: () => void;
+  onApply: (patch: Partial<Shot>) => void;
+}) {
+  const [previewVersionId, setPreviewVersionId] = useState<string | null>(null);
+  const versions = useMemo(() => {
+    if (!shot) return [];
+    return [...shot.mediaVersions].sort((left, right) => {
+      const leftMaterial = left.parameters.material_history;
+      const rightMaterial = right.parameters.material_history;
+      const leftRecord = leftMaterial && typeof leftMaterial === "object" ? leftMaterial as Record<string, unknown> : {};
+      const rightRecord = rightMaterial && typeof rightMaterial === "object" ? rightMaterial as Record<string, unknown> : {};
+      const leftTime = String(leftRecord.last_used_at ?? left.parameters.last_used_at ?? left.createdAt);
+      const rightTime = String(rightRecord.last_used_at ?? right.parameters.last_used_at ?? right.createdAt);
+      return new Date(rightTime).getTime() - new Date(leftTime).getTime();
+    });
+  }, [shot]);
+  useEffect(() => {
+    if (!open || !shot) return;
+    setPreviewVersionId(shot.selectedMediaVersionId ?? versions[0]?.id ?? null);
+  }, [open, shot, versions]);
+  if (!open || !shot) return null;
+  const selectedVersion = versions.find((version) => version.id === previewVersionId);
+  const selectedAsset = assets.find((asset) => asset.id === selectedVersion?.assetId);
+  const materialValue = selectedVersion?.parameters.material_history;
+  const material = materialValue && typeof materialValue === "object" ? materialValue as Record<string, unknown> : {};
+  const sourceStartMs = numeric(material.source_start_ms, 0);
+  const recordedEndMs = numeric(material.source_end_ms, selectedAsset?.durationMs ?? 0);
+  const availableDurationMs = selectedAsset?.mediaType === "video"
+    ? Math.max(100, Math.min(recordedEndMs || selectedAsset.durationMs, selectedAsset.durationMs) - sourceStartMs)
+    : shot.durationMs;
+  const nextDurationMs = selectedAsset?.mediaType === "video"
+    ? Math.min(shot.durationMs, availableDurationMs)
+    : shot.durationMs;
+  const originLabels: Record<string, string> = {
+    library: "从素材库选择",
+    match: "素材匹配",
+    ai_image: "AI 生成图片",
+    ai_video: "AI 生成视频",
+    previous_selection: "之前使用的素材",
+  };
+  function versionOrigin(version: Shot["mediaVersions"][number]) {
+    const value = version.parameters.material_history;
+    const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    const origin = String(record.origin ?? "");
+    if (originLabels[origin]) return originLabels[origin];
+    if (version.kind === "generated_image") return "AI 生成图片";
+    if (["generated_video", "effect_video"].includes(version.kind)) return "AI 生成视频";
+    if (version.kind === "matched_segment") return "素材匹配";
+    return "从素材库选择";
+  }
+  return <div className="fixed inset-0 z-[80] grid place-items-center bg-ink/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="material-history-title">
+    <section className="grid max-h-[calc(100vh-2rem)] w-full max-w-4xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-line bg-white shadow-2xl">
+      <header className="flex items-start justify-between border-b border-line px-5 py-4"><div><h2 id="material-history-title" className="text-sm font-semibold text-text">画面历史</h2><p className="mt-1 text-[11px] text-muted">保留这个镜头曾经选择、匹配或生成过的素材；应用时不改动描述、调色、构图和字幕。</p></div><button type="button" onClick={onClose} aria-label="关闭画面历史" className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-canvas"><X size={16} /></button></header>
+      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_280px] max-md:grid-cols-1">
+        <div className="min-h-0 overflow-y-auto p-4"><div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{versions.map((version) => { const asset = assets.find((item) => item.id === version.assetId); const value = version.parameters.material_history; const record = value && typeof value === "object" ? value as Record<string, unknown> : {}; const active = version.id === shot.selectedMediaVersionId; const previewing = version.id === previewVersionId; return <button type="button" key={version.id} onClick={() => setPreviewVersionId(version.id)} className={`overflow-hidden rounded-xl border text-left transition ${previewing ? "border-blue ring-2 ring-blue/10" : "border-line hover:border-blue/40"}`}><div className="relative"><VideoThumb imageUrl={asset?.thumbnailUrl ?? (asset?.mediaType === "image" ? asset.mediaUrl : undefined)} videoUrl={asset?.mediaType === "video" ? asset.mediaUrl : undefined} showPlay={asset?.mediaType === "video"} rounded="rounded-none" /><span className={`absolute left-2 top-2 rounded px-1.5 py-0.5 text-[9px] ${active ? "bg-blue text-white" : "bg-black/55 text-white"}`}>{active ? "当前使用" : versionOrigin(version)}</span></div><div className="p-2.5"><strong className="block truncate text-[11px] text-text">{asset?.name ?? "素材已不可用"}</strong><span className="mt-1 block text-[9px] text-muted">{record.segment_id ? `片段 ${formatTime(numeric(record.source_start_ms))}–${formatTime(numeric(record.source_end_ms))}` : versionOrigin(version)}</span><span className="mt-1 block text-[9px] text-muted">{new Date(String(record.last_used_at ?? version.parameters.last_used_at ?? version.createdAt)).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></div></button>; })}</div>{!versions.length && <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-line text-center text-xs text-muted">这个镜头还没有历史素材</div>}</div>
+        <aside className="min-h-0 overflow-y-auto border-l border-line bg-canvas/40 p-4 max-md:border-l-0 max-md:border-t"><strong className="text-xs text-text">选中素材预览</strong>{selectedVersion ? <><div className="mt-3 overflow-hidden rounded-xl border border-line bg-ink"><VideoThumb imageUrl={selectedAsset?.thumbnailUrl ?? (selectedAsset?.mediaType === "image" ? selectedAsset.mediaUrl : undefined)} videoUrl={selectedAsset?.mediaType === "video" ? selectedAsset.mediaUrl : undefined} showPlay={selectedAsset?.mediaType === "video"} rounded="rounded-none" /></div><strong className="mt-3 block text-xs text-text">{selectedAsset?.name ?? "素材已不可用"}</strong><p className="mt-1 text-[10px] leading-5 text-muted">{versionOrigin(selectedVersion)}{material.segment_id ? ` · ${formatTime(sourceStartMs)}–${formatTime(recordedEndMs)}` : ""}</p>{typeof selectedVersion.parameters.prompt === "string" && selectedVersion.parameters.prompt && <details className="mt-3 rounded-lg border border-line bg-white p-2.5"><summary className="cursor-pointer text-[10px] font-medium text-text">查看生成提示词</summary><p className="mt-2 whitespace-pre-wrap text-[10px] leading-5 text-muted">{selectedVersion.parameters.prompt}</p></details>}{selectedAsset?.mediaType === "video" && nextDurationMs < shot.durationMs && <p className="mt-3 rounded-lg bg-amber/10 p-2 text-[10px] leading-4 text-amber">源片段不足当前 {(shot.durationMs / 1000).toFixed(1)} 秒，应用后镜头将调整为 {(nextDurationMs / 1000).toFixed(1)} 秒。</p>}</> : <p className="mt-3 text-[10px] text-muted">选择左侧的历史素材查看详情。</p>}</aside>
+      </div>
+      <footer className="flex items-center justify-between gap-3 border-t border-line bg-canvas/60 px-5 py-4"><p className="text-[10px] text-muted">应用旧素材后，当前素材仍会保留在历史中。</p><div className="flex gap-2"><button type="button" onClick={onClose} className="rounded-lg border border-line bg-white px-4 py-2 text-xs text-text">取消</button><button type="button" disabled={!selectedVersion || !selectedAsset} onClick={() => { if (!selectedVersion || !selectedAsset) return; onApply({ selectedMediaVersionId: selectedVersion.id, assetId: selectedVersion.assetId, segmentId: typeof material.segment_id === "string" ? material.segment_id : undefined, visualMode: selectedAsset.mediaType, sourceStartMs, sourceEndMs: sourceStartMs + nextDurationMs, durationMs: nextDurationMs }); onClose(); }} className="rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">应用到当前镜头</button></div></footer>
+    </section>
+  </div>;
+}
+
+function AudioAssetPicker({ role, assets, onClose, onSelect }: {
+  role: "voice" | "music" | null; assets: Asset[]; onClose: () => void; onSelect: (assetId: string) => void;
+}) {
+  if (!role) return null;
+  const compatible = assets.filter((asset) => {
+    const purpose = String(asset.metadata.purpose ?? "");
+    if (role === "voice") return purpose !== "voice_take" && !["music", "ai_music", "sound_effect"].includes(purpose);
+    return purpose !== "voice_take" && purpose !== "voiceover_master" && asset.sourceType !== "ai_tts";
+  });
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-ink/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="audio-picker-title"><section className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-2xl"><header className="flex items-start justify-between border-b border-line px-5 py-4"><div><h2 id="audio-picker-title" className="text-sm font-semibold text-text">选择{role === "voice" ? "项目旁白" : "默认背景音乐"}</h2><p className="mt-1 text-[11px] text-muted">{role === "voice" ? "仅显示整片旁白母带和可作为旁白使用的上传音频；单句生成版本不会出现在这里。" : "仅显示音乐和未分类的上传音频；AI 旁白不会出现在这里。"}</p></div><button type="button" aria-label="关闭音频选择" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-canvas"><X size={15} /></button></header><div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">{compatible.map((asset) => { const purpose = String(asset.metadata.purpose ?? ""); return <article key={asset.id} className="rounded-xl border border-line p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><strong className="block truncate text-xs text-text">{asset.name}</strong><span className="mt-1 block text-[10px] text-muted">{purpose === "voiceover_master" ? "AI 旁白母带" : purpose === "ai_music" ? "AI 音乐" : purpose === "music" ? "背景音乐" : "未分类上传音频"} · {formatTime(asset.durationMs)}</span></div><button type="button" onClick={() => onSelect(asset.id)} className="shrink-0 rounded-lg bg-blue-soft px-3 py-1.5 text-[10px] font-semibold text-blue">选择</button></div>{asset.mediaUrl && <audio controls preload="none" src={asset.mediaUrl} className="mt-3 h-8 w-full" />}</article>; })}{!compatible.length && <div className="rounded-xl border border-dashed border-line p-8 text-center text-xs text-muted">当前项目没有可用于{role === "voice" ? "旁白" : "背景音乐"}的音频，请先通过顶部“添加素材”加入。</div>}</div></section></div>;
 }
 
 export function MvpScriptComposer({
   workspace, selectedScene, selectedShot, operationPending, onSelectScene, onSelectShot,
-  onUpdateDocumentSettings, onUpdateGlobalScope, onUpdateScene, onMoveScene, onUpdateShot, onMoveShot, onSplitShot, onRemoveShotAsset, onDuplicateShot, onRestoreSubtitle, onAddScene,
-  onAddShot, onDeleteScene, onDeleteShot, onUpload, onRunOperation, onOpenQuickAI,
+  onUpdateDocumentSettings, onApplyGlobalColorGrade, onUpdateProject, onUpdateScene, onMoveScene, onUpdateShot, onSplitShot, onRemoveShotAsset, onDuplicateShot, onRestoreSubtitle, onAddScene,
+  onAddShot, onDeleteScene, onDeleteShot, onRunOperation, onOpenQuickAI, onOpenVoiceover, onApplyVoiceoverMaster,
 }: Props) {
   const [resourceTab, setResourceTab] = useState<ResourceTab>("outline");
-  const [globalScopeMode, setGlobalScopeMode] = useState<"film" | "scene">("film");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("visual");
   const [assetSearch, setAssetSearch] = useState("");
+  const [selectedResourceAssetId, setSelectedResourceAssetId] = useState<string | null>(null);
+  const [replacementPicking, setReplacementPicking] = useState(false);
+  const [assetToApply, setAssetToApply] = useState<Asset | null>(null);
+  const [editingSceneId, setEditingSceneId] = useState<string | null>(null);
+  const [audioPickerRole, setAudioPickerRole] = useState<"voice" | "music" | null>(null);
+  const [audioApplyPending, setAudioApplyPending] = useState(false);
+  const [trimOpen, setTrimOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [globalColorDraft, setGlobalColorDraft] = useState<Record<string, unknown>>({});
+  const [globalColorDirty, setGlobalColorDirty] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [previewMuted, setPreviewMuted] = useState(false);
   const [playheadMs, setPlayheadMs] = useState(0);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const stageHostRef = useRef<HTMLDivElement | null>(null);
+  const [stageAvailable, setStageAvailable] = useState({ width: 1, height: 1 });
   const playheadRef = useRef(0);
   const scenes = workspace.document.storyboard.scenes;
   const model = useMemo(() => buildCompositionModel(workspace), [workspace]);
@@ -289,22 +476,63 @@ export function MvpScriptComposer({
     const query = assetSearch.trim().toLowerCase();
     return workspace.linkedAssets.filter((asset) => asset.mediaType !== "audio" && (!query || asset.name.toLowerCase().includes(query)));
   }, [assetSearch, workspace.linkedAssets]);
+  const matchableAssetCount = workspace.linkedAssets.filter((asset) => asset.mediaType !== "audio").length;
   const audioAssets = workspace.linkedAssets.filter((asset) => asset.mediaType === "audio");
-  const visualAssets = workspace.linkedAssets.filter((asset) => asset.mediaType !== "audio");
   const audioMix = workspace.document.settings.globalAudio;
-  const activeGlobalScope = globalScopeMode === "scene" && selectedScene?.id
-    ? workspace.document.globalScopes.scenes[selectedScene.id] ?? {}
-    : workspace.document.globalScopes.film;
+  const globalColorGrade = useMemo(() => {
+    const value = workspace.document.settings.visualSettings.colorGrade;
+    return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  }, [workspace.document.settings.visualSettings.colorGrade]);
   const selectedAsset = workspace.linkedAssets.find((asset) => asset.id === selectedShot?.assetId);
-  const selectedAssetDurationMs = Math.max(selectedShot?.sourceEndMs ?? 0, selectedAsset?.durationMs ?? 0, selectedShot?.durationMs ?? 100);
-  const selectedSceneIndex = scenes.findIndex((scene) => scene.id === selectedScene?.id);
-  const selectedSceneLastShot = selectedScene?.shots.at(-1);
+  const selectedEffectiveAdjust = selectedShot
+    ? effectiveShotAdjust(selectedShot, workspace.document.settings.visualSettings)
+    : {};
+  const selectedAdjustIsOverride = selectedShot
+    ? String(selectedShot.adjust.mode ?? (Object.keys(selectedShot.adjust).length ? "override" : "inherit")) === "override"
+    : false;
+  const shotAdjustCounts = useMemo(() => {
+    const shots = scenes.flatMap((scene) => scene.shots);
+    const overridden = shots.filter((shot) => {
+      const values = Object.keys(shot.adjust).filter((key) => key !== "mode");
+      return String(shot.adjust.mode ?? (values.length ? "override" : "inherit")) === "override";
+    }).length;
+    return { total: shots.length, overridden, inherited: shots.length - overridden };
+  }, [scenes]);
+  const previewVisualSettings = globalColorDirty
+    ? { ...workspace.document.settings.visualSettings, colorGrade: globalColorDraft }
+    : workspace.document.settings.visualSettings;
+  const editingScene = scenes.find((scene) => scene.id === editingSceneId);
+  const editingSceneIndex = editingScene ? scenes.findIndex((scene) => scene.id === editingScene.id) : -1;
+  const editingSceneLastShot = editingScene?.shots.at(-1);
+  const selectedVoiceAsset = audioAssets.find((asset) => asset.id === audioMix.voiceAssetId);
+  const selectedMusicAsset = audioAssets.find((asset) => asset.id === audioMix.musicAssetId);
+  const selectedShotMeta = selectedShot?.id ? model.shots.find((shot) => shot.id === selectedShot.id) : undefined;
+  const selectedSceneScope = selectedScene?.id ? workspace.document.globalScopes.scenes[selectedScene.id] ?? {} : {};
+  const selectedShotMusic = scopeReference(selectedShot?.audioSettings.backgroundMusic);
+  const selectedSceneMusic = scopeReference(selectedSceneScope.backgroundMusic);
+  const filmMusic = scopeReference(workspace.document.globalScopes.film.backgroundMusic);
+  const projectMusic = audioMix.musicAssetId ? { assetId: audioMix.musicAssetId, volume: numeric(audioMix.musicVolume, 24) } : null;
+  const effectiveMusic = selectedShotMusic ?? selectedSceneMusic ?? filmMusic ?? projectMusic;
+  const effectiveMusicSource = selectedShotMusic ? "当前镜头覆盖" : selectedSceneMusic ? "继承自当前场景" : filmMusic ? "继承自全片设置" : projectMusic ? "继承自项目默认" : "未配置";
 
   useEffect(() => { playheadRef.current = playheadMs; }, [playheadMs]);
+  useEffect(() => {
+    if (!globalColorDirty) setGlobalColorDraft(globalColorGrade);
+  }, [globalColorDirty, globalColorGrade]);
+  useEffect(() => {
+    const host = stageHostRef.current;
+    if (!host) return;
+    const update = () => setStageAvailable({ width: host.clientWidth, height: host.clientHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     if (!playing) return;
     let frame = 0;
     let previous = performance.now();
+    let lastCommit = previous - 34;
     const tick = (now: number) => {
       const elapsed = Math.min(250, Math.max(0, now - previous));
       previous = now;
@@ -315,7 +543,14 @@ export function MvpScriptComposer({
         setPlaying(false);
         return;
       }
-      playheadRef.current = next; setPlayheadMs(next); frame = requestAnimationFrame(tick);
+      playheadRef.current = next;
+      // The media decoder continues at native frame rate. React only needs a
+      // 30 fps snapshot for subtitles, controls and the timeline playhead.
+      if (now - lastCommit >= 1000 / 30) {
+        lastCommit = now;
+        setPlayheadMs(next);
+      }
+      frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
@@ -352,70 +587,66 @@ export function MvpScriptComposer({
     if (playheadRef.current >= model.durationMs) seek(0);
     setPlaying(true);
   }
-  function chooseAsset(asset?: Asset) {
+  function applyAsset(asset?: Asset) {
     if (!selectedScene?.id || !selectedShot?.id) return;
-    onUpdateShot(selectedScene.id, selectedShot.id, { assetId: asset?.id, visualMode: asset?.mediaType === "image" ? "image" : asset ? "video" : undefined, selectedMediaVersionId: undefined, sourceStartMs: 0, sourceEndMs: asset?.durationMs || selectedShot.durationMs });
+    const durationMs = asset?.mediaType === "video" && asset.durationMs > 0
+      ? Math.min(selectedShot.durationMs, asset.durationMs)
+      : selectedShot.durationMs;
+    onUpdateShot(selectedScene.id, selectedShot.id, {
+      assetId: asset?.id,
+      visualMode: asset?.mediaType === "image" ? "image" : asset ? "video" : undefined,
+      selectedMediaVersionId: undefined,
+      sourceStartMs: 0,
+      sourceEndMs: durationMs,
+      durationMs,
+    });
+    setAssetToApply(null);
+    setReplacementPicking(false);
   }
   function chooseCandidate(candidateId: string) {
     const candidate = selectedShot?.candidates.find((item) => item.id === candidateId);
     if (!candidate) return;
     const segment = workspace.linkedAssets.flatMap((asset) => asset.segments.map((item) => ({ asset, segment: item }))).find(({ segment }) => segment.id === candidate.segmentId);
     if (!segment) return;
+    const sourceStartMs = candidate.rangeStartMs || segment.segment.startMs;
+    const requestedEndMs = candidate.rangeEndMs || segment.segment.endMs;
+    const availableDurationMs = Math.max(100, requestedEndMs - sourceStartMs);
+    const durationMs = segment.asset.mediaType === "video"
+      ? Math.min(selectedShot?.durationMs ?? availableDurationMs, availableDurationMs)
+      : selectedShot?.durationMs ?? availableDurationMs;
     patchSelectedShot({
       assetId: segment.asset.id,
       segmentId: segment.segment.id,
       visualMode: segment.asset.mediaType === "image" ? "image" : "video",
       selectedMediaVersionId: undefined,
-      sourceStartMs: candidate.rangeStartMs || segment.segment.startMs,
-      sourceEndMs: candidate.rangeEndMs || segment.segment.endMs,
+      sourceStartMs,
+      sourceEndMs: sourceStartMs + durationMs,
+      durationMs,
     });
   }
   function patchSelectedShot(patch: Partial<Shot>) {
     if (selectedScene?.id && selectedShot?.id) onUpdateShot(selectedScene.id, selectedShot.id, patch);
   }
-  function patchSceneTransition(patch: Record<string, unknown>) {
-    if (!selectedScene?.id || !selectedSceneLastShot?.id) return;
-    onUpdateShot(selectedScene.id, selectedSceneLastShot.id, {
-      transition: { ...selectedSceneLastShot.transition, ...patch },
+  function patchEditingSceneTransition(patch: Record<string, unknown>) {
+    if (!editingScene?.id || !editingSceneLastShot?.id) return;
+    onUpdateShot(editingScene.id, editingSceneLastShot.id, {
+      transition: { ...editingSceneLastShot.transition, ...patch },
     });
   }
   function splitSelectedShot() {
     if (!selectedScene?.id || !selectedShot?.id || selectedShot.durationMs < 200) return;
     const meta = model.shots.find((shot) => shot.id === selectedShot.id);
-    const localOffset = meta ? playheadRef.current - meta.startMs : selectedShot.durationMs / 2;
-    const offsetMs = localOffset > 100 && localOffset < selectedShot.durationMs - 100
-      ? localOffset
-      : selectedShot.durationMs / 2;
+    const offsetMs = meta ? playheadRef.current - meta.startMs : -1;
+    if (offsetMs < 200 || offsetMs > selectedShot.durationMs - 200) return;
     setPlaying(false);
     onSplitShot(selectedScene.id, selectedShot.id, Math.round(offsetMs));
   }
-  function selectMediaVersion(versionId: string) {
-    const version = selectedShot?.mediaVersions.find((item) => item.id === versionId);
-    if (!version) return;
-    setPlaying(false);
-    patchSelectedShot({ selectedMediaVersionId: version.id, assetId: version.assetId });
-  }
-  function restoreMediaVersionSource() {
-    if (!selectedShot?.selectedMediaVersionId) return;
-    const current = selectedShot.mediaVersions.find((item) => item.id === selectedShot.selectedMediaVersionId);
-    if (!current) return;
-    const snapshot = current.parameters.source_snapshot && typeof current.parameters.source_snapshot === "object"
-      ? current.parameters.source_snapshot as Record<string, unknown>
-      : {};
-    const parent = current.parentVersionId
-      ? selectedShot.mediaVersions.find((item) => item.id === current.parentVersionId)
-      : undefined;
-    setPlaying(false);
-    patchSelectedShot({
-      selectedMediaVersionId: parent?.id,
-      assetId: String(snapshot.asset_id ?? parent?.assetId ?? "") || undefined,
-      visualMode: typeof snapshot.visual_mode === "string" ? snapshot.visual_mode : selectedShot.visualMode,
-      sourceStartMs: numeric(snapshot.source_start_ms, selectedShot.sourceStartMs),
-      sourceEndMs: numeric(snapshot.source_end_ms, selectedShot.sourceEndMs),
-      transform: snapshot.transform && typeof snapshot.transform === "object" ? snapshot.transform as Record<string, unknown> : selectedShot.transform,
-      adjust: snapshot.adjust && typeof snapshot.adjust === "object" ? snapshot.adjust as Shot["adjust"] : selectedShot.adjust,
-      motion: snapshot.motion && typeof snapshot.motion === "object" ? snapshot.motion as Shot["motion"] : selectedShot.motion,
-    });
+
+  function selectMotionPreset(type: string) {
+    patchRecord("motion", { type, ...(type === "none" ? {} : { strength: numeric(selectedShot?.motion.strength, 55) }) });
+    if (type === "none" || !selectedShotMeta) return;
+    seek(selectedShotMeta.startMs, false);
+    setPlaying(true);
   }
   function patchRecord(field: "adjust" | "motion" | "transition" | "subtitleSettings" | "audioSettings", patch: Record<string, unknown>) {
     if (!selectedShot) return;
@@ -424,25 +655,41 @@ export function MvpScriptComposer({
   function patchAudioMix(patch: Partial<ProjectAudioMix>) {
     onUpdateDocumentSettings({ globalAudio: { ...audioMix, ...patch } });
   }
-  function patchGlobalScope(patch: Partial<GlobalScopeLayers>) {
-    onUpdateGlobalScope(globalScopeMode, globalScopeMode === "scene" ? selectedScene?.id : undefined, patch);
+  function patchGlobalColorGrade(patch: Record<string, unknown>) {
+    setGlobalColorDraft((current) => ({ ...(globalColorDirty ? current : globalColorGrade), ...patch }));
+    setGlobalColorDirty(true);
   }
-  function setDefaultAudioAsset(role: "voice" | "music", assetId?: string) {
-    patchAudioMix(role === "voice" ? { voiceAssetId: assetId } : { musicAssetId: assetId });
+  function resetGlobalColorDraft() {
+    setGlobalColorDraft({});
+    setGlobalColorDirty(true);
   }
-  function setGlobalMusic(assetId?: string) {
-    patchGlobalScope({ backgroundMusic: assetId ? { assetId, volume: numeric(activeGlobalScope.backgroundMusic?.volume, 28), loop: true } : null });
+  function discardGlobalColorDraft() {
+    setGlobalColorDraft(globalColorGrade);
+    setGlobalColorDirty(false);
   }
-  function toggleGlobalAsset(field: "soundEffects" | "visualAssets", asset: Asset) {
-    const current = scopeReferenceList(activeGlobalScope[field]);
-    const selected = current.some((item) => item.assetId === asset.id);
-    patchGlobalScope({
-      [field]: selected
-        ? current.filter((item) => item.assetId !== asset.id)
-        : [...current, field === "soundEffects"
-          ? { id: `sfx-${globalScopeMode}-${asset.id}`, assetId: asset.id, volume: 72, atMs: 0 }
-          : { id: `visual-${globalScopeMode}-${asset.id}`, assetId: asset.id, opacity: 32, blendMode: "normal", fitMode: "cover", enabled: true }],
-    });
+  function applyGlobalColorDraft(clearShotOverrides: boolean) {
+    if (clearShotOverrides && shotAdjustCounts.overridden > 0 && !window.confirm(
+      `覆盖全部镜头会清除 ${shotAdjustCounts.overridden} 个镜头的单独调色，是否继续？`,
+    )) return;
+    onApplyGlobalColorGrade(globalColorDraft, clearShotOverrides);
+    setGlobalColorDirty(false);
+  }
+  async function setDefaultAudioAsset(role: "voice" | "music", assetId?: string) {
+    const asset = audioAssets.find((item) => item.id === assetId);
+    if (role === "voice" && assetId && asset?.metadata.purpose === "voiceover_master") {
+      setAudioApplyPending(true);
+      try {
+        await onApplyVoiceoverMaster(assetId);
+        setAudioPickerRole(null);
+      } finally {
+        setAudioApplyPending(false);
+      }
+      return;
+    }
+    patchAudioMix(role === "voice"
+      ? { voiceAssetId: assetId, voiceMuted: assetId ? false : audioMix.voiceMuted }
+      : { musicAssetId: assetId, musicMuted: assetId ? false : audioMix.musicMuted });
+    setAudioPickerRole(null);
   }
   function toggleFullscreen() {
     if (!stageRef.current) return;
@@ -450,46 +697,140 @@ export function MvpScriptComposer({
     else void stageRef.current.requestFullscreen();
   }
 
-  return <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_218px] overflow-hidden bg-[#e9eaed]">
+  const voiceoverQuery = useQuery({
+    queryKey: ["voiceover", workspace.project.id, workspace.document.revision],
+    queryFn: () => getVoiceoverWorkspace(workspace.project.id),
+    enabled: workspace.project.id !== "__preview__",
+    retry: false,
+    staleTime: 15_000,
+  });
+  const timelineVoiceLines = useMemo(() => (voiceoverQuery.data?.lines ?? [])
+    .filter((line) => line.captionEnabled || line.voiceEnabled)
+    .map((line) => {
+      const take = line.takes.find((item) => item.id === line.selectedTakeId) ?? line.takes.find((item) => item.isSelected);
+      return {
+        ...line,
+        durationMs: Math.max(1, line.endMs - line.startMs),
+        audioDurationMs: take?.durationMs ?? 0,
+      };
+    }), [voiceoverQuery.data?.lines]);
+  const selectedShotVoiceLines = timelineVoiceLines.filter((line) => selectedShotMeta
+    && line.startMs < selectedShotMeta.endMs
+    && line.endMs > selectedShotMeta.startMs);
+  const selectedShotVoiceStatus = selectedShotVoiceLines.some((line) => line.status === "stale")
+    ? "存在过期旁白"
+    : selectedShotVoiceLines.some((line) => line.status === "timing_conflict" || line.status === "failed")
+      ? "需要处理"
+      : selectedShotVoiceLines.some((line) => line.status === "generating")
+        ? "生成中"
+        : selectedShotVoiceLines.some((line) => line.status === "ready")
+          ? "已生成"
+          : "未生成";
+  const projectVoiceStatus = timelineVoiceLines.some((line) => line.status === "stale")
+    ? "存在过期旁白"
+    : timelineVoiceLines.some((line) => line.status === "generating")
+      ? "生成中"
+      : timelineVoiceLines.some((line) => line.status === "ready")
+        ? `已生成 ${timelineVoiceLines.filter((line) => line.status === "ready").length} 条`
+        : selectedVoiceAsset ? "已选择旁白母带" : "尚未生成";
+  const selectedSplitOffsetMs = selectedShotMeta ? playheadMs - selectedShotMeta.startMs : -1;
+  const canSplitSelectedShot = Boolean(selectedShotMeta)
+    && selectedSplitOffsetMs >= 200
+    && selectedSplitOffsetMs <= (selectedShot?.durationMs ?? 0) - 200;
+
+  return <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_258px] overflow-hidden bg-[#e9eaed]">
     <div className="grid min-h-0 grid-cols-[264px_minmax(480px,1fr)_320px] gap-px overflow-hidden bg-line">
-      <aside className="flex min-h-0 bg-white">
-        <nav className="flex w-[58px] shrink-0 flex-col items-center gap-1 border-r border-line py-3">{resources.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setResourceTab(id)} className={`flex w-12 flex-col items-center gap-1 rounded-lg py-2 text-[10px] ${resourceTab === id ? "bg-blue-soft text-blue" : "text-muted hover:bg-canvas"}`}><Icon size={16} /><span>{label}</span></button>)}</nav>
+      <aside className="flex min-h-0 flex-col bg-white">
+        <nav className="grid shrink-0 grid-cols-3 gap-1 border-b border-line p-2">{resources.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setResourceTab(id)} className={`flex min-w-0 items-center justify-center gap-1 rounded-lg px-1 py-2 text-[10px] ${resourceTab === id ? "bg-blue-soft font-semibold text-blue" : "text-muted hover:bg-canvas"}`}><Icon size={14} /><span className="truncate">{label}</span></button>)}</nav>
         <div className="min-w-0 flex-1 overflow-y-auto p-3">
-          {resourceTab === "outline" && <><div className="mb-3 flex items-center justify-between"><div><strong className="text-sm text-text">影片结构</strong><p className="text-[10px] text-muted">{scenes.length} 个场景 · {model.shots.length} 个镜头</p></div><button type="button" onClick={onAddScene} className="rounded-md bg-blue-soft p-1.5 text-blue"><Plus size={14} /></button></div><div className="space-y-2">{scenes.map((scene, sceneIndex) => <div key={scene.id ?? sceneIndex} className={`rounded-xl border ${scene.id === selectedScene?.id ? "border-blue bg-blue-soft/30" : "border-line"}`}><button type="button" onClick={() => onSelectScene(scene.id ?? null)} className="w-full p-3 text-left"><span className="text-[10px] font-medium text-muted">场景 {sceneIndex + 1} · {scene.shots.length} 镜头</span><strong className="mt-1 block truncate text-xs text-text">{scene.outline || "未命名场景"}</strong></button>{scene.id === selectedScene?.id && <div className="border-t border-blue/10 px-2 pb-2 pt-1">{scene.shots.map((shot, index) => <button type="button" key={shot.id ?? index} onClick={() => selectShotForPreview(shot.id ?? null)} className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] ${shot.id === selectedShot?.id ? "bg-blue text-white" : "text-muted hover:bg-white"}`}><span>{index + 1}</span><span className="truncate">{shot.description || "空镜头"}</span></button>)}</div>}</div>)}</div></>}
-          {resourceTab === "assets" && <><div className="mb-3 flex items-center justify-between"><strong className="text-sm text-text">项目素材</strong><button type="button" onClick={onUpload} className="rounded-md bg-blue-soft p-1.5 text-blue"><CloudUpload size={14} /></button></div><label className="mb-3 flex items-center gap-2 rounded-lg border border-line px-2.5 py-2 text-muted"><Search size={13} /><input value={assetSearch} onChange={(event) => setAssetSearch(event.target.value)} placeholder="搜索素材" className="min-w-0 flex-1 bg-transparent text-xs outline-none" /></label><div className="grid grid-cols-2 gap-2">{visibleAssets.map((asset) => <button key={asset.id} type="button" onClick={() => chooseAsset(asset)} className={`overflow-hidden rounded-lg border text-left ${asset.id === selectedShot?.assetId ? "border-blue ring-1 ring-blue" : "border-line"}`}><div className="relative aspect-video bg-canvas"><VideoThumb fill imageUrl={asset.thumbnailUrl ?? (asset.mediaType === "image" ? asset.mediaUrl : undefined)} videoUrl={asset.mediaType === "video" ? asset.mediaUrl : undefined} showPlay={false} /></div><span className="block truncate p-1.5 text-[10px] text-text">{asset.name}</span></button>)}</div>{!visibleAssets.length && <div className="py-12 text-center text-xs text-muted">暂无匹配素材</div>}</>}
-          {resourceTab === "audio" && <div>
-            <div className="flex items-center justify-between"><div><strong className="text-sm text-text">项目默认声音</strong><p className="mt-1 text-[10px] text-muted">场景或镜头没有覆盖时生效</p></div><button type="button" onClick={onUpload} className="rounded-md bg-blue-soft p-1.5 text-blue"><CloudUpload size={14} /></button></div>
-            <section className="mt-3 rounded-xl border border-line p-3"><div className="flex items-center gap-2 text-xs"><Mic2 size={14} className="text-blue" /><strong>项目旁白</strong></div><select aria-label="项目旁白" value={String(audioMix.voiceAssetId ?? "")} onChange={(event) => setDefaultAudioAsset("voice", event.target.value || undefined)} className="mt-2 w-full rounded-lg border border-line p-2 text-xs"><option value="">尚未选择</option>{audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select><div className="mt-2"><RangeControl label="旁白音量" value={numeric(audioMix.voiceVolume, 100)} minimum={0} maximum={100} suffix="%" onChange={(voiceVolume) => patchAudioMix({ voiceVolume })} /></div><label className="mt-2 flex items-center gap-2 text-[10px] text-muted"><input type="checkbox" checked={!audioMix.voiceMuted} onChange={(event) => patchAudioMix({ voiceMuted: !event.target.checked })} />启用旁白</label></section>
-            <section className="mt-2 rounded-xl border border-line p-3"><div className="flex items-center gap-2 text-xs"><Music2 size={14} className="text-blue" /><strong>默认背景音乐</strong></div><select aria-label="默认背景音乐" value={String(audioMix.musicAssetId ?? "")} onChange={(event) => setDefaultAudioAsset("music", event.target.value || undefined)} className="mt-2 w-full rounded-lg border border-line p-2 text-xs"><option value="">尚未选择</option>{audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select><div className="mt-2"><RangeControl label="音乐音量" value={numeric(audioMix.musicVolume, 24)} minimum={0} maximum={100} suffix="%" onChange={(musicVolume) => patchAudioMix({ musicVolume })} /></div><label className="mt-2 flex items-center gap-2 text-[10px] text-muted"><input type="checkbox" checked={audioMix.duckingEnabled !== false} onChange={(event) => patchAudioMix({ duckingEnabled: event.target.checked })} />旁白出现时自动压低音乐</label></section>
-            {!audioAssets.length && <p className="mt-3 text-center text-xs text-muted">上传音频后可指定角色</p>}
-          </div>}
-          {resourceTab === "global" && <div>
-            <strong className="text-sm text-text">全局层</strong><p className="mt-1 text-[11px] leading-5 text-muted">全片设置默认生效，场景层可覆盖背景音乐并叠加音效和画面。</p>
-            <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-canvas p-1"><button type="button" onClick={() => setGlobalScopeMode("film")} className={`rounded-md py-1.5 text-[10px] ${globalScopeMode === "film" ? "bg-white font-semibold text-blue shadow-sm" : "text-muted"}`}>全片</button><button type="button" disabled={!selectedScene?.id} onClick={() => setGlobalScopeMode("scene")} className={`rounded-md py-1.5 text-[10px] ${globalScopeMode === "scene" ? "bg-white font-semibold text-blue shadow-sm" : "text-muted"}`}>当前场景</button></div>
-            <div className="mt-3 rounded-xl border border-line p-3"><strong className="text-xs">背景音乐</strong><select aria-label="当前范围背景音乐" value={String(activeGlobalScope.backgroundMusic?.assetId ?? "")} onChange={(event) => setGlobalMusic(event.target.value || undefined)} className="mt-2 w-full rounded-lg border border-line p-2 text-xs"><option value="">继承项目默认</option>{audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select>{activeGlobalScope.backgroundMusic && <div className="mt-2"><RangeControl label="音乐音量" value={numeric(activeGlobalScope.backgroundMusic.volume, 28)} minimum={0} maximum={100} suffix="%" onChange={(volume) => patchGlobalScope({ backgroundMusic: { ...activeGlobalScope.backgroundMusic!, volume } })} /></div>}</div>
-            <div className="mt-2 rounded-xl border border-line p-3"><strong className="text-xs">音效层</strong><div className="mt-2 flex flex-wrap gap-1">{audioAssets.map((asset) => { const active = scopeReferenceList(activeGlobalScope.soundEffects).some((item) => item.assetId === asset.id); return <button key={asset.id} type="button" onClick={() => toggleGlobalAsset("soundEffects", asset)} className={`max-w-full truncate rounded-full border px-2 py-1 text-[9px] ${active ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{asset.name}</button>; })}</div></div>
-            <div className="mt-2 rounded-xl border border-line p-3"><strong className="text-xs">共享视觉素材</strong><div className="mt-2 grid grid-cols-2 gap-1">{visualAssets.slice(0, 8).map((asset) => { const active = scopeReferenceList(activeGlobalScope.visualAssets).some((item) => item.assetId === asset.id); return <button key={asset.id} type="button" onClick={() => toggleGlobalAsset("visualAssets", asset)} className={`truncate rounded-md border px-2 py-1.5 text-[9px] ${active ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{asset.name}</button>; })}</div></div>
-            <section className="mt-2 overflow-hidden rounded-xl border border-blue/15 bg-gradient-to-br from-blue-soft to-white p-3"><div className="flex items-start gap-2"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-blue text-white"><Sparkles size={14} /></span><div><strong className="block text-xs text-text">快捷 AI 生成</strong><p className="mt-1 text-[10px] leading-4 text-muted">生成图片、视频或特效，并直接应用到当前范围。</p></div></div><div className="mt-3 grid grid-cols-3 gap-1"><button type="button" onClick={() => onOpenQuickAI(globalScopeMode === "film" ? "project" : "scene", "image")} className="rounded-lg bg-white px-1 py-2 text-[9px] font-medium text-text shadow-sm">生成图片</button><button type="button" onClick={() => onOpenQuickAI(globalScopeMode === "film" ? "project" : "scene", "video")} className="rounded-lg bg-white px-1 py-2 text-[9px] font-medium text-text shadow-sm">生成视频</button><button type="button" onClick={() => onOpenQuickAI(globalScopeMode === "film" ? "project" : "scene", "effect")} className="rounded-lg bg-white px-1 py-2 text-[9px] font-medium text-text shadow-sm">生成特效</button></div></section>
-            <label className="mt-3 block text-[11px] text-muted">画幅<select value={workspace.document.settings.aspectRatio} onChange={(event) => onUpdateDocumentSettings({ aspectRatio: event.target.value as ProjectDocumentSettings["aspectRatio"] })} className="mt-1.5 w-full rounded-lg border border-line p-2.5 text-sm text-text"><option value="16:9">横屏 16:9</option><option value="9:16">竖屏 9:16</option><option value="1:1">方形 1:1</option><option value="4:3">经典 4:3</option></select></label><div className="mt-3 rounded-xl border border-line p-3"><span className="text-[10px] text-muted">分辨率 / 帧率</span><strong className="mt-1 block text-sm">{workspace.document.settings.resolution} · {workspace.document.settings.fps}fps</strong></div>
+          {resourceTab === "outline" && <>
+            <div className="mb-3 flex items-center justify-between"><div><strong className="text-sm text-text">影片结构</strong><p className="text-[10px] text-muted">{scenes.length} 个场景 · {model.shots.length} 个镜头</p></div><button type="button" onClick={onAddScene} aria-label="新增场景" className="rounded-md bg-blue-soft p-1.5 text-blue"><Plus size={14} /></button></div>
+            <div className="space-y-2">{scenes.map((scene, sceneIndex) => { const active = scene.id === selectedScene?.id; return <article key={scene.id ?? sceneIndex} className={`group overflow-hidden rounded-xl border ${active ? "border-blue bg-blue-soft/30" : "border-line"}`}><div className="flex items-start gap-1 p-2.5"><button type="button" onClick={() => onSelectScene(scene.id ?? null)} className="min-w-0 flex-1 text-left"><span className="text-[10px] font-medium text-muted">场景 {sceneIndex + 1} · {scene.shots.length} 镜头</span><strong className="mt-1 block truncate text-xs text-text">{scene.outline || "未命名场景"}</strong></button><button type="button" aria-label={`编辑场景 ${sceneIndex + 1}`} title="编辑场景" onClick={() => { if (!active) onSelectScene(scene.id ?? null); setEditingSceneId(scene.id ?? null); }} className={`grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted transition hover:bg-white hover:text-blue focus:opacity-100 ${active ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}><Pencil size={13} /></button></div>{active && <div className="border-t border-blue/10 px-2 pb-2 pt-1">{scene.shots.map((shot, index) => <button type="button" key={shot.id ?? index} onClick={() => selectShotForPreview(shot.id ?? null)} className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] ${shot.id === selectedShot?.id ? "bg-blue text-white" : "text-muted hover:bg-white"}`}><span>{index + 1}</span><span className="truncate">{shot.description || "空镜头"}</span></button>)}</div>}</article>; })}</div>
+          </>}
+          {resourceTab === "assets" && <><div className="mb-3"><strong className="text-sm text-text">项目画面素材</strong><p className="mt-1 text-[10px] leading-4 text-muted">点击只查看素材，使用“应用”才会替换当前镜头。</p></div><label className="mb-3 flex items-center gap-2 rounded-lg border border-line px-2.5 py-2 text-muted"><Search size={13} /><input value={assetSearch} onChange={(event) => setAssetSearch(event.target.value)} placeholder="搜索项目素材" className="min-w-0 flex-1 bg-transparent text-xs outline-none" /></label><div className="grid grid-cols-2 gap-2">{visibleAssets.map((asset) => { const selected = asset.id === selectedResourceAssetId; const inUse = asset.id === selectedShot?.assetId; return <article key={asset.id} className={`overflow-hidden rounded-lg border ${selected ? "border-blue ring-1 ring-blue/20" : "border-line"}`}><button type="button" onClick={() => setSelectedResourceAssetId(asset.id)} className="w-full text-left"><div className="relative aspect-video bg-canvas"><VideoThumb fill imageUrl={asset.thumbnailUrl ?? (asset.mediaType === "image" ? asset.mediaUrl : undefined)} videoUrl={asset.mediaType === "video" ? asset.mediaUrl : undefined} showPlay={false} />{inUse && <span className="absolute left-1.5 top-1.5 rounded bg-blue px-1.5 py-0.5 text-[8px] text-white">当前镜头</span>}</div><span className="block truncate p-1.5 text-[10px] text-text">{asset.name}</span></button>{selected && <div className="border-t border-line p-1.5"><button type="button" disabled={inUse || !selectedShot} onClick={() => setAssetToApply(asset)} className="w-full rounded-md bg-blue-soft py-1.5 text-[9px] font-semibold text-blue disabled:opacity-40">{inUse ? "正在使用" : "应用到当前镜头"}</button></div>}</article>; })}</div>{!visibleAssets.length && <div className="py-12 text-center text-xs text-muted">当前项目没有匹配的画面素材，请从顶部“添加素材”加入。</div>}</>}
+          {resourceTab === "settings" && <div>
+            <div><strong className="text-sm text-text">项目设置</strong><p className="mt-1 text-[10px] text-muted">修改项目名称、默认声音和画幅。</p></div>
+            <label className="mt-4 block text-[11px] font-medium text-muted">项目名称<input value={workspace.project.name} onChange={(event) => onUpdateProject({ name: event.target.value })} className="mt-1.5 w-full rounded-lg border border-line p-2.5 text-sm text-text" /></label>
+            <section className="mt-4 rounded-xl border border-line p-3"><div className="flex items-start justify-between gap-2"><div className="flex items-center gap-2"><Mic2 size={14} className="text-blue" /><strong className="text-xs">项目旁白</strong></div><span className={`rounded px-1.5 py-0.5 text-[9px] ${projectVoiceStatus.includes("过期") ? "bg-amber/10 text-amber" : selectedVoiceAsset ? "bg-teal/10 text-teal" : "bg-canvas text-muted"}`}>{projectVoiceStatus}</span></div>{selectedVoiceAsset ? <><div className="mt-3 rounded-lg bg-canvas p-2.5"><strong className="block truncate text-[11px] text-text">{selectedVoiceAsset.name}</strong><span className="mt-1 block text-[9px] text-muted">{selectedVoiceAsset.sourceType === "ai_tts" ? "AI 旁白母带" : "已有音频"} · {formatTime(selectedVoiceAsset.durationMs)}</span>{selectedVoiceAsset.mediaUrl && <audio controls preload="none" src={selectedVoiceAsset.mediaUrl} className="mt-2 h-8 w-full" />}</div><div className="mt-2 grid grid-cols-2 gap-2"><button type="button" onClick={() => setAudioPickerRole("voice")} className="rounded-lg border border-line py-1.5 text-[10px] text-text">替换</button><button type="button" onClick={() => setDefaultAudioAsset("voice", undefined)} className="rounded-lg border border-line py-1.5 text-[10px] text-red">移除</button></div></> : <button type="button" onClick={() => setAudioPickerRole("voice")} className="mt-3 w-full rounded-lg border border-dashed border-line py-3 text-[10px] text-muted hover:border-blue hover:text-blue">选择已有旁白音频</button>}<button type="button" onClick={onOpenVoiceover} className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg bg-ink py-2 text-xs font-semibold text-white"><Sparkles size={13} />生成 / 更新 AI 旁白</button><div className="mt-3"><RangeControl label="旁白音量" value={numeric(audioMix.voiceVolume, 100)} minimum={0} maximum={100} suffix="%" onChange={(voiceVolume) => patchAudioMix({ voiceVolume })} /></div><label className="mt-2 flex items-center gap-2 text-[10px] text-muted"><input type="checkbox" checked={!audioMix.voiceMuted} onChange={(event) => patchAudioMix({ voiceMuted: !event.target.checked })} />启用项目旁白</label></section>
+            <section className="mt-3 rounded-xl border border-line p-3"><div className="flex items-center gap-2"><Music2 size={14} className="text-blue" /><strong className="text-xs">默认背景音乐</strong></div>{selectedMusicAsset ? <><div className="mt-3 rounded-lg bg-canvas p-2.5"><strong className="block truncate text-[11px] text-text">{selectedMusicAsset.name}</strong><span className="mt-1 block text-[9px] text-muted">背景音乐 · {formatTime(selectedMusicAsset.durationMs)}</span>{selectedMusicAsset.mediaUrl && <audio controls preload="none" src={selectedMusicAsset.mediaUrl} className="mt-2 h-8 w-full" />}</div><div className="mt-2 grid grid-cols-2 gap-2"><button type="button" onClick={() => setAudioPickerRole("music")} className="rounded-lg border border-line py-1.5 text-[10px] text-text">替换</button><button type="button" onClick={() => setDefaultAudioAsset("music", undefined)} className="rounded-lg border border-line py-1.5 text-[10px] text-red">移除</button></div></> : <button type="button" onClick={() => setAudioPickerRole("music")} className="mt-3 w-full rounded-lg border border-dashed border-line py-3 text-[10px] text-muted hover:border-blue hover:text-blue">选择项目音频作为背景音乐</button>}<div className="mt-3"><RangeControl label="音乐音量" value={numeric(audioMix.musicVolume, 24)} minimum={0} maximum={100} suffix="%" onChange={(musicVolume) => patchAudioMix({ musicVolume })} /></div><label className="mt-2 flex items-center gap-2 text-[10px] text-muted"><input type="checkbox" checked={!audioMix.musicMuted} onChange={(event) => patchAudioMix({ musicMuted: !event.target.checked })} />启用背景音乐</label><label className="mt-2 flex items-center gap-2 text-[10px] text-muted"><input type="checkbox" checked={audioMix.duckingEnabled !== false} onChange={(event) => patchAudioMix({ duckingEnabled: event.target.checked })} />旁白出现时自动压低音乐</label></section>
+            <section className="mt-3 rounded-xl border border-line p-3">
+              <header className="flex items-start justify-between gap-3"><div><strong className="text-xs text-text">全片滤镜与调色</strong><p className="mt-1 text-[9px] leading-4 text-muted">{shotAdjustCounts.inherited} 个镜头继承全片 · {shotAdjustCounts.overridden} 个单独调整</p></div><button type="button" onClick={resetGlobalColorDraft} className="shrink-0 text-[10px] text-muted"><RotateCcw size={11} className="inline" /> 重置草稿</button></header>
+              <p className="mt-2 rounded-lg bg-canvas px-2.5 py-2 text-[9px] leading-4 text-muted">调整时只做实时预览，点击应用后才保存。默认保留已单独调色的镜头。</p>
+              <div className="mt-3 grid grid-cols-4 gap-1">{filterPresets.map(([value, label]) => <button key={value} type="button" onClick={() => patchGlobalColorGrade({ filterPreset: value })} className={`rounded-md border px-1 py-1.5 text-[10px] ${String(globalColorDraft.filterPreset ?? "original") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div>
+              <div className="mt-3 space-y-2"><RangeControl label="亮度" value={numeric(globalColorDraft.brightness)} minimum={-100} maximum={100} onChange={(brightness) => patchGlobalColorGrade({ brightness })} /><RangeControl label="对比度" value={numeric(globalColorDraft.contrast)} minimum={-100} maximum={100} onChange={(contrast) => patchGlobalColorGrade({ contrast })} /><RangeControl label="饱和度" value={numeric(globalColorDraft.saturation)} minimum={-100} maximum={100} onChange={(saturation) => patchGlobalColorGrade({ saturation })} /><RangeControl label="色温" value={numeric(globalColorDraft.temperature)} minimum={-100} maximum={100} onChange={(temperature) => patchGlobalColorGrade({ temperature })} /></div>
+              <div className="mt-3 space-y-2 border-t border-line pt-3"><div className="grid grid-cols-2 gap-2"><button type="button" disabled={!globalColorDirty} onClick={discardGlobalColorDraft} className="rounded-lg border border-line py-2 text-[10px] text-muted disabled:cursor-not-allowed disabled:opacity-35">取消更改</button><button type="button" disabled={!globalColorDirty} onClick={() => applyGlobalColorDraft(false)} className="rounded-lg bg-blue py-2 text-[10px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-35">应用并保留单独调色</button></div>{shotAdjustCounts.overridden > 0 && <button type="button" disabled={!globalColorDirty} onClick={() => applyGlobalColorDraft(true)} className="w-full rounded-lg border border-amber/30 py-2 text-[10px] font-medium text-amber disabled:cursor-not-allowed disabled:opacity-35">覆盖全部镜头（清除 {shotAdjustCounts.overridden} 个单独设置）</button>}{!globalColorDirty && <p className="text-center text-[9px] text-muted">当前设置已应用；调整任一参数后即可再次应用。</p>}</div>
+            </section>
+            <fieldset className="mt-4"><legend className="text-xs font-semibold text-text">画幅</legend><div className="mt-2 grid grid-cols-2 gap-2">{(["16:9", "9:16", "1:1", "4:3"] as const).map((value) => <button key={value} type="button" onClick={() => onUpdateDocumentSettings({ aspectRatio: value })} className={`rounded-lg border py-2 text-xs ${workspace.document.settings.aspectRatio === value ? "border-blue bg-blue-soft font-semibold text-blue" : "border-line text-muted"}`}>{value}</button>)}</div></fieldset>
           </div>}
         </div>
       </aside>
 
       <main className="flex min-h-0 flex-col overflow-hidden bg-[#f5f5f6]">
-        <div className="flex min-h-0 flex-1 items-center justify-center p-5"><div ref={stageRef} style={aspectRatioStyle(workspace.document.settings.aspectRatio)} className={`group relative max-h-full overflow-hidden rounded-xl bg-[#111318] shadow-xl [&:fullscreen]:h-screen [&:fullscreen]:w-screen [&:fullscreen]:max-w-none [&:fullscreen]:rounded-none ${stageSizeClass(workspace.document.settings.aspectRatio)}`}><div className="absolute inset-0" style={transition.active ? transitionLayerStyle(transition.type, transition.progress, "current") : undefined}><CompositionMedia meta={activeShot} playheadMs={playheadMs} playing={playing} muted={previewMuted} /></div>{transition.active && <div className="absolute inset-0" style={transitionLayerStyle(transition.type, transition.progress, "next")}><CompositionMedia meta={nextShot} playheadMs={nextShot?.startMs ?? 0} playing={false} muted /></div>}<CompositionOverlays workspace={workspace} model={model} activeShot={activeShot} playheadMs={playheadMs} /><CompositionAudioMix workspace={workspace} model={model} activeShot={activeShot} playheadMs={playheadMs} playing={playing} muted={previewMuted} /><div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-black/10" />{activeShot?.shot.subtitleText && <div className="pointer-events-none absolute inset-x-[7%] z-10" style={subtitleStyle(activeShot.shot)}><span className="inline-block rounded-md bg-black/60 px-3 py-1.5 leading-relaxed text-white shadow-sm backdrop-blur-sm">{activeShot.shot.subtitleText}</span></div>}<div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-black/45 px-2.5 py-1 text-[10px] text-white/80 backdrop-blur"><span>场景 {(activeShot?.scene.index ?? 0) + 1}</span><i className="h-1 w-1 rounded-full bg-white/35" /><span>镜头 {(activeShot?.shot.index ?? 0) + 1}</span>{transition.active && <><i className="h-1 w-1 rounded-full bg-white/35" /><span>{transition.type} {Math.round(transition.progress * 100)}%</span></>}</div><div className="absolute right-3 top-3 flex gap-1 opacity-0 transition group-hover:opacity-100"><button type="button" onClick={() => setPreviewMuted((value) => !value)} aria-label={previewMuted ? "打开声音" : "静音"} className="grid h-8 w-8 place-items-center rounded-lg bg-black/45 text-white backdrop-blur">{previewMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}</button><button type="button" onClick={toggleFullscreen} aria-label="全屏预览" className="grid h-8 w-8 place-items-center rounded-lg bg-black/45 text-white backdrop-blur"><Maximize2 size={14} /></button></div><button type="button" onClick={togglePlayback} aria-label={playing ? "暂停" : "播放"} className="absolute left-1/2 top-1/2 z-20 grid h-12 w-12 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur transition hover:bg-black/70 group-hover:opacity-100">{playing ? <Pause size={19} /> : <Play size={19} className="translate-x-px" />}</button></div></div>
-        <div className="flex h-12 items-center gap-3 border-t border-line bg-white px-4"><button type="button" onClick={togglePlayback} className="grid h-8 w-8 place-items-center rounded-full bg-ink text-white">{playing ? <Pause size={14} /> : <Play size={14} />}</button><button type="button" onClick={() => seek(playheadMs - 5000)} className="text-[10px] text-muted">−5s</button><span className="w-28 text-xs tabular-nums text-muted">{formatTime(playheadMs)} / {formatTime(model.durationMs)}</span><input type="range" min={0} max={model.durationMs} value={playheadMs} onChange={(event) => { setPlaying(false); seek(Number(event.target.value)); }} className="min-w-0 flex-1 accent-blue" /><button type="button" onClick={() => seek(playheadMs + 5000)} className="text-[10px] text-muted">+5s</button><span className="rounded-md bg-canvas px-2 py-1 text-[10px] text-muted">Composition 实时预览</span></div>
+        <div className="min-h-0 flex-1 p-5"><div ref={stageHostRef} className="flex h-full w-full items-center justify-center"><div ref={stageRef} style={stageFrameStyle(workspace.document.settings.aspectRatio, stageAvailable)} className="group relative shrink-0 overflow-hidden rounded-xl bg-[#111318] shadow-xl [&:fullscreen]:h-screen [&:fullscreen]:w-screen [&:fullscreen]:max-w-none [&:fullscreen]:rounded-none"><div className="absolute inset-0" style={transition.active ? transitionLayerStyle(transition.type, transition.progress, "current") : undefined}><CompositionMedia meta={activeShot} playheadMs={playheadMs} playing={playing} muted={previewMuted} globalVisualSettings={previewVisualSettings} /></div>{transition.active && <div className="absolute inset-0" style={transitionLayerStyle(transition.type, transition.progress, "next")}><CompositionMedia meta={nextShot} playheadMs={nextShot?.startMs ?? 0} playing={false} muted globalVisualSettings={previewVisualSettings} /></div>}<CompositionOverlays workspace={workspace} model={model} activeShot={activeShot} playheadMs={playheadMs} playing={playing} /><CompositionAudioMix workspace={workspace} model={model} activeShot={activeShot} playheadMs={playheadMs} playing={playing} muted={previewMuted} /><div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-black/10" />{activeShot?.shot.subtitleText && <div className="pointer-events-none absolute inset-x-[7%] z-10" style={subtitleStyle(activeShot.shot)}><span className="inline-block rounded-md bg-black/60 px-3 py-1.5 leading-relaxed text-white shadow-sm backdrop-blur-sm">{activeShot.shot.subtitleText}</span></div>}<div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-black/45 px-2.5 py-1 text-[10px] text-white/80 backdrop-blur"><span>场景 {(activeShot?.scene.index ?? 0) + 1}</span><i className="h-1 w-1 rounded-full bg-white/35" /><span>镜头 {(activeShot?.shot.index ?? 0) + 1}</span>{transition.active && <><i className="h-1 w-1 rounded-full bg-white/35" /><span>{transition.type} {Math.round(transition.progress * 100)}%</span></>}</div><div className="absolute right-3 top-3 flex gap-1 opacity-0 transition group-hover:opacity-100"><button type="button" onClick={() => setPreviewMuted((value) => !value)} aria-label={previewMuted ? "打开声音" : "静音"} className="grid h-8 w-8 place-items-center rounded-lg bg-black/45 text-white backdrop-blur">{previewMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}</button><button type="button" onClick={toggleFullscreen} aria-label="全屏预览" className="grid h-8 w-8 place-items-center rounded-lg bg-black/45 text-white backdrop-blur"><Maximize2 size={14} /></button></div><button type="button" onClick={togglePlayback} aria-label={playing ? "暂停" : "播放"} className="absolute left-1/2 top-1/2 z-20 grid h-12 w-12 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur transition hover:bg-black/70 group-hover:opacity-100">{playing ? <Pause size={19} /> : <Play size={19} className="translate-x-px" />}</button></div></div></div>
+        <div className="flex h-12 items-center gap-3 border-t border-line bg-white px-4"><button type="button" onClick={togglePlayback} className="grid h-8 w-8 place-items-center rounded-full bg-ink text-white">{playing ? <Pause size={14} /> : <Play size={14} />}</button><button type="button" onClick={() => seek(playheadMs - 5000)} aria-label="后退 5 秒" className="rounded-md px-1.5 py-1 text-[10px] text-muted hover:bg-canvas">−5s</button><span className="w-28 text-xs tabular-nums text-muted">{formatTime(playheadMs)} / {formatTime(model.durationMs)}</span><input type="range" min={0} max={model.durationMs} value={playheadMs} onChange={(event) => { setPlaying(false); seek(Number(event.target.value)); }} className="min-w-0 flex-1 accent-blue" /><button type="button" onClick={() => seek(playheadMs + 5000)} aria-label="前进 5 秒" className="rounded-md px-1.5 py-1 text-[10px] text-muted hover:bg-canvas">+5s</button><span className="rounded-md bg-canvas px-2 py-1 text-[10px] text-muted">实时预览</span></div>
       </main>
 
-      <aside className="min-h-0 overflow-y-auto bg-white"><div className="sticky top-0 z-10 grid grid-cols-4 border-b border-line bg-white">{inspectors.map((item) => <button key={item.id} type="button" onClick={() => setInspectorTab(item.id)} className={`border-b-2 px-1 py-3 text-xs ${inspectorTab === item.id ? "border-blue font-semibold text-blue" : "border-transparent text-muted"}`}>{item.label}</button>)}</div>{!selectedShot || !selectedScene?.id ? <div className="grid min-h-[360px] place-items-center p-8 text-center text-xs text-muted">选择一个镜头查看属性</div> : <div className="space-y-4 p-4"><div className="flex items-center justify-between"><div><span className="text-[10px] text-muted">当前镜头</span><strong className="block text-sm text-text">场景 {selectedScene.index + 1} · 镜头 {selectedShot.index + 1}</strong></div><div className="flex gap-0.5"><button type="button" disabled={selectedShot.index <= 0} onClick={() => onMoveShot(selectedScene.id!, selectedShot.id!, -1)} aria-label="镜头上移" className="rounded-lg p-2 text-muted hover:bg-canvas disabled:opacity-25"><ArrowUp size={14} /></button><button type="button" disabled={selectedShot.index >= selectedScene.shots.length - 1} onClick={() => onMoveShot(selectedScene.id!, selectedShot.id!, 1)} aria-label="镜头下移" className="rounded-lg p-2 text-muted hover:bg-canvas disabled:opacity-25"><ArrowDown size={14} /></button><button type="button" onClick={() => onDuplicateShot(selectedScene.id!, selectedShot.id!)} aria-label="复制镜头" className="rounded-lg p-2 text-muted hover:bg-canvas"><Copy size={14} /></button><button type="button" onClick={onDeleteShot} aria-label="删除镜头" className="rounded-lg p-2 text-muted hover:bg-red/10 hover:text-red"><Trash2 size={15} /></button></div></div>
-        {inspectorTab === "visual" && <><SourceTrimControl shot={selectedShot} assetDurationMs={selectedAssetDurationMs} onChange={patchSelectedShot} /><div className="grid grid-cols-2 gap-2"><button type="button" onClick={splitSelectedShot} disabled={!selectedShot.assetId || selectedShot.durationMs <= 200} className="rounded-lg border border-line py-2 text-xs text-muted hover:border-blue hover:text-blue disabled:opacity-35">拆分片段</button><button type="button" onClick={() => selectedScene.id && selectedShot.id && onRemoveShotAsset(selectedScene.id, selectedShot.id)} disabled={!selectedShot.assetId && !selectedShot.selectedMediaVersionId} className="rounded-lg border border-red/20 py-2 text-xs text-red disabled:opacity-35">移除素材</button></div></>}
-        {inspectorTab === "visual" && selectedShot.candidates.length > 0 && <section className="rounded-xl border border-line p-3"><header className="flex items-center justify-between"><strong className="text-xs text-text">素材匹配候选</strong><span className="text-[9px] text-muted">{selectedShot.candidates.length} 个</span></header><div className="mt-2 space-y-1.5">{selectedShot.candidates.slice(0, 5).map((candidate) => { const available = workspace.linkedAssets.some((asset) => asset.segments.some((segment) => segment.id === candidate.segmentId)); return <button type="button" key={candidate.id} disabled={!available} onClick={() => chooseCandidate(candidate.id)} className="w-full rounded-lg border border-line p-2 text-left disabled:opacity-45"><span className="flex items-center justify-between gap-2"><strong className="truncate text-[10px] text-text">{candidate.title || "候选片段"}</strong><em className="text-[9px] not-italic text-teal">{candidate.score}%</em></span><small className="mt-1 block line-clamp-2 text-[9px] leading-4 text-muted">{available ? candidate.reason || candidate.source : "源片段不可用，记录仍保留"}</small></button>; })}</div></section>}
-        {inspectorTab === "visual" && <><label className="block text-xs font-medium text-muted">画面描述<textarea rows={3} value={selectedShot.description} onChange={(event) => patchSelectedShot({ description: event.target.value })} className="mt-1.5 w-full resize-y rounded-lg border border-line p-2.5 text-sm leading-5 text-text" /></label><div className="grid grid-cols-2 gap-2"><label className="block text-[11px] text-muted">镜头时长（秒）<input type="number" min={0.1} step={0.1} value={selectedShot.durationMs / 1000} onChange={(event) => patchSelectedShot({ durationMs: Math.max(100, Math.round(Number(event.target.value) * 1000)) })} className="mt-1.5 w-full rounded-lg border border-line p-2 text-sm text-text" /></label><label className="block text-[11px] text-muted">使用素材<select value={selectedShot.assetId ?? ""} onChange={(event) => chooseAsset(workspace.linkedAssets.find((asset) => asset.id === event.target.value))} className="mt-1.5 w-full rounded-lg border border-line p-2 text-sm text-text"><option value="">未选择</option>{workspace.linkedAssets.filter((asset) => asset.mediaType !== "audio").map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label></div><section className="rounded-xl border border-line p-3"><header className="mb-2 flex items-center justify-between"><strong className="text-xs text-text">构图与位置</strong><button type="button" onClick={() => patchSelectedShot({ transform: {} })} className="flex items-center gap-1 text-[10px] text-muted"><RotateCcw size={11} />重置</button></header><div className="grid grid-cols-2 gap-1"><button type="button" onClick={() => patchSelectedShot({ transform: { ...selectedShot.transform, fitMode: "cover" } })} className={`rounded-md border py-1.5 text-[10px] ${String(selectedShot.transform.fitMode ?? "cover") === "cover" ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>填充画面</button><button type="button" onClick={() => patchSelectedShot({ transform: { ...selectedShot.transform, fitMode: "contain" } })} className={`rounded-md border py-1.5 text-[10px] ${selectedShot.transform.fitMode === "contain" ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>完整适应</button></div><div className="mt-3 space-y-2"><RangeControl label="缩放" value={numeric(selectedShot.transform.scale, 100)} minimum={25} maximum={300} suffix="%" onChange={(scale) => patchSelectedShot({ transform: { ...selectedShot.transform, scale } })} /><RangeControl label="水平位置" value={numeric(selectedShot.transform.x)} minimum={-100} maximum={100} suffix="%" onChange={(x) => patchSelectedShot({ transform: { ...selectedShot.transform, x } })} /><RangeControl label="垂直位置" value={numeric(selectedShot.transform.y)} minimum={-100} maximum={100} suffix="%" onChange={(y) => patchSelectedShot({ transform: { ...selectedShot.transform, y } })} /></div></section><section className="rounded-xl border border-line p-3"><header className="mb-2 flex items-center justify-between"><strong className="text-xs text-text">滤镜与调色</strong><button type="button" onClick={() => patchSelectedShot({ adjust: {} })} className="flex items-center gap-1 text-[10px] text-muted"><RotateCcw size={11} />重置</button></header><div className="grid grid-cols-4 gap-1">{filterPresets.map(([value, label]) => <button key={value} type="button" onClick={() => patchRecord("adjust", { filterPreset: value })} className={`rounded-md border px-1 py-1.5 text-[10px] ${String(selectedShot.adjust.filterPreset ?? "original") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div><div className="mt-3 space-y-2"><RangeControl label="亮度" value={numeric(selectedShot.adjust.brightness)} minimum={-100} maximum={100} onChange={(value) => patchRecord("adjust", { brightness: value })} /><RangeControl label="对比度" value={numeric(selectedShot.adjust.contrast)} minimum={-100} maximum={100} onChange={(value) => patchRecord("adjust", { contrast: value })} /><RangeControl label="饱和度" value={numeric(selectedShot.adjust.saturation)} minimum={-100} maximum={100} onChange={(value) => patchRecord("adjust", { saturation: value })} /><RangeControl label="色相" value={numeric(selectedShot.adjust.hue)} minimum={-180} maximum={180} onChange={(value) => patchRecord("adjust", { hue: value })} /><RangeControl label="色温" value={numeric(selectedShot.adjust.temperature)} minimum={-100} maximum={100} onChange={(value) => patchRecord("adjust", { temperature: value })} /></div></section><section className="rounded-xl border border-line p-3"><strong className="text-xs text-text">镜头运动</strong><div className="mt-2 grid grid-cols-4 gap-1">{motionPresets.map(([value, label]) => <button key={value} type="button" onClick={() => patchRecord("motion", { type: value })} className={`rounded-md border px-1 py-1.5 text-[10px] ${String(selectedShot.motion.type ?? "none") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div>{String(selectedShot.motion.type ?? "none") !== "none" && <div className="mt-3"><RangeControl label="运动强度" value={numeric(selectedShot.motion.strength, 40)} minimum={0} maximum={100} suffix="%" onChange={(value) => patchRecord("motion", { strength: value })} /></div>}</section><section className="rounded-xl border border-line p-3"><strong className="text-xs text-text">镜头转场</strong><div className="mt-2 grid grid-cols-3 gap-1">{transitionPresets.map(([value, label]) => <button key={value} type="button" onClick={() => patchRecord("transition", { type: value })} className={`rounded-md border px-1 py-1.5 text-[10px] ${String(selectedShot.transition.type ?? "cut") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div>{!["cut", "none"].includes(String(selectedShot.transition.type ?? "cut")) && <div className="mt-3"><RangeControl label="转场时长" value={numeric(selectedShot.transition.durationMs, 500)} minimum={100} maximum={3000} suffix="ms" onChange={(value) => patchRecord("transition", { durationMs: value })} /></div>}</section><div className="grid grid-cols-2 gap-2"><button type="button" disabled={operationPending} onClick={() => onOpenQuickAI("shot", "image")} className="flex items-center justify-center gap-1 rounded-lg border border-line py-2 text-xs hover:border-blue hover:text-blue"><ImageIcon size={13} />AI 图片</button><button type="button" disabled={operationPending} onClick={() => onOpenQuickAI("shot", "video")} className="flex items-center justify-center gap-1 rounded-lg border border-line py-2 text-xs hover:border-blue hover:text-blue"><Film size={13} />AI 视频</button></div></>}
-        {inspectorTab === "audio" && <><div className="rounded-xl border border-line p-3"><div className="flex items-center gap-2"><AudioLines size={15} className="text-blue" /><strong className="text-xs">镜头原声</strong></div><div className="mt-3"><RangeControl label="音量" value={numeric(selectedShot.audioSettings.originalVolume, numeric(audioMix.originalVolume, 30))} minimum={0} maximum={100} suffix="%" onChange={(value) => patchRecord("audioSettings", { originalVolume: value })} /></div></div><div className="rounded-xl border border-line p-3"><div className="flex items-center gap-2"><Mic2 size={15} className="text-blue" /><strong className="text-xs">项目旁白</strong></div><p className="mt-2 truncate text-[11px] text-muted">{audioAssets.find((asset) => asset.id === audioMix.voiceAssetId)?.name ?? "尚未选择旁白"}</p><div className="mt-3"><RangeControl label="旁白音量" value={numeric(audioMix.voiceVolume, 100)} minimum={0} maximum={100} suffix="%" onChange={(voiceVolume) => patchAudioMix({ voiceVolume })} /></div></div><div className="rounded-xl border border-line p-3"><div className="flex items-center gap-2"><Music2 size={15} className="text-blue" /><strong className="text-xs">当前镜头音乐覆盖</strong></div><select aria-label="镜头背景音乐覆盖" value={String(selectedShot.audioSettings.backgroundMusic?.assetId ?? "")} onChange={(event) => patchRecord("audioSettings", { backgroundMusic: event.target.value ? { assetId: event.target.value, volume: 28, loop: true } : null })} className="mt-2 w-full rounded-lg border border-line p-2 text-xs"><option value="">继承场景 / 全片</option>{audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select>{selectedShot.audioSettings.backgroundMusic && <div className="mt-3"><RangeControl label="覆盖音量" value={numeric(selectedShot.audioSettings.backgroundMusic.volume, 28)} minimum={0} maximum={100} suffix="%" onChange={(volume) => patchRecord("audioSettings", { backgroundMusic: { ...selectedShot.audioSettings.backgroundMusic!, volume } })} /></div>}</div><button type="button" onClick={() => setResourceTab("audio")} className="w-full rounded-lg bg-blue-soft py-2 text-xs font-semibold text-blue">管理项目默认声音</button></>}
+      <aside className="min-h-0 overflow-y-auto bg-white">{!selectedShot || !selectedScene?.id ? <div className="grid min-h-[360px] place-items-center p-8 text-center text-xs text-muted">选择一个镜头查看属性</div> : <div><div className="sticky top-0 z-10 border-b border-line bg-white"><div className="flex items-center justify-between px-4 py-3"><div><span className="text-[10px] text-muted">当前选中</span><strong className="block text-sm text-text">场景 {selectedScene.index + 1} / 镜头 {selectedShot.index + 1}</strong></div><div className="flex gap-0.5"><button type="button" onClick={() => onDuplicateShot(selectedScene.id!, selectedShot.id!)} aria-label="复制镜头" className="rounded-lg p-2 text-muted hover:bg-canvas"><Copy size={14} /></button><button type="button" onClick={onDeleteShot} aria-label="删除镜头" className="rounded-lg p-2 text-muted hover:bg-red/10 hover:text-red"><Trash2 size={15} /></button></div></div><div className="grid grid-cols-3">{inspectors.map((item) => <button key={item.id} type="button" onClick={() => setInspectorTab(item.id)} className={`border-b-2 px-1 py-2.5 text-[11px] ${inspectorTab === item.id ? "border-blue font-semibold text-blue" : "border-transparent text-muted"}`}>{item.label}</button>)}</div></div><div className="space-y-4 p-4">
+        {inspectorTab === "visual" && <SourceTrimControl shot={selectedShot} asset={selectedAsset} onChange={patchSelectedShot} onOpen={() => setTrimOpen(true)} onReplace={() => { setResourceTab("assets"); setSelectedResourceAssetId(selectedAsset?.id ?? null); setReplacementPicking(true); }} onRemove={() => selectedScene.id && selectedShot.id && onRemoveShotAsset(selectedScene.id, selectedShot.id)} />}
+        {inspectorTab === "visual" && replacementPicking && <div className="rounded-lg border border-blue/20 bg-blue-soft px-3 py-2 text-[10px] leading-4 text-blue"><strong className="block">正在更换当前镜头素材</strong>在左侧选择素材后点击“应用到当前镜头”；仅查看不会替换。<button type="button" onClick={() => setReplacementPicking(false)} className="ml-1 font-semibold underline">取消</button></div>}
+        {inspectorTab === "visual" && selectedShot.candidates.length > 0 && <section className="rounded-xl border border-line p-3"><header className="flex items-start justify-between gap-2"><div><strong className="text-xs text-text">素材匹配候选</strong><p className="mt-1 text-[9px] text-muted">匹配不会替换当前素材，点击候选才会应用。</p></div><span className="shrink-0 text-[9px] text-muted">{selectedShot.candidates.length} 个</span></header><div className="mt-2 space-y-1.5">{selectedShot.candidates.slice(0, 5).map((candidate) => { const available = workspace.linkedAssets.some((asset) => asset.segments.some((segment) => segment.id === candidate.segmentId)); return <button type="button" key={candidate.id} disabled={!available} onClick={() => chooseCandidate(candidate.id)} className="w-full rounded-lg border border-line p-2 text-left hover:border-blue/40 disabled:opacity-45"><span className="flex items-center justify-between gap-2"><strong className="truncate text-[10px] text-text">{candidate.title || "候选片段"}</strong><span className="flex shrink-0 items-center gap-2"><em className="text-[9px] not-italic text-teal">{candidate.score}%</em><b className="text-[9px] font-medium text-blue">应用</b></span></span><small className="mt-1 block line-clamp-2 text-[9px] leading-4 text-muted">{available ? candidate.reason || candidate.source : "源片段不可用，记录仍保留"}</small></button>; })}</div></section>}
+        {inspectorTab === "visual" && <>
+          <section className="rounded-xl border border-line p-3"><div className="flex items-start justify-between gap-2"><div><strong className="text-xs text-text">镜头画面描述</strong><p className="mt-1 text-[9px] leading-4 text-muted">用于素材匹配和 AI 生成；AI 完善只生成建议，确认后才会替换。</p></div><button type="button" disabled={operationPending} onClick={() => onRunOperation("complete_shots", undefined, { type: "shot", shotIds: selectedShot.id ? [selectedShot.id] : [] })} className="flex shrink-0 items-center gap-1 text-[10px] font-semibold text-blue disabled:opacity-40"><WandSparkles size={11} />AI 完善</button></div><textarea rows={7} value={selectedShot.description} onChange={(event) => patchSelectedShot({ description: event.target.value })} className="mt-2 min-h-36 max-h-80 w-full resize-y rounded-lg border border-line p-2.5 text-sm leading-5 text-text" /><div className="mt-2 grid grid-cols-3 gap-2"><button type="button" title={matchableAssetCount ? "为当前镜头搜索项目素材" : "请先向项目添加图片或视频素材"} disabled={operationPending || matchableAssetCount === 0} onClick={() => onRunOperation("match_assets", undefined, { type: "shot", shotIds: selectedShot.id ? [selectedShot.id] : [] })} className="flex items-center justify-center gap-1 rounded-lg border border-line py-2 text-[10px] hover:border-blue hover:text-blue disabled:cursor-not-allowed disabled:opacity-40"><Search size={12} />匹配素材</button><button type="button" disabled={operationPending} onClick={() => onOpenQuickAI("shot", "image")} className="flex items-center justify-center gap-1 rounded-lg border border-line py-2 text-[10px] hover:border-blue hover:text-blue"><ImageIcon size={12} />AI 图片</button><button type="button" disabled={operationPending} onClick={() => onOpenQuickAI("shot", "video")} className="flex items-center justify-center gap-1 rounded-lg border border-line py-2 text-[10px] hover:border-blue hover:text-blue"><Film size={12} />AI 视频</button></div>{matchableAssetCount === 0 && <p className="mt-2 text-[9px] leading-4 text-amber">项目中还没有可匹配的图片或视频，请先通过顶部“添加素材”加入。</p>}</section>
+          <details className="rounded-xl border border-line p-3"><summary className="cursor-pointer text-xs font-semibold text-text">高级画面设置 <span className="ml-1 font-normal text-muted">构图 · 调色 · 运动 · 转场</span></summary><div className="mt-3 space-y-3">
+          <section className="rounded-xl border border-line p-3"><header className="mb-2 flex items-center justify-between"><strong className="text-xs text-text">构图与位置</strong><button type="button" onClick={() => patchSelectedShot({ transform: {} })} className="flex items-center gap-1 text-[10px] text-muted"><RotateCcw size={11} />重置</button></header><div className="grid grid-cols-2 gap-1"><button type="button" onClick={() => patchSelectedShot({ transform: { ...selectedShot.transform, fitMode: "cover" } })} className={`rounded-md border py-1.5 text-[10px] ${String(selectedShot.transform.fitMode ?? "cover") === "cover" ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>填充画面</button><button type="button" onClick={() => patchSelectedShot({ transform: { ...selectedShot.transform, fitMode: "contain" } })} className={`rounded-md border py-1.5 text-[10px] ${selectedShot.transform.fitMode === "contain" ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>完整适应</button></div><div className="mt-3 space-y-2"><RangeControl label="缩放" value={numeric(selectedShot.transform.scale, 100)} minimum={25} maximum={300} suffix="%" onChange={(scale) => patchSelectedShot({ transform: { ...selectedShot.transform, scale } })} /><RangeControl label="水平位置" value={numeric(selectedShot.transform.x)} minimum={-100} maximum={100} suffix="%" onChange={(x) => patchSelectedShot({ transform: { ...selectedShot.transform, x } })} /><RangeControl label="垂直位置" value={numeric(selectedShot.transform.y)} minimum={-100} maximum={100} suffix="%" onChange={(y) => patchSelectedShot({ transform: { ...selectedShot.transform, y } })} /></div></section>
+          <section className="rounded-xl border border-line p-3"><header className="mb-2 flex items-center justify-between"><div><strong className="text-xs text-text">滤镜与调色</strong><span className={`ml-2 rounded px-1.5 py-0.5 text-[9px] ${selectedAdjustIsOverride ? "bg-blue-soft text-blue" : "bg-canvas text-muted"}`}>{selectedAdjustIsOverride ? "当前镜头覆盖" : "继承全片"}</span></div><button type="button" onClick={() => patchSelectedShot({ adjust: selectedAdjustIsOverride ? { mode: "inherit" } : { ...selectedEffectiveAdjust, mode: "override" } })} className="flex items-center gap-1 text-[10px] text-muted">{selectedAdjustIsOverride ? <><RotateCcw size={11} />恢复全片</> : "单独调整"}</button></header><div className="grid grid-cols-4 gap-1">{filterPresets.map(([value, label]) => <button key={value} type="button" onClick={() => patchSelectedShot({ adjust: { ...selectedEffectiveAdjust, mode: "override", filterPreset: value } })} className={`rounded-md border px-1 py-1.5 text-[10px] ${String(selectedEffectiveAdjust.filterPreset ?? "original") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div><div className="mt-3 space-y-2"><RangeControl label="亮度" value={numeric(selectedEffectiveAdjust.brightness)} minimum={-100} maximum={100} onChange={(brightness) => patchSelectedShot({ adjust: { ...selectedEffectiveAdjust, mode: "override", brightness } })} /><RangeControl label="对比度" value={numeric(selectedEffectiveAdjust.contrast)} minimum={-100} maximum={100} onChange={(contrast) => patchSelectedShot({ adjust: { ...selectedEffectiveAdjust, mode: "override", contrast } })} /><RangeControl label="饱和度" value={numeric(selectedEffectiveAdjust.saturation)} minimum={-100} maximum={100} onChange={(saturation) => patchSelectedShot({ adjust: { ...selectedEffectiveAdjust, mode: "override", saturation } })} /><RangeControl label="色相" value={numeric(selectedEffectiveAdjust.hue)} minimum={-180} maximum={180} onChange={(hue) => patchSelectedShot({ adjust: { ...selectedEffectiveAdjust, mode: "override", hue } })} /><RangeControl label="色温" value={numeric(selectedEffectiveAdjust.temperature)} minimum={-100} maximum={100} onChange={(temperature) => patchSelectedShot({ adjust: { ...selectedEffectiveAdjust, mode: "override", temperature } })} /></div></section>
+          <section className="rounded-xl border border-line p-3"><div className="flex items-center justify-between"><strong className="text-xs text-text">镜头运动</strong>{String(selectedShot.motion.type ?? "none") !== "none" && <button type="button" onClick={() => { if (selectedShotMeta) { seek(selectedShotMeta.startMs, false); setPlaying(true); } }} className="flex items-center gap-1 text-[10px] font-medium text-blue"><Play size={10} />预览运动</button>}</div><div className="mt-2 grid grid-cols-4 gap-1">{motionPresets.map(([value, label]) => <button key={value} type="button" onClick={() => selectMotionPreset(value)} className={`rounded-md border px-1 py-1.5 text-[10px] ${String(selectedShot.motion.type ?? "none") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div>{String(selectedShot.motion.type ?? "none") !== "none" && <div className="mt-3"><RangeControl label="运动强度" value={numeric(selectedShot.motion.strength, 55)} minimum={0} maximum={100} suffix="%" onChange={(value) => patchRecord("motion", { strength: value })} /></div>}</section>
+          <section className="rounded-xl border border-line p-3"><strong className="text-xs text-text">镜头转场</strong><div className="mt-2 grid grid-cols-3 gap-1">{transitionPresets.map(([value, label]) => <button key={value} type="button" onClick={() => patchRecord("transition", { type: value })} className={`rounded-md border px-1 py-1.5 text-[10px] ${String(selectedShot.transition.type ?? "cut") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div>{!["cut", "none"].includes(String(selectedShot.transition.type ?? "cut")) && <div className="mt-3"><RangeControl label="转场时长" value={numeric(selectedShot.transition.durationMs, 500)} minimum={100} maximum={3000} suffix="ms" onChange={(value) => patchRecord("transition", { durationMs: value })} /></div>}</section>
+          </div></details>
+          {selectedShot.mediaVersions.length > 0 && <button type="button" onClick={() => setHistoryOpen(true)} className="flex w-full items-center justify-between rounded-xl border border-line p-3 text-left hover:border-blue/40"><span className="flex items-center gap-2"><History size={14} className="text-blue" /><span><strong className="block text-xs text-text">画面历史</strong><small className="mt-1 block text-[9px] text-muted">查看曾经选择、匹配或生成过的素材</small></span></span><span className="rounded-full bg-canvas px-2 py-1 text-[9px] text-muted">{selectedShot.mediaVersions.length} 个</span></button>}
+        </>}
+        {inspectorTab === "audio" && <><section className="rounded-xl border border-line p-3"><div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2"><AudioLines size={15} className="text-blue" /><strong className="text-xs">镜头原声</strong></div><span className={`rounded px-1.5 py-0.5 text-[9px] ${selectedShot.audioSettings.originalVolume === undefined ? "bg-canvas text-muted" : "bg-blue-soft text-blue"}`}>{selectedShot.audioSettings.originalVolume === undefined ? "继承项目默认" : "当前镜头覆盖"}</span></div><div className="mt-3"><RangeControl label="音量" value={numeric(selectedShot.audioSettings.originalVolume, numeric(audioMix.originalVolume, 30))} minimum={0} maximum={100} suffix="%" onChange={(originalVolume) => patchRecord("audioSettings", { originalVolume })} /></div>{selectedShot.audioSettings.originalVolume !== undefined && <button type="button" onClick={() => patchRecord("audioSettings", { originalVolume: undefined })} className="mt-2 text-[10px] font-medium text-blue">恢复项目默认</button>}</section><section className="rounded-xl border border-line p-3"><div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2"><Mic2 size={15} className="text-blue" /><strong className="text-xs">当前镜头关联旁白</strong></div><span className={`rounded px-1.5 py-0.5 text-[9px] ${selectedShotVoiceStatus === "已生成" ? "bg-teal/10 text-teal" : selectedShotVoiceStatus === "存在过期旁白" || selectedShotVoiceStatus === "需要处理" ? "bg-amber/10 text-amber" : "bg-canvas text-muted"}`}>{selectedShotVoiceStatus}</span></div><p className="mt-2 text-[11px] leading-5 text-muted">{selectedShotVoiceLines.length ? `${selectedShotVoiceLines.length} 条旁白与当前镜头时间范围重叠` : "当前镜头时间范围内没有已生成旁白"}</p><p className="mt-1 truncate text-[10px] text-muted">项目母带：{audioAssets.find((asset) => asset.id === audioMix.voiceAssetId)?.name ?? "尚未生成或选择"}</p><button type="button" onClick={onOpenVoiceover} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue px-3 py-2 text-xs font-semibold text-white"><Sparkles size={13} />生成 / 更新旁白</button><p className="mt-2 text-[9px] leading-4 text-muted">生成面板会默认展示全片，也可切换当前场景或当前镜头；母带和音量仍属于项目级配置。</p></section><section className="rounded-xl border border-line p-3"><div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2"><Music2 size={15} className="text-blue" /><strong className="text-xs">背景音乐</strong></div><span className={`rounded px-1.5 py-0.5 text-[9px] ${selectedShotMusic ? "bg-blue-soft text-blue" : "bg-canvas text-muted"}`}>{effectiveMusicSource}</span></div><p className="mt-2 truncate text-[10px] text-muted">当前生效：{effectiveMusic ? audioAssets.find((asset) => asset.id === effectiveMusic.assetId)?.name ?? "音频素材不可用" : "无背景音乐"}</p><Select aria-label="镜头背景音乐" value={String(selectedShotMusic?.assetId ?? "")} onChange={(event) => patchRecord("audioSettings", { backgroundMusic: event.target.value ? { assetId: event.target.value, volume: 28, loop: true } : null })} wrapperClassName="mt-2"><option value="">继承场景 / 全片 / 项目默认</option>{audioAssets.filter((asset) => asset.metadata.purpose !== "voice_take" && asset.metadata.purpose !== "voiceover_master" && asset.sourceType !== "ai_tts").map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</Select>{selectedShotMusic && <div className="mt-3"><RangeControl label="镜头覆盖音量" value={numeric(selectedShotMusic.volume, 28)} minimum={0} maximum={100} suffix="%" onChange={(volume) => patchRecord("audioSettings", { backgroundMusic: { ...selectedShotMusic, volume } })} /></div>}</section><button type="button" onClick={() => setResourceTab("settings")} className="w-full rounded-lg bg-blue-soft py-2 text-xs font-semibold text-blue">打开项目声音默认值</button></>}
         {inspectorTab === "caption" && <><label className="block text-xs font-medium text-muted">字幕<textarea rows={5} value={selectedShot.subtitleText} onChange={(event) => patchSelectedShot({ subtitleText: event.target.value, subtitleOverridden: event.target.value !== selectedScene.narrationText, subtitleOutdated: false })} className="mt-1.5 w-full resize-y rounded-lg border border-line p-2.5 text-sm leading-5 text-text" /></label>{selectedShot.subtitleOutdated && <div className="rounded-lg bg-amber/10 p-2.5 text-[11px] leading-5 text-amber">场景旁白已变化，当前手工字幕需要复核。<button type="button" onClick={() => onRestoreSubtitle(selectedScene.id!, selectedShot.id!)} className="ml-1 font-semibold underline">恢复跟随旁白</button></div>}<section className="rounded-xl border border-line p-3"><strong className="text-xs text-text">字幕位置</strong><div className="mt-2 grid grid-cols-3 gap-1">{[["top", "顶部"], ["center", "居中"], ["bottom", "底部"]].map(([value, label]) => <button key={value} type="button" onClick={() => patchRecord("subtitleSettings", { position: value })} className={`rounded-md border py-1.5 text-[10px] ${String(selectedShot.subtitleSettings.position ?? "bottom") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div><div className="mt-3"><RangeControl label="字号" value={numeric(selectedShot.subtitleSettings.fontSize, 16)} minimum={10} maximum={48} suffix="px" onChange={(value) => patchRecord("subtitleSettings", { fontSize: value })} /></div></section><p className="text-xs leading-5 text-muted">{selectedShot.subtitleOverridden ? "当前字幕为手动覆盖；场景旁白变化时会提示复核。" : "字幕正在跟随场景旁白。"}</p></>}
-        {inspectorTab === "process" && <><section className="rounded-xl border border-line p-3"><strong className="text-xs text-text">非破坏性 AI 处理</strong><p className="mt-1 text-[10px] leading-4 text-muted">每次生成都会创建新的 Asset 和媒体版本，原素材及镜头参数不会被覆盖。</p><div className="mt-3 grid grid-cols-2 gap-2"><button type="button" disabled={operationPending} onClick={() => onRunOperation("complete_shots")} className="flex items-center justify-center gap-1 rounded-lg border border-line py-2.5 text-xs hover:border-blue hover:text-blue"><WandSparkles size={13} />完善镜头</button><button type="button" disabled={operationPending} onClick={() => onOpenQuickAI("shot", "effect")} className="flex items-center justify-center gap-1 rounded-lg border border-line py-2.5 text-xs hover:border-blue hover:text-blue"><WandSparkles size={13} />视觉特效</button></div></section><section className="rounded-xl border border-line p-3"><strong className="text-xs text-text">版本状态</strong><div className="mt-2 space-y-2">{selectedShot.selectedMediaVersionId && <button type="button" onClick={restoreMediaVersionSource} aria-label="恢复上一个媒体版本" className="flex w-full items-center gap-2 rounded-lg border border-line p-2 text-left text-xs text-muted hover:border-blue hover:text-blue"><RotateCcw size={13} /><span><strong className="block text-text">恢复处理前版本</strong><small>同时恢复素材、入出点、构图、调色和运镜</small></span></button>}{selectedShot.mediaVersions.map((version) => { const active = selectedShot.selectedMediaVersionId === version.id; return <button key={version.id} type="button" onClick={() => selectMediaVersion(version.id)} aria-pressed={active} className={`w-full rounded-lg border p-2 text-left text-xs ${active ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}><strong className="block">{version.operation || version.kind}</strong><small>{active ? `${version.status} · 当前正在使用` : `${version.status} · 点击切换`}</small></button>; })}{!selectedShot.mediaVersions.length && <div className="rounded-lg border border-dashed border-line p-3 text-center text-[10px] text-muted">暂无处理版本</div>}</div></section></>}
-        <div className="border-t border-line pt-4"><div className="flex items-center justify-between"><strong className="text-xs text-text">场景设置</strong><div className="flex gap-1"><button type="button" aria-label="场景上移" disabled={selectedSceneIndex <= 0} onClick={() => onMoveScene(selectedScene.id!, -1)} className="grid h-7 w-7 place-items-center rounded border border-line text-muted disabled:opacity-30"><ArrowUp size={12} /></button><button type="button" aria-label="场景下移" disabled={selectedSceneIndex < 0 || selectedSceneIndex >= scenes.length - 1} onClick={() => onMoveScene(selectedScene.id!, 1)} className="grid h-7 w-7 place-items-center rounded border border-line text-muted disabled:opacity-30"><ArrowDown size={12} /></button></div></div><label className="mt-3 block text-xs font-medium text-muted">场景标题<input value={selectedScene.outline} onChange={(event) => onUpdateScene(selectedScene.id!, { outline: event.target.value })} className="mt-1.5 w-full rounded-lg border border-line p-2.5 text-sm text-text" /></label><label className="mt-3 block text-xs font-medium text-muted">场景旁白<textarea rows={3} value={selectedScene.narrationText} onChange={(event) => onUpdateScene(selectedScene.id!, { narrationText: event.target.value })} className="mt-1.5 w-full rounded-lg border border-line p-2.5 text-sm text-text" /></label>{selectedSceneIndex < scenes.length - 1 && selectedSceneLastShot && <section className="mt-3 rounded-xl border border-line p-3"><strong className="text-xs text-text">场景结束转场</strong><select aria-label="场景结束转场" value={String(selectedSceneLastShot.transition.type ?? "cut")} onChange={(event) => patchSceneTransition({ type: event.target.value })} className="mt-2 w-full rounded-lg border border-line p-2 text-xs text-text">{transitionPresets.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{!["cut", "none"].includes(String(selectedSceneLastShot.transition.type ?? "cut")) && <div className="mt-2"><RangeControl label="转场时长" value={numeric(selectedSceneLastShot.transition.durationMs, 800)} minimum={100} maximum={3000} suffix="ms" onChange={(durationMs) => patchSceneTransition({ durationMs })} /></div>}<p className="mt-2 text-[10px] leading-4 text-muted">直接使用本场景最后一个镜头的转场，不保存重复状态。</p></section>}<div className="mt-3 flex gap-2"><button type="button" onClick={() => onAddShot(selectedScene.id!)} className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-blue-soft py-2 text-xs font-semibold text-blue"><Plus size={13} />新增镜头</button><button type="button" onClick={onDeleteScene} className="rounded-lg border border-line px-3 text-muted hover:text-red"><Trash2 size={14} /></button></div></div></div>}</aside>
+        </div></div>}</aside>
     </div>
 
-    <section className="border-t border-line bg-[#f9f9fa]"><header className="flex h-10 items-center justify-between border-b border-line px-3"><div className="flex items-center gap-2"><strong className="text-xs text-text">主时间线</strong><span className="text-[10px] text-muted">{formatTime(model.durationMs)}</span></div><button type="button" disabled={operationPending} onClick={() => onRunOperation("match_assets")} className="flex items-center gap-1 rounded-md bg-blue-soft px-2 py-1.5 text-[10px] font-semibold text-blue"><Sparkles size={11} />匹配全部镜头</button></header><div className="grid h-[176px] grid-cols-[84px_1fr] overflow-hidden"><div className="border-r border-line bg-white pt-7"><div className="flex h-20 items-center gap-2 border-y border-line px-3 text-[10px] text-muted"><Film size={13} />主画面</div><div className="flex h-12 items-center gap-2 border-b border-line px-3 text-[10px] text-muted"><AudioLines size={13} />声音</div></div><div className="min-w-0 overflow-x-auto"><div className="relative h-7 min-w-[720px] border-b border-line bg-white">{Array.from({ length: 9 }, (_, index) => <span key={index} className="absolute top-1 text-[9px] text-muted" style={{ left: `${index * 12.5}%` }}>{formatTime(model.durationMs * index / 8).slice(0, 5)}</span>)}</div><div className="relative flex h-20 min-w-[720px] items-center gap-1 border-b border-line px-1">{mainTrack?.items.map((item, index) => <button key={item.id} type="button" onClick={() => { setPlaying(false); seek(item.startMs); }} className={`group relative h-14 min-w-[70px] overflow-hidden rounded-md border px-2 text-left ${item.shotId === selectedShot?.id ? "border-blue bg-blue text-white" : item.assetId ? "border-teal/40 bg-teal/10 text-text" : "border-dashed border-line bg-white text-muted"}`} style={{ width: `${Math.max(8, item.durationMs / model.durationMs * 100)}%` }}><span className="block truncate text-[10px] font-semibold">镜头 {index + 1}</span><span className="mt-1 block text-[9px] opacity-70">{(item.durationMs / 1000).toFixed(1)}s</span>{item.shotId && model.shots.find((shot) => shot.id === item.shotId)?.shot.transition.type && <span className="absolute bottom-0 right-0 rounded-tl bg-black/15 px-1 text-[8px]">转场</span>}</button>)}<div className="pointer-events-none absolute inset-y-0 w-px bg-red shadow-[0_0_0_1px_rgba(255,255,255,.6)]" style={{ left: `${playheadMs / model.durationMs * 100}%` }} /></div><div className="flex h-12 min-w-[720px] items-center gap-2 border-b border-line px-2 text-[10px] text-muted">{audioMix.voiceAssetId && <span className="rounded bg-blue-soft px-1.5 py-0.5 text-blue">旁白</span>}{(selectedShot?.audioSettings.backgroundMusic?.assetId || activeGlobalScope.backgroundMusic?.assetId || audioMix.musicAssetId) && <span className="rounded bg-teal/10 px-1.5 py-0.5 text-teal">背景音乐</span>}<span>{audioAssets.length ? `${audioAssets.length} 个声音素材 · 支持全片、场景、镜头三级混音` : "尚未添加声音素材"}</span></div></div></div></section>
+    <section className="border-t border-line bg-[#f9f9fa]">
+      <header className="flex h-10 items-center justify-between border-b border-line px-3">
+        <div className="flex items-center gap-2"><strong className="text-xs text-text">主时间线</strong><span className="text-[10px] text-muted">{formatTime(model.durationMs)}</span></div>
+        <div className="flex items-center gap-2">
+          {selectedShot && <button type="button" onClick={splitSelectedShot} disabled={!canSplitSelectedShot} title={canSplitSelectedShot ? `在镜头内 ${formatTime(selectedSplitOffsetMs)} 处分割` : "将播放头移动到镜头内部，距离两端至少 0.2 秒"} className="flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1.5 text-[10px] font-semibold text-text hover:border-blue hover:text-blue disabled:cursor-not-allowed disabled:opacity-40"><Scissors size={11} />{canSplitSelectedShot ? `在 ${formatTime(selectedSplitOffsetMs)} 处分割` : "移动播放头后分割"}</button>}
+          <button type="button" disabled={operationPending} onClick={() => onRunOperation("match_assets")} className="flex items-center gap-1 rounded-md bg-blue-soft px-2 py-1.5 text-[10px] font-semibold text-blue"><Sparkles size={11} />匹配全部镜头</button>
+        </div>
+      </header>
+      <div className="grid h-[216px] grid-cols-[84px_1fr] overflow-hidden">
+        <div className="border-r border-line bg-white pt-7"><div className="flex h-20 items-center gap-2 border-y border-line px-3 text-[10px] text-muted"><Film size={13} />主画面</div><div className="flex h-16 items-center gap-2 border-b border-line px-3 text-[10px] text-muted"><Mic2 size={13} />AI 旁白</div><div className="flex h-10 items-center gap-2 border-b border-line px-3 text-[10px] text-muted"><AudioLines size={13} />音乐/音效</div></div>
+        <div className="min-w-0 overflow-x-auto">
+          <div className="relative h-7 min-w-[720px] border-b border-line bg-white">{Array.from({ length: 9 }, (_, index) => <span key={index} className="absolute top-1 text-[9px] text-muted" style={{ left: `${index * 12.5}%` }}>{formatTime(model.durationMs * index / 8).slice(0, 5)}</span>)}</div>
+          <div className="relative flex h-20 min-w-[720px] items-center gap-1 border-b border-line px-1">{mainTrack?.items.map((item, index) => <button key={item.id} type="button" onClick={() => { setPlaying(false); seek(item.startMs); }} className={`group relative h-14 min-w-[70px] overflow-hidden rounded-md border px-2 text-left ${item.shotId === selectedShot?.id ? "border-blue bg-blue text-white" : item.assetId ? "border-teal/40 bg-teal/10 text-text" : "border-dashed border-line bg-white text-muted"}`} style={{ width: `${Math.max(8, item.durationMs / Math.max(1, model.durationMs) * 100)}%` }}><span className="block truncate text-[10px] font-semibold">镜头 {index + 1}</span><span className="mt-1 block text-[9px] opacity-70">{(item.durationMs / 1000).toFixed(1)}s</span>{item.shotId && model.shots.find((shot) => shot.id === item.shotId)?.shot.transition.type && <span className="absolute bottom-0 right-0 rounded-tl bg-black/15 px-1 text-[8px]">转场</span>}</button>)}<div className="pointer-events-none absolute inset-y-0 w-px bg-red shadow-[0_0_0_1px_rgba(255,255,255,.6)]" style={{ left: `${playheadMs / Math.max(1, model.durationMs) * 100}%` }} /></div>
+          <div className="relative h-16 min-w-[720px] border-b border-line bg-blue-soft/20">{timelineVoiceLines.map((line, index) => { const active = playheadMs >= line.startMs && playheadMs < line.startMs + line.durationMs; const stale = line.status === "stale"; return <button key={line.id} type="button" aria-label={`旁白 ${index + 1}，${line.text}，${(line.durationMs / 1000).toFixed(1)} 秒`} title={`${formatTime(line.startMs)} · ${(line.durationMs / 1000).toFixed(1)}s\n${line.text}`} onClick={() => { setPlaying(false); seek(line.startMs); }} className={`absolute top-2 h-12 min-w-8 overflow-hidden rounded-md border px-2 text-left shadow-sm transition ${stale ? "border-amber/50 bg-amber/15 text-amber" : active ? "z-10 border-blue bg-blue text-white ring-2 ring-blue/20" : "border-blue/30 bg-white text-blue hover:border-blue hover:bg-blue-soft"}`} style={{ left: `${line.startMs / Math.max(1, model.durationMs) * 100}%`, width: `${Math.max(1.5, line.durationMs / Math.max(1, model.durationMs) * 100)}%` }}><span className="block truncate text-[9px] font-semibold">{index + 1}. {line.text}</span><span className="mt-1 block truncate text-[8px] opacity-70">{formatTime(line.startMs)} · {(line.durationMs / 1000).toFixed(1)}s{stale ? " · 已过期" : ""}</span></button>; })}{voiceoverQuery.isLoading && <span className="absolute inset-0 grid place-items-center text-[10px] text-muted">正在加载旁白分段…</span>}{!voiceoverQuery.isLoading && !timelineVoiceLines.length && <button type="button" onClick={onOpenVoiceover} className="absolute inset-2 rounded-md border border-dashed border-blue/25 text-[10px] text-blue hover:bg-blue-soft">尚无 AI 旁白分段，点击生成</button>}<div className="pointer-events-none absolute inset-y-0 z-20 w-px bg-red shadow-[0_0_0_1px_rgba(255,255,255,.6)]" style={{ left: `${playheadMs / Math.max(1, model.durationMs) * 100}%` }} /></div>
+          <div className="flex h-10 min-w-[720px] items-center gap-2 border-b border-line px-2 text-[10px] text-muted">{effectiveMusic && <span className="rounded bg-teal/10 px-1.5 py-0.5 text-teal">背景音乐</span>}<span>{audioAssets.length ? `${audioAssets.length} 个声音素材 · 支持项目与镜头分层混音` : "尚未添加音乐或音效"}</span></div>
+        </div>
+      </div>
+    </section>
+
+    <ClipTrimModal open={trimOpen} shot={selectedShot} asset={selectedAsset} onClose={() => setTrimOpen(false)} onApply={patchSelectedShot} />
+    <MaterialHistoryModal open={historyOpen} shot={selectedShot} assets={workspace.linkedAssets} onClose={() => setHistoryOpen(false)} onApply={(patch) => { setPlaying(false); patchSelectedShot(patch); }} />
+    <AudioAssetPicker role={audioPickerRole} assets={audioAssets} onClose={() => !audioApplyPending && setAudioPickerRole(null)} onSelect={(assetId) => { if (audioPickerRole) void setDefaultAudioAsset(audioPickerRole, assetId); }} />
+
+    {assetToApply && selectedScene && selectedShot && <div className="fixed inset-0 z-50 grid place-items-center bg-ink/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="replace-asset-title">
+      <section className="w-full max-w-md overflow-hidden rounded-2xl border border-line bg-white shadow-2xl">
+        <header className="border-b border-line px-5 py-4"><h2 id="replace-asset-title" className="text-sm font-semibold text-text">替换当前镜头画面？</h2><p className="mt-1 text-[11px] text-muted">将“{assetToApply.name}”应用到场景 {selectedScene.index + 1} / 镜头 {selectedShot.index + 1}。</p></header>
+        <div className="px-5 py-4"><p className="rounded-xl bg-canvas px-4 py-3 text-[11px] leading-5 text-muted">当前素材或媒体版本会从这个镜头中移除，并从新素材的开头开始使用；素材本身和已有历史版本不会被删除。</p></div>
+        <footer className="flex justify-end gap-2 border-t border-line bg-canvas/60 px-5 py-4"><button type="button" onClick={() => setAssetToApply(null)} className="rounded-lg border border-line bg-white px-4 py-2 text-xs text-text">取消</button><button type="button" onClick={() => applyAsset(assetToApply)} className="rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white">确认替换</button></footer>
+      </section>
+    </div>}
+
+    {editingScene?.id && <div className="fixed inset-0 z-50 bg-ink/35 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="scene-settings-title" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingSceneId(null); }}>
+      <aside className="absolute inset-y-0 right-0 flex w-full max-w-[420px] flex-col border-l border-line bg-white shadow-2xl">
+        <header className="flex items-start justify-between border-b border-line px-5 py-4"><div><h2 id="scene-settings-title" className="text-sm font-semibold text-text">场景 {editingSceneIndex + 1} 设置</h2><p className="mt-1 text-[11px] text-muted">集中编辑场景信息、结束转场和结构操作。</p></div><button type="button" onClick={() => setEditingSceneId(null)} aria-label="关闭场景设置" className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-canvas"><X size={15} /></button></header>
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+          <label className="block text-xs font-medium text-muted">场景标题<input value={editingScene.outline} onChange={(event) => onUpdateScene(editingScene.id!, { outline: event.target.value })} className="mt-1.5 w-full rounded-lg border border-line p-2.5 text-sm text-text" /></label>
+          <label className="block text-xs font-medium text-muted">场景旁白<textarea rows={7} value={editingScene.narrationText} onChange={(event) => onUpdateScene(editingScene.id!, { narrationText: event.target.value })} className="mt-1.5 w-full resize-y rounded-lg border border-line p-2.5 text-sm leading-6 text-text" /></label>
+          <section className="rounded-xl border border-line p-3"><strong className="text-xs text-text">场景结束转场</strong>{editingSceneLastShot ? <><div className="mt-3 grid grid-cols-3 gap-1">{transitionPresets.map(([value, label]) => <button key={value} type="button" onClick={() => patchEditingSceneTransition({ type: value })} className={`rounded-md border px-1 py-1.5 text-[10px] ${String(editingSceneLastShot.transition.type ?? "cut") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div>{!["cut", "none"].includes(String(editingSceneLastShot.transition.type ?? "cut")) && <div className="mt-3"><RangeControl label="转场时长" value={numeric(editingSceneLastShot.transition.durationMs, 500)} minimum={100} maximum={3000} suffix="ms" onChange={(durationMs) => patchEditingSceneTransition({ durationMs })} /></div>}</> : <p className="mt-2 text-[10px] text-muted">场景中还没有镜头，添加镜头后可设置结束转场。</p>}</section>
+          <section className="rounded-xl border border-line p-3"><strong className="text-xs text-text">场景结构</strong><div className="mt-3 grid grid-cols-2 gap-2"><button type="button" disabled={editingSceneIndex <= 0} onClick={() => onMoveScene(editingScene.id!, -1)} className="flex items-center justify-center gap-1 rounded-lg border border-line py-2 text-xs text-text disabled:opacity-35"><ArrowUp size={13} />上移</button><button type="button" disabled={editingSceneIndex >= scenes.length - 1} onClick={() => onMoveScene(editingScene.id!, 1)} className="flex items-center justify-center gap-1 rounded-lg border border-line py-2 text-xs text-text disabled:opacity-35"><ArrowDown size={13} />下移</button></div><button type="button" onClick={() => onAddShot(editingScene.id!)} className="mt-2 flex w-full items-center justify-center gap-1 rounded-lg bg-blue-soft py-2 text-xs font-semibold text-blue"><Plus size={13} />新增镜头</button></section>
+        </div>
+        <footer className="flex items-center justify-between border-t border-line bg-canvas/60 px-5 py-4"><button type="button" onClick={() => { setEditingSceneId(null); onDeleteScene(); }} className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-red hover:bg-red/10"><Trash2 size={13} />删除场景</button><button type="button" onClick={() => setEditingSceneId(null)} className="rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white">完成</button></footer>
+      </aside>
+    </div>}
   </div>;
 }

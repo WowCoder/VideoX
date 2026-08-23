@@ -145,6 +145,45 @@ def _normalize_audio(file_path: str, output_path: str) -> str:
     return output_path
 
 
+def _transcode_video_proxy(file_path: str, output_path: str) -> str:
+    """Create a seek-friendly browser proxy while preserving the source for export."""
+    result = subprocess.run(
+        [
+            settings.ffmpeg_path,
+            "-i", file_path,
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
+            "-sn",
+            "-dn",
+            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2",
+            "-r", "30",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-profile:v", "main",
+            "-pix_fmt", "yuv420p",
+            "-crf", "23",
+            "-maxrate", "4M",
+            "-bufsize", "8M",
+            "-g", "30",
+            "-keyint_min", "30",
+            "-sc_threshold", "0",
+            "-c:a", "aac",
+            "-b:a", "160k",
+            "-ar", "48000",
+            "-ac", "2",
+            "-map_metadata", "-1",
+            "-movflags", "+faststart",
+            "-y", output_path,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=3600,
+    )
+    if result.returncode != 0 or not os.path.exists(output_path) or os.path.getsize(output_path) <= 0:
+        raise RuntimeError(f"视频代理转码失败: {result.stderr[:240]}")
+    return output_path
+
+
 def _extract_keyframes(file_path: str, output_dir: str, interval: int = 10) -> list[str]:
     pattern = os.path.join(output_dir, "frame_%04d.jpg")
     subprocess.run(
@@ -341,7 +380,7 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
     from app.database import async_session_factory
     from app.models.asset import Asset, AssetSegment
     from app.services.ai_provider import transcribe_audio
-    from app.utils.storage import get_file_url, upload_file
+    from app.utils.storage import get_file_url, upload_file, upload_stream
     from sqlalchemy import delete
 
     owner_id = await _get_job_owner(job_id)
@@ -494,7 +533,20 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
                 asset.channels = info["channels"]
                 asset.bitrate = info["bitrate"]
 
-                await _update_job(job_id, stage="语音转写", progress=25)
+                await _update_job(job_id, stage="视频代理转码", progress=15)
+                proxy_local = os.path.join(temp_dir, "preview.mp4")
+                _transcode_video_proxy(local_path, proxy_local)
+                preview_path = f"video-previews/{asset.id}/preview.mp4"
+                with open(proxy_local, "rb") as stream:
+                    upload_stream(
+                        preview_path,
+                        stream,
+                        os.path.getsize(proxy_local),
+                        "video/mp4",
+                    )
+                asset.preview_path = preview_path
+
+                await _update_job(job_id, stage="语音转写", progress=30)
                 if asset.has_audio:
                     try:
                         if settings.ai_asr_provider.lower() == "local":
@@ -508,7 +560,7 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
                     except Exception:
                         asset.transcript = ""
 
-                await _update_job(job_id, stage="OCR", progress=45)
+                await _update_job(job_id, stage="OCR", progress=48)
                 frames_dir = os.path.join(temp_dir, "frames")
                 os.makedirs(frames_dir, exist_ok=True)
                 frames = _extract_keyframes(local_path, frames_dir)

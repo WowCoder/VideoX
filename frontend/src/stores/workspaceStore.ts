@@ -30,6 +30,7 @@ interface WorkspaceState {
   hydrate: (workspace: Workspace) => void;
   updateProject: (patch: Partial<Workspace["project"]>) => void;
   updateDocumentSettings: (patch: Partial<Workspace["document"]["settings"]>) => void;
+  applyGlobalColorGrade: (colorGrade: Record<string, unknown>, clearShotOverrides: boolean) => void;
   updateGlobalScope: (scope: "film" | "scene", sceneId: string | undefined, patch: Partial<GlobalScopeLayers>) => void;
   selectScene: (sceneId: string | null) => void;
   selectShot: (shotId: string | null) => void;
@@ -68,7 +69,7 @@ function newShot(index: number, narration: string): Shot {
     description: "",
     status: "editing",
     sourceStartMs: 0,
-    sourceEndMs: 0,
+    sourceEndMs: 8000,
     durationMs: 8000,
     locked: false,
     transform: {},
@@ -243,6 +244,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     document: {
       ...workspace.document,
       settings: { ...workspace.document.settings, ...patch },
+    },
+  })),
+
+  applyGlobalColorGrade: (colorGrade, clearShotOverrides) => dirty(set, get, (workspace) => ({
+    ...workspace,
+    document: {
+      ...workspace.document,
+      settings: {
+        ...workspace.document.settings,
+        visualSettings: {
+          ...workspace.document.settings.visualSettings,
+          colorGrade,
+        },
+      },
+      storyboard: clearShotOverrides
+        ? {
+            scenes: workspace.document.storyboard.scenes.map((scene) => ({
+              ...scene,
+              shots: scene.shots.map((shot) => ({ ...shot, adjust: { mode: "inherit" } })),
+            })),
+          }
+        : workspace.document.storyboard,
     },
   })),
 

@@ -490,6 +490,7 @@ async def generate_image(
             "720*1280": "9:16",
             "576*1024": "9:16",
             "1024*1024": "1:1",
+            "1024*768": "4:3",
         }
         return await _request_agnes_image(
             prompt,
@@ -763,7 +764,7 @@ async def _prepare_agnes_video_first_frame(source: str, aspect_ratio: str) -> st
     public_url = await _request_agnes_image(
         relay_prompt,
         size="1K",
-        ratio=aspect_ratio if aspect_ratio in {"16:9", "9:16", "1:1"} else "16:9",
+        ratio=aspect_ratio if aspect_ratio in {"16:9", "9:16", "1:1", "4:3"} else "16:9",
         input_images=[image_input],
     )
     return _agnes_public_image_url(public_url)
@@ -857,6 +858,7 @@ def _agnes_video_v20_dimensions(aspect_ratio: str) -> tuple[int, int]:
         "16:9": (1280, 720),
         "9:16": (720, 1280),
         "1:1": (720, 720),
+        "4:3": (960, 720),
     }.get(aspect_ratio, (1280, 720))
 
 
@@ -899,7 +901,7 @@ def _agnes_video_payload(
         "seconds": selected_duration,
         "size": "720P",
         "aspect_ratio": (
-            aspect_ratio if aspect_ratio in {"16:9", "9:16", "1:1"} else "16:9"
+            aspect_ratio if aspect_ratio in {"16:9", "9:16", "1:1", "4:3"} else "16:9"
         ),
     }
     if first_frame:

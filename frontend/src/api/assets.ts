@@ -38,6 +38,7 @@ export interface Asset {
   fileSizeMb: number;
   tags: string[];
   recognition: Record<string, unknown>;
+  metadata: Record<string, unknown>;
   mediaUrl?: string;
   thumbnailUrl?: string;
   matchField?: string;
@@ -83,6 +84,7 @@ export interface RawAsset {
   file_size_mb: number;
   tags: unknown[];
   recognition: Record<string, unknown>;
+  asset_metadata?: Record<string, unknown>;
   media_url: string | null;
   thumbnail_url: string | null;
   match_field: string | null;
@@ -163,6 +165,7 @@ export function mapAsset(raw: RawAsset): Asset {
     fileSizeMb: raw.file_size_mb,
     tags: (raw.tags ?? []).map(String),
     recognition: raw.recognition ?? {},
+    metadata: raw.asset_metadata ?? {},
     mediaUrl: raw.media_url ?? undefined,
     thumbnailUrl: raw.thumbnail_url ?? undefined,
     matchField: raw.match_field ?? undefined,

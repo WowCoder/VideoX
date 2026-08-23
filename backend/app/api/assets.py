@@ -344,6 +344,7 @@ def asset_out(
         file_size_mb=asset.file_size_mb,
         tags=asset.tags or [],
         recognition=asset.recognition or {},
+        asset_metadata=getattr(asset, "asset_metadata", None) or {},
         media_url=get_file_url(playable_path) if playable_path else None,
         thumbnail_url=get_file_url(asset.thumbnail_path) if asset.thumbnail_path else None,
         match_field=match_field,
@@ -540,7 +541,7 @@ async def upload_asset(
             if media_info["media_type"] == "image"
             else ["音频标准化", "语音转写", "语义索引", "完成"]
             if media_info["media_type"] == "audio"
-            else ["媒体解析", "语音转写", "OCR", "镜头切分", "视觉理解", "语义索引", "完成"]
+            else ["媒体解析", "代理转码", "语音转写", "OCR", "镜头切分", "视觉理解", "语义索引", "完成"]
         ),
         progress=0,
         detail=f"{safe_name} 已进入处理队列",

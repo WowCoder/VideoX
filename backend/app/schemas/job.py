@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional
+from typing import Literal, Optional
 
 
 class JobCreate(BaseModel):
@@ -20,6 +20,19 @@ class ExportMetadata(BaseModel):
     format: str
     resolution: str
     aspect_ratio: str
+
+
+class ShotDescriptionProposalItem(BaseModel):
+    shot_id: str
+    original_description: str
+    proposed_description: str
+
+
+class JobReviewProposal(BaseModel):
+    type: Literal["shot_description"]
+    status: Literal["pending", "accepted", "rejected"] = "pending"
+    base_revision: int
+    items: list[ShotDescriptionProposalItem]
 
 
 class JobOut(BaseModel):
@@ -42,6 +55,7 @@ class JobOut(BaseModel):
     result_detail: str
     result_url: Optional[str] = None
     export_metadata: Optional[ExportMetadata] = None
+    review_proposal: Optional[JobReviewProposal] = None
     payload: dict = Field(default_factory=dict, exclude=True, repr=False)
     attempts: int = 0
     max_attempts: int = 3
@@ -50,8 +64,8 @@ class JobOut(BaseModel):
     updated_at: Optional[datetime] = None
 
     @model_validator(mode="after")
-    def derive_export_metadata(self):
-        """只暴露导出展示所需字段，不向客户端泄露通用任务 payload。"""
+    def derive_safe_metadata(self):
+        """只暴露经过校验的展示字段，不向客户端泄露通用任务 payload。"""
         if self.type == "导出" and self.export_metadata is None:
             payload = self.payload or {}
             self.export_metadata = ExportMetadata(
@@ -59,6 +73,10 @@ class JobOut(BaseModel):
                 resolution=str(payload.get("resolution") or "1080p"),
                 aspect_ratio=str(payload.get("aspect_ratio") or "16:9"),
             )
+        if self.type == "AI 分镜完善" and self.review_proposal is None:
+            proposal = (self.payload or {}).get("review_proposal")
+            if isinstance(proposal, dict):
+                self.review_proposal = JobReviewProposal.model_validate(proposal)
         return self
 
     class Config:

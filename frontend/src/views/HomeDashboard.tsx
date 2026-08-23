@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Compass,
   FileText,
@@ -32,6 +34,8 @@ const statusLabels: Record<string, string> = {
   exporting: "导出中",
   failed: "失败",
 };
+
+const PROJECT_PAGE_SIZE = 12;
 
 const startPaths = [
   {
@@ -168,11 +172,15 @@ export default function HomeDashboard() {
   const setCurrentProject = useProjectStore((state) => state.setCurrentProject);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [openMenuProjectId, setOpenMenuProjectId] = useState<string | null>(null);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 220);
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, 220);
     return () => window.clearTimeout(timer);
   }, [search]);
 
@@ -196,11 +204,18 @@ export default function HomeDashboard() {
   }, [openMenuProjectId]);
 
   const projectsQuery = useQuery({
-    queryKey: ["projects", "workbench", debouncedSearch],
-    queryFn: () => projectApi.list({ search: debouncedSearch || undefined, pageSize: 100 }),
+    queryKey: ["projects", "workbench", debouncedSearch, page],
+    queryFn: () => projectApi.list({ search: debouncedSearch || undefined, page, pageSize: PROJECT_PAGE_SIZE }),
+    placeholderData: (previous) => previous,
     retry: false,
   });
   const projects = useMemo(() => projectsQuery.data?.items ?? [], [projectsQuery.data?.items]);
+  const projectTotal = projectsQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(projectTotal / PROJECT_PAGE_SIZE));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const deleteMutation = useMutation({
     mutationFn: projectApi.remove,
@@ -287,7 +302,7 @@ export default function HomeDashboard() {
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索项目名称、内容类型或描述" aria-label="搜索项目" className="h-11 w-full rounded-[10px] border border-line bg-[#fafafb] pl-10 pr-4 text-sm text-text transition placeholder:text-[#999a9f] focus:border-[#b8b8bc] focus:bg-white focus:ring-2 focus:ring-black/5" />
             {projectsQuery.isFetching && <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-muted" />}
           </label>
-          <span className="shrink-0 px-2 text-xs text-muted">共 {projectsQuery.data?.total ?? 0} 个项目</span>
+          <span className="shrink-0 px-2 text-xs text-muted">共 {projectTotal} 个项目</span>
           <div className="flex shrink-0 rounded-[10px] border border-line bg-[#fafafb] p-1" aria-label="项目视图">
             <button type="button" onClick={() => setViewMode("grid")} aria-label="宫格显示" aria-pressed={viewMode === "grid"} className={`grid h-9 w-9 place-items-center rounded-lg transition ${viewMode === "grid" ? "bg-white text-text shadow-sm" : "text-muted hover:text-text"}`}><Grid2X2 size={16} /></button>
             <button type="button" onClick={() => setViewMode("list")} aria-label="列表显示" aria-pressed={viewMode === "list"} className={`grid h-9 w-9 place-items-center rounded-lg transition ${viewMode === "list" ? "bg-white text-text shadow-sm" : "text-muted hover:text-text"}`}><List size={16} /></button>
@@ -310,22 +325,29 @@ export default function HomeDashboard() {
             <button type="button" onClick={() => startProject("blank")} className="workspace-primary-button mt-4 !min-h-10"><FolderPlus size={15} />新建项目</button>
           </div>
         ) : (
-          <div className={`mt-5 ${viewMode === "grid" ? "grid gap-5 md:grid-cols-2 xl:grid-cols-3" : "space-y-3"}`}>
-            {projects.map((project) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                viewMode={viewMode}
-                recent={project.id === currentProjectId}
-                menuOpen={openMenuProjectId === project.id}
-                onOpen={() => openProject(project.id)}
-                onToggleMenu={() => setOpenMenuProjectId((current) => current === project.id ? null : project.id)}
-                onEdit={() => { setOpenMenuProjectId(null); openProjectEdit(project); }}
-                onDelete={() => deleteProject(project)}
-                deleting={deleteMutation.isPending && deleteMutation.variables === project.id}
-              />
-            ))}
-          </div>
+          <>
+            <div className={`mt-5 ${viewMode === "grid" ? "grid gap-5 md:grid-cols-2 xl:grid-cols-3" : "space-y-3"}`}>
+              {projects.map((project) => (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  viewMode={viewMode}
+                  recent={project.id === currentProjectId}
+                  menuOpen={openMenuProjectId === project.id}
+                  onOpen={() => openProject(project.id)}
+                  onToggleMenu={() => setOpenMenuProjectId((current) => current === project.id ? null : project.id)}
+                  onEdit={() => { setOpenMenuProjectId(null); openProjectEdit(project); }}
+                  onDelete={() => deleteProject(project)}
+                  deleting={deleteMutation.isPending && deleteMutation.variables === project.id}
+                />
+              ))}
+            </div>
+            {totalPages > 1 && <nav aria-label="项目分页" className="mt-7 flex items-center justify-center gap-3">
+              <button type="button" disabled={page <= 1 || projectsQuery.isFetching} onClick={() => setPage((current) => Math.max(1, current - 1))} className="workspace-secondary-button min-h-9 px-3 text-xs disabled:opacity-40"><ChevronLeft size={14} />上一页</button>
+              <span className="min-w-24 text-center text-xs text-muted">第 {page} / {totalPages} 页</span>
+              <button type="button" disabled={page >= totalPages || projectsQuery.isFetching} onClick={() => setPage((current) => Math.min(totalPages, current + 1))} className="workspace-secondary-button min-h-9 px-3 text-xs disabled:opacity-40">下一页<ChevronRight size={14} /></button>
+            </nav>}
+          </>
         )}
       </section>
     </div>

@@ -140,7 +140,7 @@ async def _generate_media(
     from app.models.job import Job
     from app.models.script import Shot, ShotMediaVersion
     from app.services.ai_provider import generate_effect_video, generate_image, generate_video
-    from app.services.workspace import load_project_workspace, record_revision
+    from app.services.workspace import ensure_shot_material_history, load_project_workspace, record_revision
     from app.services.storage_usage import recalculate_storage_usage
     from sqlalchemy import select
 
@@ -159,6 +159,10 @@ async def _generate_media(
             (item for scene in project.script.units for item in scene.shots if item.id == shot_id),
             None,
         )
+        scene = next(
+            (item for item in project.script.units if any(candidate.id == shot_id for candidate in item.shots)),
+            None,
+        )
         if not shot:
             raise RuntimeError("镜头不存在")
         base_revision = int((job.payload or {}).get("base_revision", project.script.revision))
@@ -170,7 +174,9 @@ async def _generate_media(
         job.progress = 10
         await session.commit()
 
-        prompt = requested_prompt.strip() or shot.description.strip() or shot.unit.intent.strip()
+        # 使用已加载的 scene -> shots 方向，避免 AsyncSession 在
+        # shot.unit 上发起隐式 lazy IO 而触发 MissingGreenlet。
+        prompt = requested_prompt.strip() or shot.description.strip() or (scene.intent.strip() if scene else "")
         if not prompt:
             raise RuntimeError("镜头缺少可用于生成的画面描述")
         source_snapshot = {
@@ -185,7 +191,12 @@ async def _generate_media(
         }
         if kind == "image":
             ratio = project.composition.aspect_ratio
-            size = {"16:9": "1280*720", "9:16": "720*1280", "1:1": "1024*1024"}.get(ratio, "1280*720")
+            size = {
+                "16:9": "1280*720",
+                "9:16": "720*1280",
+                "1:1": "1024*1024",
+                "4:3": "1024*768",
+            }.get(ratio, "1280*720")
             remote_url = await generate_image(prompt=prompt, size=size)
             media_type = "image"
             media_kind = "generated_image"
@@ -297,6 +308,16 @@ async def _generate_media(
         await session.refresh(shot, attribute_names=["revision"])
         selected = _can_auto_select_media_version(shot.revision, base_shot_revision)
         if selected:
+            ensure_shot_material_history(
+                shot,
+                asset_id=shot.asset_id,
+                segment_id=shot.segment_id,
+                source_start_ms=shot.source_start_ms,
+                source_end_ms=shot.source_end_ms,
+                origin="previous_selection",
+                operation="previous_selection",
+                selected=False,
+            )
             for existing_version in shot.media_versions:
                 existing_version.is_selected = False
         version = ShotMediaVersion(
@@ -312,6 +333,13 @@ async def _generate_media(
                 "base_revision": base_revision,
                 "base_shot_revision": base_shot_revision,
                 "stale_result": not selected,
+                "material_history": {
+                    "segment_id": None,
+                    "source_start_ms": 0,
+                    "source_end_ms": asset.duration_ms,
+                    "origin": "ai_image" if media_type == "image" else "ai_video",
+                    "last_used_at": datetime.now(timezone.utc).isoformat() if selected else None,
+                },
             },
             status="ready",
             is_selected=selected,

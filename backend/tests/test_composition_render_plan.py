@@ -38,7 +38,7 @@ def shot(shot_id, index, asset_id, **overrides):
     return ns(**values)
 
 
-def project(shots, *, global_audio=None, global_scopes=None, visual_layers=None, aspect_ratio="16:9"):
+def project(shots, *, global_audio=None, global_scopes=None, visual_layers=None, visual_settings=None, aspect_ratio="16:9"):
     scene = ns(id="scene-1", index=0, outline="Scene", shots=shots)
     return ns(
         script=ns(units=[scene]),
@@ -48,6 +48,7 @@ def project(shots, *, global_audio=None, global_scopes=None, visual_layers=None,
             global_audio=global_audio or {},
             global_scopes=global_scopes or {"film": {}, "scenes": {}},
             visual_layers=visual_layers or {"items": []},
+            visual_settings=visual_settings or {},
         ),
     )
 
@@ -147,6 +148,22 @@ class CompositionRenderPlanTests(unittest.TestCase):
         )
         self.assertIn("eq=brightness=0.000000:contrast=1.000000:saturation=1.000000", graph)
 
+    def test_project_color_grade_is_inherited_and_shot_can_override(self):
+        inherited = shot("shot-1", 0, "video-1", adjust={"mode": "inherit"})
+        overridden = shot("shot-2", 1, "video-2", adjust={"mode": "override", "brightness": 18})
+        plan = compile_composition_render_plan(project(
+            [inherited, overridden],
+            visual_settings={"colorGrade": {"filterPreset": "cinematic", "brightness": 4}},
+        ))
+        self.assertEqual(
+            plan.video_clips[0]["adjust"],
+            {"filterPreset": "cinematic", "brightness": 4},
+        )
+        self.assertEqual(
+            plan.video_clips[1]["adjust"],
+            {"brightness": 18},
+        )
+
     @patch.object(export_tasks, "_run_command")
     @patch.object(export_tasks, "_render_subtitle_image")
     def test_subtitle_position_is_compiled_into_overlay(self, _render_image, run_command):
@@ -211,6 +228,17 @@ class ExportDispatchParameterTests(unittest.IsolatedAsyncioTestCase):
         args = dispatch.await_args.args
         self.assertEqual(args[-2:], ("project-1", "job-1"))
 
+    @patch.object(jobs, "dispatch_project_task", new_callable=AsyncMock)
+    async def test_retry_dispatch_supports_project_voiceover_generation(self, dispatch):
+        dispatch.return_value = ns(id="celery-task")
+        job = ns(
+            type="AI 配音生成", id="job-voice", owner_id="owner-1",
+            project_id="project-1", payload={"project_id": "project-1"},
+        )
+        await jobs._dispatch_replay(object(), job)
+        args = dispatch.await_args.args
+        self.assertEqual(args[-2:], ("job-voice", "project-1"))
+
 
 class ExportJobMetadataTests(unittest.TestCase):
     def test_export_metadata_is_derived_without_exposing_payload(self):
@@ -243,6 +271,49 @@ class ExportJobMetadataTests(unittest.TestCase):
         self.assertEqual(
             serialized["export_metadata"],
             {"format": "mp4", "resolution": "4k", "aspect_ratio": "9:16"},
+        )
+        self.assertNotIn("payload", serialized)
+
+    def test_description_review_is_derived_without_exposing_generic_payload(self):
+        job = JobOut(
+            id="job-review",
+            owner_id="owner-1",
+            project_id="project-1",
+            subject_type="shot",
+            subject_id="shot-1",
+            name="AI 完善分镜",
+            type="AI 分镜完善",
+            status="SUCCEEDED",
+            stage="等待确认",
+            stages=["完善描述", "等待确认"],
+            stage_index=1,
+            progress=100,
+            detail="已生成 1 条镜头描述建议",
+            eta="",
+            logs=[],
+            result_detail="AI 建议尚未修改项目",
+            is_simulated=False,
+            payload={
+                "script_id": "script-1",
+                "secret_internal_value": "must-not-leak",
+                "review_proposal": {
+                    "type": "shot_description",
+                    "status": "pending",
+                    "base_revision": 7,
+                    "items": [{
+                        "shot_id": "shot-1",
+                        "original_description": "原描述",
+                        "proposed_description": "AI 建议",
+                    }],
+                },
+            },
+        )
+
+        serialized = job.model_dump(mode="json")
+        self.assertEqual(serialized["review_proposal"]["status"], "pending")
+        self.assertEqual(
+            serialized["review_proposal"]["items"][0]["proposed_description"],
+            "AI 建议",
         )
         self.assertNotIn("payload", serialized)
 

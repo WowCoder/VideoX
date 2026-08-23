@@ -33,7 +33,7 @@ function asset(
     durationMs: mediaType === "image" ? 0 : durationMs, hasAudio: mediaType !== "image",
     fileSizeMb: mediaType === "image" ? 2.4 : mediaType === "audio" ? 8.7 : 18.6,
     tags: contentTypes.map((type) => ({ scene: "场景", role: "角色", object: "物品", event: "事件" })[type]),
-    recognition: {}, projectIds, segments: [], createdAt: now, updatedAt: now, createdAtRelative: "刚刚",
+    recognition: {}, metadata: {}, projectIds, segments: [], createdAt: now, updatedAt: now, createdAtRelative: "刚刚",
   };
 }
 

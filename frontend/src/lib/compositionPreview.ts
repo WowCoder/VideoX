@@ -30,6 +30,14 @@ function record(value: unknown): UnknownRecord {
     : {};
 }
 
+export function effectiveShotAdjust(shot: Shot, globalVisualSettings?: Record<string, unknown>): UnknownRecord {
+  const local = record(shot.adjust);
+  const globalGrade = record(record(globalVisualSettings).colorGrade);
+  const localKeys = Object.keys(local).filter((key) => key !== "mode");
+  const mode = String(local.mode ?? (localKeys.length ? "override" : "inherit"));
+  return mode === "override" ? local : globalGrade;
+}
+
 export function numeric(value: unknown, fallback = 0): number {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -147,8 +155,8 @@ export function transitionLayerStyle(
   return layer === "next" ? { opacity: value } : {};
 }
 
-export function shotVisualStyle(shot: Shot, localProgress: number): CSSProperties {
-  const adjust = record(shot.adjust);
+export function shotVisualStyle(shot: Shot, localProgress: number, globalVisualSettings?: Record<string, unknown>): CSSProperties {
+  const adjust = effectiveShotAdjust(shot, globalVisualSettings);
   const transform = record(shot.transform);
   const motion = record(shot.motion);
   const preset = String(adjust.filterPreset ?? adjust.filter ?? "original");

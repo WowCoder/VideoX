@@ -10,7 +10,7 @@ from fastapi import UploadFile
 
 from app.api.assets import _detect_container, _probe_upload_stream
 from app.api.jobs import _export_result_path
-from app.tasks import export_tasks
+from app.tasks import export_tasks, media_tasks
 
 
 class AudioUploadDetectionTests(unittest.TestCase):
@@ -57,6 +57,36 @@ class AudioUploadDetectionTests(unittest.TestCase):
             "channels": 2,
             "bitrate": 768000,
         })
+
+
+class VideoProxyTests(unittest.TestCase):
+    @patch.object(media_tasks.subprocess, "run")
+    def test_proxy_is_h264_720p_seek_friendly_mp4(self, mock_run):
+        def create_output(command, **_kwargs):
+            with open(command[-1], "wb") as stream:
+                stream.write(b"proxy")
+            return SimpleNamespace(returncode=0, stderr="")
+
+        mock_run.side_effect = create_output
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = f"{directory}/preview.mp4"
+            result = media_tasks._transcode_video_proxy("/tmp/source.mov", output_path)
+
+        command = mock_run.call_args.args[0]
+        self.assertEqual(result, output_path)
+        self.assertEqual(command[command.index("-c:v") + 1], "libx264")
+        self.assertEqual(command[command.index("-pix_fmt") + 1], "yuv420p")
+        self.assertEqual(command[command.index("-r") + 1], "30")
+        self.assertEqual(command[command.index("-g") + 1], "30")
+        self.assertIn("force_original_aspect_ratio=decrease", command[command.index("-vf") + 1])
+        self.assertEqual(command[command.index("-movflags") + 1], "+faststart")
+
+    @patch.object(media_tasks.subprocess, "run")
+    def test_proxy_transcode_failure_is_reported(self, mock_run):
+        mock_run.return_value = SimpleNamespace(returncode=1, stderr="decoder failed")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "视频代理转码失败"):
+                media_tasks._transcode_video_proxy("/tmp/source.mov", f"{directory}/preview.mp4")
 
 
 class AudioExportFilterTests(unittest.TestCase):

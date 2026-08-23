@@ -154,7 +154,10 @@ def normalize_asset_preview(raw: str, available_segments: dict[str, dict]) -> di
                 "description": description[:5000],
                 "duration_ms": max(500, duration_ms),
                 "asset_id": source["asset_id"],
-                "segment_id": segment_id,
+                # Request-only whole-asset references deliberately become
+                # null here; only real persisted segment IDs may enter a
+                # workspace document.
+                "segment_id": source.get("segment_id", segment_id),
                 "source_start_ms": start_ms,
                 "source_end_ms": start_ms + max(500, duration_ms),
             })

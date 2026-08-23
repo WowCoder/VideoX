@@ -91,6 +91,23 @@ def _subtitle_settings(value: Any) -> dict:
     }
 
 
+def _effective_adjust(value: Any, visual_settings: Any) -> dict:
+    """Resolve project color grading with an optional per-shot override.
+
+    Existing projects used any non-empty shot ``adjust`` object as an override.
+    New projects can explicitly store ``mode=inherit`` or ``mode=override``.
+    """
+    local = _record(value)
+    global_grade = _record(_record(visual_settings).get("colorGrade"))
+    local_values = {key: item for key, item in local.items() if key != "mode"}
+    mode = str(local.get("mode") or ("override" if local_values else "inherit"))
+    if mode != "override":
+        return dict(global_grade)
+    # “当前镜头覆盖”是整套调色的覆盖，不是隐式字段级混合。
+    # 这与前端实时预览保持一致，避免导出时又意外继承全片参数。
+    return local_values
+
+
 @dataclass
 class CompositionRenderPlan:
     duration: float
@@ -157,6 +174,7 @@ def _same_music(left: dict | None, right: dict | None) -> bool:
 
 def compile_composition_render_plan(project: Any) -> CompositionRenderPlan:
     composition = project.composition
+    visual_settings = _record(getattr(composition, "visual_settings", {}))
     global_audio = _record(composition.global_audio)
     raw_scopes = _record(composition.global_scopes)
     film_scope = _scope_layers(raw_scopes.get("film"))
@@ -200,7 +218,7 @@ def compile_composition_render_plan(project: Any) -> CompositionRenderPlan:
                 "source_start": max(0.0, _number(shot.source_start_ms) / 1000.0),
                 "source_end": max(0.0, _number(shot.source_end_ms) / 1000.0),
                 "transform": _record(shot.transform),
-                "adjust": _record(shot.adjust),
+                "adjust": _effective_adjust(shot.adjust, visual_settings),
                 "motion": _record(shot.motion),
                 "audio": _audio_settings(shot.audio_settings, default_original_volume),
                 "transition": _transition(shot.transition),

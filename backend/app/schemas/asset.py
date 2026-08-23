@@ -46,6 +46,7 @@ class AssetOut(BaseModel):
     file_size_mb: float
     tags: list = []
     recognition: dict = {}
+    asset_metadata: dict = {}
     media_url: str | None = None
     thumbnail_url: str | None = None
     match_field: str | None = None

@@ -168,3 +168,11 @@ a {
 .focus\:border-blue:focus {
   border-color: #171717 !important;
 }
+
+/* The editor preview receives measured inline dimensions. Fullscreen must
+ * override those dimensions instead of preserving the canvas-sized frame. */
+.group:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  border-radius: 0 !important;
+}

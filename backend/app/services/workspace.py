@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import uuid
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect as sqlalchemy_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -44,6 +45,10 @@ def _safe_media_url(path: str | None) -> str | None:
 
 
 def _media_version_document(version: ShotMediaVersion) -> ShotMediaVersionDocument:
+    # 直接查看已加载的 relationship 值，不在序列化过程中触发
+    # AsyncSession 的隐式 lazy IO。正常工作区查询会 selectinload asset；
+    # 刚创建的手工选择历史要到下次 reload 才需要媒体 URL。
+    loaded_asset = version.__dict__.get("asset")
     return ShotMediaVersionDocument(
         id=version.id,
         asset_id=version.asset_id,
@@ -54,7 +59,7 @@ def _media_version_document(version: ShotMediaVersion) -> ShotMediaVersionDocume
         parameters=version.parameters or {},
         status=version.status,
         is_selected=version.is_selected,
-        media_url=_safe_media_url(version.asset.file_path if getattr(version, "asset", None) else None),
+        media_url=_safe_media_url(loaded_asset.file_path if loaded_asset else None),
         created_at=version.created_at,
     )
 
@@ -443,6 +448,86 @@ async def _link_used_assets(
         )
 
 
+def ensure_shot_material_history(
+    shot: Shot,
+    *,
+    asset_id: str | None,
+    segment_id: str | None,
+    source_start_ms: int,
+    source_end_ms: int,
+    origin: str,
+    operation: str,
+    selected: bool,
+) -> ShotMediaVersion | None:
+    """记录镜头曾经选择、匹配或生成过的素材。
+
+    这不是完整的镜头快照：只记录素材身份和上次使用的源片段，
+    不回滚描述、调色、构图、运动、字幕或音频。
+    """
+    if not asset_id:
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    existing: ShotMediaVersion | None = None
+    for item in shot.media_versions:
+        material = (item.parameters or {}).get("material_history")
+        material = material if isinstance(material, dict) else {}
+        item_segment_id = material.get("segment_id")
+        # AI 生成素材以 asset 唯一；已选视频片段以 asset + segment 去重。
+        if item.asset_id == asset_id and (
+            item_segment_id == segment_id
+            or (not material and segment_id is None)
+        ):
+            existing = item
+            break
+    material_history = {
+        "segment_id": segment_id,
+        "source_start_ms": max(0, int(source_start_ms or 0)),
+        "source_end_ms": max(0, int(source_end_ms or 0)),
+        "origin": origin,
+        "last_used_at": now,
+    }
+    if existing is None:
+        existing = ShotMediaVersion(
+            id=f"media-version-{uuid.uuid4().hex[:12]}",
+            asset_id=asset_id,
+            parent_version_id=shot.selected_media_version_id,
+            kind="matched_segment" if segment_id else "selected_asset",
+            operation=operation,
+            parameters={"material_history": material_history},
+            status="ready",
+            is_selected=False,
+        )
+        # Append from the persistent parent side so SQLAlchemy's save-update
+        # cascade adds the version to the same Session as the shot.  Assigning
+        # only ``existing.shot = shot`` leaves a transient child outside an
+        # already-flushing Session and can persist a dangling selected-version
+        # foreign key.
+        shot.media_versions.append(existing)
+    else:
+        existing_material = (existing.parameters or {}).get("material_history")
+        existing_material = existing_material if isinstance(existing_material, dict) else {}
+        existing.parameters = {
+            **(existing.parameters or {}),
+            "material_history": {
+                **existing_material,
+                **material_history,
+            },
+        }
+    if selected:
+        for item in shot.media_versions:
+            item.is_selected = item is existing
+        existing.is_selected = True
+        # This relationship is post_update=True specifically to break the
+        # shots <-> shot_media_versions insert cycle for newly-created shots.
+        shot.selected_media_version = existing
+        # A pending shot must be inserted with a null FK; post_update fills it
+        # after the new version row exists.  Persistent shots (and transient
+        # domain objects used in unit tests) can expose the scalar immediately.
+        if not sqlalchemy_inspect(shot).pending:
+            shot.selected_media_version_id = existing.id
+    return existing
+
+
 def _apply_shot(
     shot: Shot,
     incoming: ShotDocument,
@@ -451,6 +536,11 @@ def _apply_shot(
     segment: AssetSegment | None,
 ) -> None:
     old_subtitle = shot.subtitle_text
+    old_asset_id = shot.asset_id
+    old_segment_id = shot.segment_id
+    old_source_start_ms = shot.source_start_ms
+    old_source_end_ms = shot.source_end_ms
+    old_selected_version_id = shot.selected_media_version_id
     shot.index = incoming.index
     shot.description = incoming.description
     shot.status = incoming.status
@@ -497,13 +587,73 @@ def _apply_shot(
             raise HTTPException(status_code=422, detail="选中的媒体版本不属于当前镜头")
         for item in shot.media_versions:
             item.is_selected = item.id == selected_version.id
-        shot.selected_media_version_id = selected_version.id
+        selected_parameters = selected_version.parameters or {}
+        selected_material = selected_parameters.get("material_history")
+        selected_material = selected_material if isinstance(selected_material, dict) else {}
+        selected_version.parameters = {
+            **selected_parameters,
+            "last_used_at": datetime.now(timezone.utc).isoformat(),
+            **({
+                "material_history": {
+                    **selected_material,
+                    "last_used_at": datetime.now(timezone.utc).isoformat(),
+                }
+            } if selected_material else {}),
+        }
+        shot.selected_media_version = selected_version
+        if not sqlalchemy_inspect(shot).pending:
+            shot.selected_media_version_id = selected_version.id
         shot.asset_id = selected_version.asset_id
-        shot.visual_mode = "image" if selected_version.kind == "generated_image" else "video"
+        selected_asset = getattr(selected_version, "asset", None)
+        shot.visual_mode = (
+            selected_asset.media_type
+            if selected_asset and selected_asset.media_type in {"image", "video"}
+            else "image" if selected_version.kind == "generated_image" else "video"
+        )
     else:
-        for item in shot.media_versions:
-            item.is_selected = False
-        shot.selected_media_version_id = None
+        material_changed = bool(incoming.asset_id) and (
+            incoming.asset_id != old_asset_id or incoming.segment_id != old_segment_id
+        )
+        if material_changed:
+            ensure_shot_material_history(
+                shot,
+                asset_id=old_asset_id,
+                segment_id=old_segment_id,
+                source_start_ms=old_source_start_ms,
+                source_end_ms=old_source_end_ms,
+                origin="previous_selection",
+                operation="previous_selection",
+                selected=False,
+            )
+            ensure_shot_material_history(
+                shot,
+                asset_id=shot.asset_id,
+                segment_id=shot.segment_id,
+                source_start_ms=shot.source_start_ms,
+                source_end_ms=shot.source_end_ms,
+                origin="match" if shot.segment_id else "library",
+                operation="match" if shot.segment_id else "library_selection",
+                selected=True,
+            )
+        else:
+            if old_asset_id and not incoming.asset_id:
+                ensure_shot_material_history(
+                    shot,
+                    asset_id=old_asset_id,
+                    segment_id=old_segment_id,
+                    source_start_ms=old_source_start_ms,
+                    source_end_ms=old_source_end_ms,
+                    origin="previous_selection",
+                    operation="previous_selection",
+                    selected=False,
+                )
+            for item in shot.media_versions:
+                item.is_selected = False
+            shot.selected_media_version = None
+            shot.selected_media_version_id = None
+        if old_selected_version_id and not incoming.asset_id:
+            shot.selected_media_version = None
+            shot.selected_media_version_id = None
     shot.revision = max((shot.revision or 0) + 1, incoming.revision + 1)
 
 
@@ -640,6 +790,34 @@ async def save_workspace(
     else:
         composition.current_render_asset_id = None
         project.master_output_asset_id = None
+
+    # 字幕和 AI 旁白共同引用同一批持久台词段。工作区保存是字幕文本、镜头
+    # 时长和排序的提交点，因此也在这里同步 cue；TTS 任务不再自行估算时间。
+    await db.flush()
+    from app.services.tts.planning import build_voice_plans
+    from app.services.voice_cues import sync_voice_cues
+
+    scene_ids = {scene.id for scene in script.units}
+    cue_plans = build_voice_plans(project, scene_ids, "effective_subtitles")
+    voice_master_stale = False
+    # ``save_workspace`` is also exercised with a deliberately tiny unit-test
+    # session double. Production always passes AsyncSession and persists cues.
+    if isinstance(db, AsyncSession):
+        _, voice_master_stale = await sync_voice_cues(
+            db,
+            project,
+            cue_plans,
+            source_revision=script.revision + 1,
+            scope_scene_ids=scene_ids,
+        )
+    if voice_master_stale and (composition.global_audio or {}).get("voiceAssetId"):
+        voice_asset = await db.get(Asset, composition.global_audio["voiceAssetId"])
+        if voice_asset and voice_asset.source_type == "ai_tts":
+            composition.global_audio = {
+                key: value
+                for key, value in composition.global_audio.items()
+                if key != "voiceAssetId"
+            }
 
     script.revision += 1
     composition.revision = script.revision

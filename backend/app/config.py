@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     ai_text_to_video_provider: str = "dashscope"
     ai_image_to_video_provider: str = "dashscope"
     ai_effect_video_provider: str = "dashscope"
+    ai_tts_provider: str = "disabled"
 
     # ── 本地 AI 服务 ──
     local_ai_api_key: str = ""
@@ -101,6 +102,18 @@ class Settings(BaseSettings):
     dashscope_embedding_model: str = "text-embedding-v3"
     dashscope_asr_model: str = "paraformer-v2"
     dashscope_ocr_model: str = "qwen-vl-ocr"
+
+    # ── AI 配音 ──
+    # 独立开关避免仅配置图像/视频后意外产生语音费用。
+    ai_tts_model: str = "qwen-audio-3.0-tts-flash"
+    ai_tts_voice: str = "longanfengyue"
+    ai_tts_language: str = "Chinese"
+    ai_tts_request_timeout_seconds: int = 120
+    ai_tts_download_timeout_seconds: int = 120
+    ai_tts_max_text_characters: int = 1000
+    ai_tts_output_sample_rate: int = 48000
+    ai_tts_output_channels: int = 2
+    ai_tts_auto_time_stretch_limit: float = 1.12
 
     # ── Agnes AI 中国站（线上生成式 AI）──
     # 文档：https://www.agnes-ai.cn/zh-Hans/docs/overview
@@ -177,6 +190,7 @@ class Settings(BaseSettings):
                 self.ai_effect_video_provider,
                 {"dashscope", "disabled"},
             ),
+            "AI_TTS_PROVIDER": (self.ai_tts_provider, {"dashscope", "disabled"}),
         }
         for name, (value, allowed) in provider_groups.items():
             if value.lower() not in allowed:
@@ -209,6 +223,16 @@ class Settings(BaseSettings):
             raise ValueError("AI_VIDEO_RESOLUTION 必须是 720P 或 1080P")
         if not 2 <= self.ai_video_duration_seconds <= 15:
             raise ValueError("AI_VIDEO_DURATION_SECONDS 必须在 2 到 15 之间")
+        if self.ai_tts_request_timeout_seconds < 30 or self.ai_tts_download_timeout_seconds < 30:
+            raise ValueError("AI_TTS 请求和下载超时必须至少为 30 秒")
+        if not 100 <= self.ai_tts_max_text_characters <= 5000:
+            raise ValueError("AI_TTS_MAX_TEXT_CHARACTERS 必须在 100 到 5000 之间")
+        if self.ai_tts_output_sample_rate not in {24000, 44100, 48000}:
+            raise ValueError("AI_TTS_OUTPUT_SAMPLE_RATE 仅支持 24000、44100 或 48000")
+        if self.ai_tts_output_channels not in {1, 2}:
+            raise ValueError("AI_TTS_OUTPUT_CHANNELS 仅支持 1 或 2")
+        if not 1.0 <= self.ai_tts_auto_time_stretch_limit <= 1.2:
+            raise ValueError("AI_TTS_AUTO_TIME_STRETCH_LIMIT 必须在 1.0 到 1.2 之间")
 
         if self.environment.lower() != "production":
             return self
@@ -314,6 +338,14 @@ class Settings(BaseSettings):
             self.ai_effect_video_provider.lower() == "dashscope"
             and self.has_dashscope
             and bool(self.ai_effect_video_model)
+        )
+
+    @property
+    def has_tts(self) -> bool:
+        return (
+            self.ai_tts_provider.lower() == "dashscope"
+            and self.has_dashscope
+            and bool(self.ai_tts_model and self.ai_tts_voice)
         )
 
     @property

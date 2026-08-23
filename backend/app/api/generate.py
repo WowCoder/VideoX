@@ -62,6 +62,57 @@ class AssetCreationPreviewRequest(BaseModel):
     brief: str = Field("", max_length=2000)
 
 
+def _asset_preview_context(assets: list[Asset]) -> tuple[list[dict], dict[str, dict]]:
+    """Build model context, including legacy ready assets without segment rows."""
+    asset_context: list[dict] = []
+    available_segments: dict[str, dict] = {}
+    for asset in assets:
+        segments = sorted(asset.segments, key=lambda item: (item.start_ms, item.id))
+        if not segments:
+            # Older/imported assets can legitimately be ready while having no
+            # normalized segment rows.  Give the model a stable request-only
+            # reference and later return segment_id=None so workspace saving
+            # links the whole asset instead of inventing a database segment.
+            segments = [None]
+        for segment in segments:
+            recognition = (segment.recognition if segment else asset.recognition) or {}
+            summary = str(recognition.get("summary") or "").strip()
+            eligible_as_visual = asset.media_type in {"image", "video"}
+            reference_id = segment.id if segment else f"whole-asset:{asset.id}"
+            start_ms = segment.start_ms if segment else 0
+            end_ms = segment.end_ms if segment else max(0, asset.duration_ms or 0)
+            title = segment.title if segment else asset.name
+            if eligible_as_visual:
+                available_segments[reference_id] = {
+                    "asset_id": asset.id,
+                    "segment_id": segment.id if segment else None,
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "title": title,
+                    "summary": summary,
+                }
+            asset_context.append({
+                "asset_id": asset.id,
+                "asset_name": asset.name,
+                "media_type": asset.media_type,
+                "eligible_as_visual": eligible_as_visual,
+                "segment_id": reference_id,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "title": title,
+                "summary": summary,
+                "transcript": ((segment.transcript if segment else asset.transcript) or "")[:1200],
+                "ocr": ((segment.ocr_text if segment else asset.ocr_text) or "")[:600],
+                "tags": ((segment.tags if segment else asset.tags) or [])[:20],
+                "recognition": {
+                    key: recognition.get(key, [] if key not in {"shot", "quality"} else {})
+                    for key in ("spaces", "people", "objects", "actions", "shot", "quality")
+                },
+                "quality_score": segment.quality_score if segment else 0,
+            })
+    return asset_context, available_segments
+
+
 @router.post("/creation-previews/script", response_model=CreationPreviewOut)
 async def create_script_preview(
     request: ScriptCreationPreviewRequest,
@@ -105,42 +156,9 @@ async def create_asset_preview(
     if len(assets) != len(requested_ids):
         raise HTTPException(status_code=422, detail="部分素材不存在、尚未处理完成或无权访问")
 
-    asset_context: list[dict] = []
-    available_segments: dict[str, dict] = {}
-    for asset in assets:
-        for segment in sorted(asset.segments, key=lambda item: (item.start_ms, item.id)):
-            recognition = segment.recognition or {}
-            summary = str(recognition.get("summary") or "").strip()
-            eligible_as_visual = asset.media_type in {"image", "video"}
-            if eligible_as_visual:
-                available_segments[segment.id] = {
-                    "asset_id": asset.id,
-                    "start_ms": segment.start_ms,
-                    "end_ms": segment.end_ms,
-                    "title": segment.title,
-                    "summary": summary,
-                }
-            asset_context.append({
-                "asset_id": asset.id,
-                "asset_name": asset.name,
-                "media_type": asset.media_type,
-                "eligible_as_visual": eligible_as_visual,
-                "segment_id": segment.id,
-                "start_ms": segment.start_ms,
-                "end_ms": segment.end_ms,
-                "title": segment.title,
-                "summary": summary,
-                "transcript": (segment.transcript or "")[:1200],
-                "ocr": (segment.ocr_text or "")[:600],
-                "tags": (segment.tags or [])[:20],
-                "recognition": {
-                    key: recognition.get(key, [] if key != "shot" and key != "quality" else {})
-                    for key in ("spaces", "people", "objects", "actions", "shot", "quality")
-                },
-                "quality_score": segment.quality_score,
-            })
+    asset_context, available_segments = _asset_preview_context(assets)
     if not available_segments:
-        raise HTTPException(status_code=422, detail="所选素材中没有已识别的图片或视频片段；音频只能作为叙事参考")
+        raise HTTPException(status_code=422, detail="所选素材中没有可用于画面编排的图片或视频；音频只能作为叙事参考")
 
     from app.services.creation_preview import generate_asset_preview
 
@@ -162,6 +180,7 @@ class ProjectOperationRequest(BaseModel):
         "generate_video",
         "generate_effect",
         "generate_script",
+        "generate_voiceover",
         "compose",
         "export",
     ]
@@ -190,6 +209,25 @@ def _resolve_shot_ids(project: Project, scope: ScopeSelection) -> list[str]:
             raise HTTPException(status_code=422, detail="作用范围包含不属于当前项目的镜头")
         return [shot.id for scene in scenes for shot in scene.shots if shot.id in requested]
     raise HTTPException(status_code=422, detail="该操作不支持素材级作用范围")
+
+
+def _resolve_scene_ids(project: Project, scope: ScopeSelection) -> list[str]:
+    scenes = project.script.units
+    if scope.type == "project":
+        return [scene.id for scene in scenes]
+    if scope.type == "scene":
+        requested = set(scope.scene_ids)
+        owned = {scene.id for scene in scenes}
+        if not requested or not requested <= owned:
+            raise HTTPException(status_code=422, detail="作用范围包含不属于当前项目的场景")
+        return [scene.id for scene in scenes if scene.id in requested]
+    if scope.type == "shot":
+        requested = set(scope.shot_ids)
+        owned = {shot.id for scene in scenes for shot in scene.shots}
+        if not requested or not requested <= owned:
+            raise HTTPException(status_code=422, detail="作用范围包含不属于当前项目的镜头")
+        return [scene.id for scene in scenes if any(shot.id in requested for shot in scene.shots)]
+    raise HTTPException(status_code=422, detail="AI 配音不支持素材级作用范围")
 
 
 def _generation_prompt(shot: Shot, parameters: dict, prompt_key: str) -> str:
@@ -281,6 +319,12 @@ async def _dispatch_job(db: AsyncSession, project: Project, job: Job):
         return await dispatch_project_task(
             db, project.id, run_rough_cut, job.id, project.id
         )
+    if job.type == "AI 配音生成":
+        from app.tasks.voice_tasks import generate_project_voiceover
+
+        return await dispatch_project_task(
+            db, project.id, generate_project_voiceover, job.id, project.id
+        )
     if job.type == "导出":
         from app.tasks.export_tasks import export_project
 
@@ -317,13 +361,12 @@ async def execute_project_operation(
         )
 
     project_level_operations = {"compose", "export", "generate_script"}
-    shot_ids = (
-        _resolve_shot_ids(project, request.scope)
-        if request.operation not in project_level_operations
-        else []
-    )
-    if request.operation not in project_level_operations and not shot_ids:
+    scene_ids = _resolve_scene_ids(project, request.scope) if request.operation == "generate_voiceover" else []
+    shot_ids = _resolve_shot_ids(project, request.scope) if request.operation not in project_level_operations | {"generate_voiceover"} else []
+    if request.operation not in project_level_operations | {"generate_voiceover"} and not shot_ids:
         raise HTTPException(status_code=422, detail="当前作用范围内没有镜头")
+    if request.operation == "generate_voiceover" and not scene_ids:
+        raise HTTPException(status_code=422, detail="当前作用范围内没有场景")
     if request.operation in project_level_operations and request.scope.type != "project":
         raise HTTPException(status_code=422, detail="该操作只能作用于整个项目")
 
@@ -365,8 +408,8 @@ async def execute_project_operation(
             Job(
                 owner_id=user.id,
                 project_id=project.id,
-                subject_type="project",
-                subject_id=project.id,
+                subject_type="shot" if len(shot_ids) == 1 else "project",
+                subject_id=shot_ids[0] if len(shot_ids) == 1 else project.id,
                 name="镜头素材匹配",
                 type="镜头匹配",
                 status="QUEUED",
@@ -381,13 +424,13 @@ async def execute_project_operation(
             Job(
                 owner_id=user.id,
                 project_id=project.id,
-                subject_type="project",
-                subject_id=project.id,
+                subject_type="shot" if len(shot_ids) == 1 else "project",
+                subject_id=shot_ids[0] if len(shot_ids) == 1 else project.id,
                 name="AI 完善分镜",
                 type="AI 分镜完善",
                 status="QUEUED",
                 stage="等待生成",
-                stages=["完善描述", "保存结果"],
+                stages=["完善描述", "等待确认"],
                 payload={"script_id": project.script.id, "shot_ids": shot_ids},
             )
         )
@@ -436,6 +479,52 @@ async def execute_project_operation(
                 stage="等待编排",
                 stages=["检查镜头", "编排主成片", "保存结果"],
                 payload={"project_id": project.id},
+            )
+        )
+    elif request.operation == "generate_voiceover":
+        if not settings.has_tts:
+            raise HTTPException(status_code=503, detail="AI 配音未配置，请显式启用 AI_TTS_PROVIDER 并设置 DASHSCOPE_API_KEY")
+        # 台词段是字幕与声音的唯一时间源。旧任务 payload 仍可携带 source，
+        # 但新生成统一以实际字幕为准，避免另起一套场景旁白分段。
+        source = "effective_subtitles"
+        generate_mode = str(request.parameters.get("generate_mode") or "missing_and_stale")
+        if generate_mode not in {"missing_only", "missing_and_stale", "force_regenerate"}:
+            raise HTTPException(status_code=422, detail="配音生成模式无效")
+        model = str(request.parameters.get("model") or settings.ai_tts_model).strip()
+        voice = str(request.parameters.get("voice") or settings.ai_tts_voice).strip()
+        if not model or not voice:
+            raise HTTPException(status_code=422, detail="配音模型和音色不能为空")
+        from app.services.tts.normalization import validate_tts_selection
+        try:
+            validate_tts_selection(model, voice)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        instruction = str(request.parameters.get("instruction") or "").strip()[:1600]
+        jobs.append(
+            Job(
+                owner_id=user.id,
+                project_id=project.id,
+                subject_type="project" if request.scope.type == "project" else "scene",
+                subject_id=project.id if request.scope.type == "project" else scene_ids[0],
+                name="AI 生成字幕配音",
+                type="AI 配音生成",
+                status="QUEUED",
+                stage="等待配音",
+                stages=["解析字幕", "生成配音", "拼接旁白母带", "保存并应用"],
+                detail=f"将处理 {len(scene_ids)} 个场景",
+                payload={
+                    "project_id": project.id,
+                    "scene_ids": scene_ids,
+                    "source": source,
+                    "model": model,
+                    "voice": voice,
+                    "language": str(request.parameters.get("language") or settings.ai_tts_language),
+                    "instruction": instruction,
+                    "emotion": str(request.parameters.get("emotion") or "").strip()[:40],
+                    "voice_line_ids": [str(item) for item in (request.parameters.get("voice_line_ids") or [])][:20],
+                    "generate_mode": generate_mode,
+                    "apply_after_success": bool(request.parameters.get("apply_after_success", True)),
+                },
             )
         )
     else:

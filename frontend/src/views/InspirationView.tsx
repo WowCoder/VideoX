@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowUpRight,
   CalendarClock,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   ExternalLink,
   FileText,
@@ -29,6 +31,8 @@ const weekdays = [
   { value: 6, label: "周六" },
   { value: 0, label: "周日" },
 ];
+
+const TASK_PAGE_SIZE = 12;
 
 const typeMeta: Record<inspirationApi.InspirationTaskType, { label: string; description: string; icon: typeof Sparkles }> = {
   "topic-recommendation": {
@@ -135,15 +139,23 @@ export default function InspirationView({
   const [editorDraft, setEditorDraft] = useState<EditorDraft | null>(null);
   const [editorError, setEditorError] = useState("");
   const [resultTaskId, setResultTaskId] = useState<string | null>(null);
+  const [taskPage, setTaskPage] = useState(1);
 
   const tasksQuery = useQuery({
-    queryKey: ["inspiration-tasks"],
-    queryFn: () => inspirationApi.listTasks(),
+    queryKey: ["inspiration-tasks", taskPage],
+    queryFn: () => inspirationApi.listTasks(taskPage, TASK_PAGE_SIZE),
+    placeholderData: (previous) => previous,
     retry: false,
     refetchInterval: 15_000,
     enabled: !previewMode,
   });
   const tasks = useMemo(() => previewTasks ?? tasksQuery.data?.items ?? [], [previewTasks, tasksQuery.data]);
+  const taskTotal = previewTasks?.length ?? tasksQuery.data?.total ?? 0;
+  const taskTotalPages = Math.max(1, Math.ceil(taskTotal / TASK_PAGE_SIZE));
+
+  useEffect(() => {
+    if (!previewMode && taskPage > taskTotalPages) setTaskPage(taskTotalPages);
+  }, [previewMode, taskPage, taskTotalPages]);
   const runQueries = useQueries({
     queries: tasks.map((task) => ({
       queryKey: ["inspiration-runs", task.id, "latest"],
@@ -231,11 +243,11 @@ export default function InspirationView({
 
       <section className="mb-7 grid overflow-hidden rounded-2xl border border-line bg-surface md:grid-cols-[1fr_1fr_auto]">
         {(["topic-recommendation", "link-update"] as const).map((type) => { const meta = typeMeta[type]; const Icon = meta.icon; return <article key={type} className="flex gap-3 border-b border-line p-4 last:border-b-0 md:border-b-0 md:border-r"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-canvas text-text"><Icon size={18} /></span><div><strong className="text-sm text-text">{meta.label}</strong><p className="mt-1 text-xs leading-5 text-muted">{meta.description}</p></div></article>; })}
-        <aside className="flex min-w-[210px] items-center justify-center gap-5 p-4 text-center"><div><strong className="block text-xl text-text">{activeCount}</strong><span className="text-[11px] text-muted">个任务已启用</span></div><i className="h-8 w-px bg-line" /><div><strong className="block text-xl text-text">{recentOutputCount}</strong><span className="text-[11px] text-muted">条最近结果</span></div></aside>
+        <aside className="flex min-w-[210px] items-center justify-center gap-5 p-4 text-center"><div><strong className="block text-xl text-text">{activeCount}</strong><span className="text-[11px] text-muted">本页已启用</span></div><i className="h-8 w-px bg-line" /><div><strong className="block text-xl text-text">{recentOutputCount}</strong><span className="text-[11px] text-muted">本页最近结果</span></div></aside>
       </section>
 
       <section>
-        <header className="mb-4 flex items-end justify-between gap-3"><div><h2 className="text-lg font-semibold text-text">我的任务</h2><p className="mt-1 text-xs text-muted">{tasks.length ? `共 ${tasksQuery.data?.total ?? tasks.length} 个真实任务。` : "创建第一项任务，开始持续收集灵感。"}</p></div><button type="button" onClick={() => { setEditorDraft(blankDraft()); setEditorError(""); }} className="workspace-secondary-button min-h-9 px-3 text-xs"><Plus size={14} />新建任务</button></header>
+        <header className="mb-4 flex items-end justify-between gap-3"><div><h2 className="text-lg font-semibold text-text">我的任务</h2><p className="mt-1 text-xs text-muted">{tasks.length ? `共 ${taskTotal} 个真实任务。` : "创建第一项任务，开始持续收集灵感。"}</p></div><button type="button" onClick={() => { setEditorDraft(blankDraft()); setEditorError(""); }} className="workspace-secondary-button min-h-9 px-3 text-xs"><Plus size={14} />新建任务</button></header>
 
         {!previewMode && tasksQuery.isLoading ? <div className="flex justify-center py-24 text-muted"><Loader2 className="animate-spin" /></div>
           : !previewMode && tasksQuery.isError ? <div className="rounded-2xl border border-red/20 bg-red/5 py-16 text-center text-sm text-red">{tasksQuery.error instanceof Error ? tasksQuery.error.message : "任务加载失败"}</div>
@@ -255,6 +267,11 @@ export default function InspirationView({
               {running && <span className="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-ink" />}
             </article>;
           })}</div>}
+        {!previewMode && taskTotalPages > 1 && <nav aria-label="灵感任务分页" className="mt-7 flex items-center justify-center gap-3">
+          <button type="button" disabled={taskPage <= 1 || tasksQuery.isFetching} onClick={() => { setResultTaskId(null); setTaskPage((current) => Math.max(1, current - 1)); }} className="workspace-secondary-button min-h-9 px-3 text-xs disabled:opacity-40"><ChevronLeft size={14} />上一页</button>
+          <span className="min-w-24 text-center text-xs text-muted">第 {taskPage} / {taskTotalPages} 页</span>
+          <button type="button" disabled={taskPage >= taskTotalPages || tasksQuery.isFetching} onClick={() => { setResultTaskId(null); setTaskPage((current) => Math.min(taskTotalPages, current + 1)); }} className="workspace-secondary-button min-h-9 px-3 text-xs disabled:opacity-40">下一页<ChevronRight size={14} /></button>
+        </nav>}
       </section>
 
       {editorDraft && <div className="fixed inset-0 z-[80] grid place-items-center overflow-y-auto bg-ink/50 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditorDraft(null); }}>

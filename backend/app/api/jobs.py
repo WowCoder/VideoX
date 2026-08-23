@@ -2,10 +2,12 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, update, delete
 from datetime import datetime, timezone
@@ -23,6 +25,24 @@ from app.services.quotas import QuotaExceededError, readmit_existing_job_quota
 from app.services.task_dispatch import dispatch_owner_task, dispatch_project_task
 
 router = APIRouter()
+
+
+class JobReviewRequest(BaseModel):
+    action: Literal["accept", "reject"]
+
+
+REPLAYABLE_JOB_TYPES = {
+    "素材处理",
+    "AI 初剪生成",
+    "导出",
+    "镜头匹配",
+    "AI 生图分镜",
+    "AI 分镜完善",
+    "AI 脚本生成",
+    "分镜图 AI 生视频",
+    "示意图特效视频",
+    "AI 配音生成",
+}
 
 
 def _job_can_delete(status: str) -> bool:
@@ -97,6 +117,13 @@ async def _dispatch_replay(db: AsyncSession, job: Job):
             job.payload["project_id"],
             job.id,
         )
+    if job.type == "AI 配音生成":
+        from app.tasks.voice_tasks import generate_project_voiceover
+        return await dispatch(
+            generate_project_voiceover,
+            job.id,
+            job.payload["project_id"],
+        )
     if job.type == "分镜图 AI 生视频":
         from app.tasks.generate_tasks import generate_video_shot
         return await dispatch(
@@ -159,6 +186,108 @@ async def get_job(
     return JobOut.model_validate(job)
 
 
+@router.post("/{job_id}/review", response_model=JobOut)
+async def review_job_proposal(
+    job_id: str,
+    request: JobReviewRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """接受或忽略 AI 分镜描述建议；任务成功本身不会直接覆盖项目。"""
+    job = (
+        await db.execute(
+            select(Job)
+            .where(Job.id == job_id, Job.owner_id == user.id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.type != "AI 分镜完善" or job.status != "SUCCEEDED":
+        raise HTTPException(status_code=409, detail="该任务没有可审核的分镜建议")
+
+    payload = dict(job.payload or {})
+    proposal = payload.get("review_proposal")
+    if not isinstance(proposal, dict) or proposal.get("type") != "shot_description":
+        raise HTTPException(status_code=409, detail="该任务没有可审核的分镜建议")
+    if proposal.get("status", "pending") != "pending":
+        raise HTTPException(status_code=409, detail="这组分镜建议已经处理")
+
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    if request.action == "reject":
+        proposal = {**proposal, "status": "rejected", "reviewed_at": reviewed_at}
+        job.payload = {**payload, "review_proposal": proposal}
+        job.result = "已忽略"
+        job.result_detail = "AI 描述建议已忽略，项目内容未改变"
+        job.updated_at = datetime.now(timezone.utc)
+        if job.project_id:
+            await db.execute(
+                update(Project).where(Project.id == job.project_id).values(status="ready")
+            )
+        await db.commit()
+        return JobOut.model_validate(job)
+
+    if not job.project_id:
+        raise HTTPException(status_code=409, detail="任务未关联项目，无法应用建议")
+
+    from app.services.workspace import load_project_workspace, record_revision
+
+    project = await load_project_workspace(db, job.project_id, user.id, for_update=True)
+    shots_by_id = {
+        shot.id: shot
+        for scene in project.script.units
+        for shot in scene.shots
+    }
+    items = proposal.get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=409, detail="AI 没有返回可应用的描述建议")
+
+    changes = []
+    conflicts = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        shot_id = str(item.get("shot_id") or "")
+        shot = shots_by_id.get(shot_id)
+        original = str(item.get("original_description") or "")
+        proposed = str(item.get("proposed_description") or "").strip()
+        if not shot or not proposed:
+            conflicts.append(shot_id or "unknown")
+            continue
+        if shot.description != original:
+            conflicts.append(shot_id)
+            continue
+        changes.append((shot, proposed))
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail="部分镜头在 AI 生成后已经被编辑，请重新发起 AI 完善",
+        )
+
+    for shot, proposed in changes:
+        shot.description = proposed
+        shot.status = "editing"
+        shot.revision += 1
+    project.script.revision += 1
+    project.composition.revision = project.script.revision
+    project.status = "ready"
+    proposal = {**proposal, "status": "accepted", "reviewed_at": reviewed_at}
+    job.payload = {**payload, "review_proposal": proposal}
+    job.result = "已应用"
+    job.result_detail = f"已应用 {len(changes)} 条镜头描述建议"
+    job.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    await record_revision(
+        db,
+        project,
+        user.id,
+        "accept_ai_description",
+        {"job_id": job.id, "shot_ids": [shot.id for shot, _ in changes]},
+    )
+    await db.commit()
+    return JobOut.model_validate(job)
+
+
 @router.delete("/{job_id}", status_code=204)
 async def delete_job(
     job_id: str,
@@ -210,8 +339,26 @@ async def retry_job(
         raise HTTPException(status_code=400, detail="只有失败任务可以重试")
     if not job.payload:
         raise HTTPException(status_code=400, detail="该旧任务缺少可重放参数，无法安全重试")
+    if job.type not in REPLAYABLE_JOB_TYPES:
+        raise HTTPException(status_code=400, detail=f"{job.type or '该类型'}任务不支持安全重放")
     if job.attempts >= job.max_attempts:
         raise HTTPException(status_code=400, detail=f"任务已达到最大重试次数 {job.max_attempts}")
+
+    project = None
+    if job.type == "AI 配音生成":
+        from app.models.script import Script
+        current_revision = (
+            await db.execute(
+                select(Script.revision).where(Script.project_id == job.project_id)
+            )
+        ).scalar_one_or_none()
+        base_revision = int((job.payload or {}).get("base_revision", -1))
+        if current_revision is None or current_revision != base_revision:
+            raise HTTPException(
+                status_code=409,
+                detail="项目内容已变化，旧配音任务不能直接重试；请从 AI 配音面板重新生成",
+            )
+        project = await db.get(Project, job.project_id)
 
     try:
         await readmit_existing_job_quota(db, job, job.owner_id)
@@ -231,6 +378,8 @@ async def retry_job(
     if job.stages:
         job.stage = job.stages[0]
     job.updated_at = datetime.now(timezone.utc)
+    if project:
+        project.status = "processing"
 
     await db.commit()
 
@@ -242,6 +391,8 @@ async def retry_job(
         job.status = "FAILED"
         job.stage = "重试失败"
         job.detail = "该任务类型不支持安全重试"
+        if project:
+            project.status = "ready"
         await db.commit()
         raise
     except Exception as exc:
@@ -249,6 +400,8 @@ async def retry_job(
         job.stage = "任务派发失败"
         job.detail = f"重试任务派发失败：{str(exc)[:200]}"
         job.result_detail = "请确认 Redis 和 Worker 正常运行后再次重试"
+        if project:
+            project.status = "ready"
         await db.commit()
 
     return JobOut.model_validate(job)
@@ -354,6 +507,8 @@ async def resume_job(
         raise HTTPException(status_code=400, detail="只有已暂停任务可以继续")
     if not job.payload:
         raise HTTPException(status_code=400, detail="任务缺少恢复参数，无法安全继续")
+    if job.type not in REPLAYABLE_JOB_TYPES:
+        raise HTTPException(status_code=400, detail=f"{job.type or '该类型'}任务不支持安全恢复")
 
     try:
         await readmit_existing_job_quota(db, job, job.owner_id)

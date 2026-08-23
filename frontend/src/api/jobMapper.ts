@@ -23,6 +23,16 @@ export interface RawJob {
     resolution: string;
     aspect_ratio: string;
   } | null;
+  review_proposal?: {
+    type: "shot_description";
+    status: "pending" | "accepted" | "rejected";
+    base_revision: number;
+    items: Array<{
+      shot_id: string;
+      original_description: string;
+      proposed_description: string;
+    }>;
+  } | null;
   is_simulated: boolean;
   created_at: string | null;
   updated_at: string | null;
@@ -51,6 +61,16 @@ export function mapJob(raw: RawJob): Job {
       format: raw.export_metadata.format,
       resolution: raw.export_metadata.resolution,
       aspectRatio: raw.export_metadata.aspect_ratio,
+    } : undefined,
+    reviewProposal: raw.review_proposal ? {
+      type: raw.review_proposal.type,
+      status: raw.review_proposal.status,
+      baseRevision: raw.review_proposal.base_revision,
+      items: raw.review_proposal.items.map((item) => ({
+        shotId: item.shot_id,
+        originalDescription: item.original_description,
+        proposedDescription: item.proposed_description,
+      })),
     } : undefined,
     isSimulated: raw.is_simulated,
     createdAt: raw.created_at ?? "",

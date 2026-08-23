@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timezone
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import raiseload, selectinload
 
 from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
@@ -90,7 +90,7 @@ async def _generate_project_script_async(project_id: str, job_id: str) -> None:
     from app.models.user import User
     from app.services.ai_provider import generate_text
     from app.services.quotas import complete_job_success
-    from app.services.workspace import record_revision
+    from app.services.workspace import load_project_workspace, record_revision
     from sqlalchemy.orm import selectinload
 
     try:
@@ -337,9 +337,10 @@ async def _complete_shot_descriptions_async(
     from app.models.script import Script, ScriptUnit, Shot, ShotMediaVersion
     from app.services.ai_provider import generate_text
     from app.services.quotas import complete_job_success
-    from app.services.workspace import record_revision
 
     try:
+        base_revision = -1
+        inputs: list[dict] = []
         async with async_session_factory() as session:
             job = await session.get(Job, job_id)
             script = (
@@ -347,6 +348,7 @@ async def _complete_shot_descriptions_async(
                     select(Script)
                     .where(Script.id == script_id)
                     .options(
+                        raiseload("*"),
                         selectinload(Script.project).selectinload(Project.composition),
                         selectinload(Script.units)
                         .selectinload(ScriptUnit.shots)
@@ -362,76 +364,104 @@ async def _complete_shot_descriptions_async(
             if not job or not script:
                 raise RuntimeError("项目脚本或任务不存在")
             requested = set(shot_ids)
-            shots = [shot for scene in script.units for shot in scene.shots if shot.id in requested]
-            if len(shots) != len(requested):
+            shot_contexts = [
+                (scene, shot)
+                for scene in script.units
+                for shot in scene.shots
+                if shot.id in requested
+            ]
+            if len(shot_contexts) != len(requested):
                 raise RuntimeError("部分镜头已被删除")
             base_revision = int((job.payload or {}).get("base_revision", script.revision))
             if script.revision != base_revision:
                 raise RuntimeError("项目已继续编辑，本次 AI 结果已过期")
+            # 从已显式加载的 scene -> shots 方向构建纯数据输入。
+            # 不能在 AsyncSession 中从 shot 反向访问 shot.unit，否则
+            # SQLAlchemy 可能尝试隐式 lazy IO 并触发 MissingGreenlet。
+            inputs = [
+                {
+                    "id": shot.id,
+                    "outline": scene.outline,
+                    "narration": scene.narration_text,
+                    "intent": scene.intent,
+                    "description": shot.description,
+                    "duration_ms": shot.duration_ms,
+                }
+                for scene, shot in shot_contexts
+            ]
             job.status = "RUNNING"
             job.stage = "完善描述"
             job.progress = 25
             await session.commit()
 
-            inputs = [
-                {
-                    "id": shot.id,
-                    "outline": shot.unit.outline,
-                    "narration": shot.unit.narration_text,
-                    "intent": shot.unit.intent,
-                    "description": shot.description,
-                    "duration_ms": shot.duration_ms,
-                }
-                for shot in shots
-            ]
-            raw = await generate_text(
-                prompt=f"""请完善以下视频分镜描述。只能基于给定旁白、画面意图和已有描述，
+        # 外部 AI 调用期间不持有数据库事务或项目行锁。
+        raw = await generate_text(
+            prompt=f"""请完善以下视频分镜描述。只能基于给定旁白、画面意图和已有描述，
 不得捏造人物、产品、地点或事件。每个描述包含主体、景别/机位、动作和光线。
 严格返回 JSON 数组：[{{"id":"shot-id","description":"完善后的描述"}}]
 输入：{json.dumps(inputs, ensure_ascii=False)}""",
-                system_prompt="你是专业视频分镜师，只输出合法 JSON。",
-                temperature=0.4,
-                max_tokens=3000,
-            )
-            text_value = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
-            result = json.loads(text_value)
-            if not isinstance(result, list):
-                raise RuntimeError("文本模型未返回合法的分镜数组")
-            descriptions = {
-                str(item.get("id")): str(item.get("description") or "").strip()
-                for item in result
-                if isinstance(item, dict) and item.get("id") and item.get("description")
+            system_prompt="你是专业视频分镜师，只输出合法 JSON。",
+            temperature=0.4,
+            max_tokens=3000,
+        )
+        text_value = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
+        result = json.loads(text_value)
+        if not isinstance(result, list):
+            raise RuntimeError("文本模型未返回合法的分镜数组")
+        descriptions = {
+            str(item.get("id")): str(item.get("description") or "").strip()
+            for item in result
+            if isinstance(item, dict) and item.get("id") and item.get("description")
+        }
+
+        # AI 完善只生成待审核建议，不直接覆盖镜头描述。用户可以继续编辑；
+        # 真正接受建议时会按原描述逐镜头检查冲突并原子写入。
+        async with async_session_factory() as session:
+            job = (
+                await session.execute(
+                    select(Job)
+                    .where(Job.id == job_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            if not job:
+                raise RuntimeError("项目脚本或任务不存在")
+            if job.status not in {"QUEUED", "RUNNING"}:
+                await session.rollback()
+                return
+            proposal_items = [
+                {
+                    "shot_id": item["id"],
+                    "original_description": item["description"] or "",
+                    "proposed_description": descriptions[item["id"]],
+                }
+                for item in inputs
+                if item["id"] in descriptions
+            ]
+            payload = dict(job.payload or {})
+            payload["review_proposal"] = {
+                "type": "shot_description",
+                "status": "pending",
+                "base_revision": base_revision,
+                "items": proposal_items,
             }
-            for shot in shots:
-                description = descriptions.get(shot.id)
-                if description:
-                    shot.description = description
-                    shot.status = "editing"
-                    shot.revision += 1
-            script.revision += 1
-            script.project.composition.revision = script.revision
-            await session.flush()
-            await record_revision(
-                session,
-                script.project,
-                job.owner_id,
-                "ai_result",
-                {"job_id": job.id, "operation": "complete_shots"},
-            )
             await complete_job_success(
                 session,
                 job.id,
                 values={
-                    "stage": "完成",
+                    "stage": "等待确认",
                     "progress": 100,
-                    "detail": f"已完善 {len(descriptions)} 个镜头描述",
-                    "result": "打开项目",
-                    "result_detail": "分镜描述已写入项目",
+                    "detail": f"已生成 {len(proposal_items)} 条镜头描述建议",
+                    "result": "审核建议",
+                    "result_detail": "AI 建议尚未修改项目，请选择接受或忽略",
+                    "payload": payload,
                     "updated_at": datetime.now(timezone.utc),
                 },
             )
             await session.commit()
     except Exception as exc:
+        logger.exception("AI 完善分镜任务失败 job_id=%s script_id=%s", job_id, script_id)
         async with async_session_factory() as session:
             await session.execute(
                 update(Job)

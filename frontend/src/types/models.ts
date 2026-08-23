@@ -44,6 +44,17 @@ export interface JobLog {
   level?: "info" | "warn" | "error";
 }
 
+export interface JobReviewProposal {
+  type: "shot_description";
+  status: "pending" | "accepted" | "rejected";
+  baseRevision: number;
+  items: Array<{
+    shotId: string;
+    originalDescription: string;
+    proposedDescription: string;
+  }>;
+}
+
 export interface Job {
   id: string;
   projectId?: string;
@@ -67,6 +78,7 @@ export interface Job {
     resolution: string;
     aspectRatio: string;
   };
+  reviewProposal?: JobReviewProposal;
   isSimulated: boolean;
   createdAt: string;
   updatedAt: string;

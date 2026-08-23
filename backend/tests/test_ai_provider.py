@@ -404,6 +404,23 @@ class AgnesGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
             calls[0][2]["json"]["extra_body"], {"response_format": "url"}
         )
 
+    async def test_four_three_image_and_video_dimensions_are_preserved(self):
+        calls = []
+        responses = [
+            FakeResponse({"data": [{"url": "https://output.agnes-ai.cn/four-three.png"}]})
+        ]
+        with patch.object(ai_provider, "settings", self.settings()), patch.object(
+            ai_provider.httpx,
+            "AsyncClient",
+            side_effect=lambda *args, **kwargs: RecordingAsyncClient(
+                responses, calls, *args, **kwargs
+            ),
+        ):
+            await ai_provider.generate_image("四比三分镜", size="1024*768")
+
+        self.assertEqual(calls[0][2]["json"]["ratio"], "4:3")
+        self.assertEqual(ai_provider._agnes_video_v20_dimensions("4:3"), (960, 720))
+
     async def test_image_relay_places_reference_inside_extra_body(self):
         calls = []
         responses = [

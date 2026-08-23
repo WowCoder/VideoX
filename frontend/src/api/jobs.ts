@@ -62,6 +62,11 @@ export async function retry(id: string): Promise<Job> {
   return mapJob(raw);
 }
 
+export async function review(id: string, action: "accept" | "reject"): Promise<Job> {
+  const raw = await http.post<RawJob>(`/jobs/${id}/review`, { action });
+  return mapJob(raw);
+}
+
 export async function cancel(id: string): Promise<Job> {
   const raw = await http.post<RawJob>(`/jobs/${id}/cancel`);
   return mapJob(raw);

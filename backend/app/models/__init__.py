@@ -16,6 +16,7 @@ from app.models.project import Project, ProjectComposition, ProjectRevision, Pro
 from app.models.script import Candidate, Script, ScriptUnit, Shot, ShotMediaVersion
 from app.models.subscription import Subscription
 from app.models.user import Membership, Usage, User
+from app.models.voice import VoiceLine, VoiceProfile, VoiceTake
 
 __all__ = [
     "User",
@@ -43,4 +44,7 @@ __all__ = [
     "InspirationRun",
     "InspirationSourceSnapshot",
     "InspirationResult",
+    "VoiceProfile",
+    "VoiceLine",
+    "VoiceTake",
 ]

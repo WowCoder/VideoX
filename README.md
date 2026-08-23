@@ -404,6 +404,13 @@ AI_IMAGE_MODEL=wanx2.1-t2i-turbo
 AI_TEXT_TO_VIDEO_MODEL=wanx2.1-t2v-turbo
 AI_IMAGE_TO_VIDEO_MODEL=wan2.7-i2v-2026-04-25
 AI_EFFECT_VIDEO_MODEL=wan2.7-i2v-2026-04-25
+# AI 配音必须独立显式启用；默认关闭以避免意外产生语音费用
+AI_TTS_PROVIDER=disabled
+AI_TTS_MODEL=qwen-audio-3.0-tts-flash
+AI_TTS_VOICE=longanfengyue
+AI_TTS_LANGUAGE=Chinese
+AI_TTS_REQUEST_TIMEOUT_SECONDS=120
+AI_TTS_DOWNLOAD_TIMEOUT_SECONDS=120
 AI_VIDEO_RESOLUTION=720P
 AI_VIDEO_DURATION_SECONDS=5
 AI_VIDEO_PROMPT_EXTEND=true
@@ -411,6 +418,8 @@ AI_VIDEO_WATERMARK=false
 DASHSCOPE_POLL_INTERVAL_SECONDS=2
 DASHSCOPE_GENERATION_TIMEOUT_SECONDS=600
 ```
+
+启用字幕 AI 配音时，将 `AI_TTS_PROVIDER` 改为 `dashscope`。工作台会按场景去重并切分字幕，逐段调用千问非实时 TTS，将真实结果标准化为 48kHz WAV 后保存到 MinIO，最后拼成项目旁白母带并写入现有 `global_audio.voiceAssetId`。字幕改变只会将对应配音显示为过期，不会自动再次产生费用。默认模型 `qwen-audio-3.0-tts-flash` 的系统音色必须使用其兼容音色，例如 `longanfengyue`；`Cherry` 等音色仅用于 Qwen3-TTS 系列，不能混用。
 
 `wan2.7-i2v-2026-04-25` 已使用当前中国内地 DashScope 账号完成模型权限探测。图生视频和 AI 草图视频使用两个独立配置项，当前显式指向同一模型；以后可单独替换草图视频模型，不影响普通图生视频。
 

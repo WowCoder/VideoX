@@ -1,6 +1,8 @@
 import json
 import unittest
+from types import SimpleNamespace
 
+from app.api.generate import _asset_preview_context
 from app.services.ai_provider import normalize_visual_recognition
 from app.services.creation_preview import normalize_asset_preview, normalize_script_preview
 
@@ -84,6 +86,45 @@ class AssetCreationPreviewTests(unittest.TestCase):
         duplicate = '{"scenes":[{"narration":"旁白","shots":[{"segment_id":"segment-1","description":"镜头一"},{"segment_id":"segment-1","description":"镜头二"}]}]}'
         with self.assertRaisesRegex(RuntimeError, "重复使用"):
             normalize_asset_preview(duplicate, self.available)
+
+    def test_whole_asset_reference_does_not_invent_persisted_segment_id(self):
+        available = {
+            "whole-asset:asset-legacy": {
+                "asset_id": "asset-legacy",
+                "segment_id": None,
+                "start_ms": 0,
+                "end_ms": 8_000,
+                "title": "旧视频",
+                "summary": "一段可用视频",
+            }
+        }
+        raw = '{"scenes":[{"narration":"真实旁白","shots":[{"segment_id":"whole-asset:asset-legacy","description":"使用整段视频","duration_seconds":4}]}]}'
+
+        result = normalize_asset_preview(raw, available)
+
+        shot = result["scenes"][0]["shots"][0]
+        self.assertEqual(shot["asset_id"], "asset-legacy")
+        self.assertIsNone(shot["segment_id"])
+        self.assertEqual((shot["source_start_ms"], shot["source_end_ms"]), (0, 4_000))
+
+    def test_ready_visual_without_segments_uses_whole_asset_context(self):
+        asset = SimpleNamespace(
+            id="asset-legacy",
+            name="历史视频.mp4",
+            media_type="video",
+            duration_ms=8_000,
+            recognition={"summary": "一段历史视频"},
+            transcript="真实对白",
+            ocr_text="画面文字",
+            tags=["历史"],
+            segments=[],
+        )
+
+        context, available = _asset_preview_context([asset])
+
+        self.assertEqual(context[0]["segment_id"], "whole-asset:asset-legacy")
+        self.assertTrue(context[0]["eligible_as_visual"])
+        self.assertEqual(available["whole-asset:asset-legacy"]["segment_id"], None)
 
 
 class VisualRecognitionNormalizationTests(unittest.TestCase):

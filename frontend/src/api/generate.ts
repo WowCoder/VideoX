@@ -9,6 +9,7 @@ export type ProjectOperation =
   | "generate_video"
   | "generate_effect"
   | "generate_script"
+  | "generate_voiceover"
   | "compose"
   | "export";
 

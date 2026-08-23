@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { useUIStore } from "@/stores/uiStore";
+import { useWorkspaceStore } from "@/stores/workspaceStore";
 import {
   HttpClientError,
   getValidAccessToken,
@@ -192,6 +193,8 @@ export function UploadDrawer() {
   const { uploadDrawerOpen, uploadProjectId, closeUploadDrawer, notify } = useUIStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const reloadWorkspace = useWorkspaceStore((state) => state.reloadServer);
+  const activeProjectId = useWorkspaceStore((state) => state.workspace?.project.id);
   const [items, setItems] = useState<UploadItem[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -423,7 +426,8 @@ export function UploadDrawer() {
   const uploadingCount = items.filter((i) => i.status === "uploading").length;
   const processingCount = items.filter((i) => i.status === "processing").length;
 
-  function handleDone() {
+  async function handleDone() {
+    const targetProjectId = uploadProjectId;
     closeUploadDrawer();
     const successCount = items.filter((i) => i.status === "done").length;
     const failureCount = items.filter((i) => i.status === "error").length;
@@ -433,7 +437,11 @@ export function UploadDrawer() {
         : `已完成 ${successCount} 个素材的上传与处理`,
       failureCount ? "error" : "success",
     );
-    navigate("/workspace/library");
+    if (targetProjectId && activeProjectId === targetProjectId) {
+      await reloadWorkspace().catch(() => undefined);
+    } else if (!targetProjectId) {
+      navigate("/workspace/library");
+    }
     Object.values(pollTimersRef.current).forEach((timer) => window.clearTimeout(timer));
     pollTimersRef.current = {};
     pollFailuresRef.current = {};
@@ -619,12 +627,12 @@ export function UploadDrawer() {
           <footer className="border-t border-line p-5">
             {allDone ? (
               <button
-                onClick={handleDone}
+                onClick={() => void handleDone()}
                 className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue py-2.5 text-sm font-semibold text-white transition hover:bg-blue-2"
                 type="button"
               >
                 <CheckCircle2 size={16} />
-                查看处理结果
+                {uploadProjectId ? "返回项目编辑" : "查看处理结果"}
               </button>
             ) : (
               <div className="flex items-center gap-2 text-sm text-muted">
