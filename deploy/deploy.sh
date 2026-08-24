@@ -27,6 +27,14 @@ if [[ ! "${deploy_tag}" =~ ^[A-Za-z0-9._-]+$ ]]; then
     exit 1
 fi
 
+source_tag="unknown"
+if [[ -f "${STATE_DIR}/current_tag" ]]; then
+    recorded_source_tag="$(tr -d '[:space:]' < "${STATE_DIR}/current_tag")"
+    if [[ -n "${recorded_source_tag}" && "${recorded_source_tag}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        source_tag="${recorded_source_tag}"
+    fi
+fi
+
 command -v docker >/dev/null 2>&1 || {
     echo "未找到 docker" >&2
     exit 1
@@ -42,7 +50,9 @@ if [[ -n "$("${compose[@]}" ps -q db)" ]]; then
     echo "发布前创建数据备份..."
     OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE}" \
         OPENVMA_COMPOSE_FILE="${COMPOSE_FILE}" \
-        OPENVMA_IMAGE_TAG="${deploy_tag}" \
+        OPENVMA_IMAGE_TAG="${source_tag}" \
+        OPENVMA_SOURCE_IMAGE_TAG="${source_tag}" \
+        OPENVMA_TARGET_IMAGE_TAG="${deploy_tag}" \
         "${SCRIPT_DIR}/backup.sh"
 else
     echo "首次部署未发现数据库容器，跳过发布前备份"

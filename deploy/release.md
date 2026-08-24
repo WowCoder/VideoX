@@ -178,7 +178,7 @@ OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}" \
 脚本按顺序执行：
 
 1. 校验合并后的 Compose 配置。
-2. 备份 PostgreSQL 和 MinIO。
+2. 备份 PostgreSQL 和 MinIO；manifest 的 `source_image_tag` 记录发布前版本，`target_image_tag` 记录本次目标版本。
 3. 构建带版本标签的 Backend 和 Gateway 镜像。
 4. 确保 PostgreSQL、Redis 和 MinIO 正常运行。
 5. 初始化 MinIO bucket。
@@ -290,6 +290,8 @@ OPENVMA_ENV_FILE=/srv/openvma/.env.production \
 OPENVMA_PUBLIC_CHECK=1 \
 ./deploy/healthcheck.sh
 ```
+
+健康检查要求接口最终直接返回 HTTP 200，302/307 登录跳转或其他重定向不会被当成成功。公网入口带有独立访问保护时，还必须使用已经通过保护层认证的浏览器或受控测试客户端完成真实业务冒烟；仅看到登录页 200 不能证明应用健康。
 
 ### 9.3 真实业务冒烟测试
 

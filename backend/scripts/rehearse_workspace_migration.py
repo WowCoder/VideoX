@@ -1,4 +1,4 @@
-"""在明确隔离的一次性 PostgreSQL 中演练 020 -> 021/022 迁移。"""
+"""在明确隔离的一次性 PostgreSQL 中演练 020 -> 当前 head 迁移。"""
 
 from __future__ import annotations
 
@@ -226,6 +226,11 @@ async def rehearse(args: argparse.Namespace) -> int:
     )
 
     after = _load_report(after_report)
+    if after.get("alembic_version") != "026_unified_narration_cues":
+        raise RuntimeError(
+            "迁移必须到达 026_unified_narration_cues；"
+            f"实际为 {after.get('alembic_version') or 'unknown'}"
+        )
     comparison = after.get("comparison", {})
     if not comparison.get("ok"):
         print(f"演练失败，差异报告：{after_report}", file=sys.stderr)

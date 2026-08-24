@@ -141,7 +141,14 @@ class WorkspaceMigrationRehearsalTargetTests(unittest.TestCase):
             return None if name == "pg_restore" else "/usr/local/bin/docker"
 
         with tempfile.TemporaryDirectory() as directory:
-            dump_path = Path(directory) / "source.dump"
+            project_dir = Path(directory)
+            backend_dir = project_dir / "backend"
+            backend_dir.mkdir()
+            (project_dir / "compose.migration-rehearsal.yml").write_text(
+                "services: {}\n",
+                encoding="utf-8",
+            )
+            dump_path = project_dir / "source.dump"
             dump_path.write_bytes(b"custom dump fixture")
             with (
                 patch(
@@ -154,7 +161,7 @@ class WorkspaceMigrationRehearsalTargetTests(unittest.TestCase):
                     dump_path,
                     target=target,
                     environment={},
-                    backend_dir=Path(__file__).resolve().parents[1],
+                    backend_dir=backend_dir,
                     restore_mode="auto",
                 )
 

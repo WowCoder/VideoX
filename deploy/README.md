@@ -89,7 +89,7 @@ docker compose \
 OPENVMA_ENV_FILE=/srv/openvma/.env.production ./deploy/backup.sh
 ```
 
-每个备份目录包含 PostgreSQL custom-format dump、MinIO bucket 镜像、manifest，以及 Linux 环境下的 SHA256 校验文件。在线备份中的 PostgreSQL dump 自身一致，但数据库与 MinIO mirror 之间不是跨服务原子快照；关键发布或灾难恢复前应进入维护窗口、停止写入后再备份。至少保留日备份、周备份和一个异机副本；只存在同一服务器磁盘上的备份不能覆盖磁盘或整机故障。
+每个备份目录包含 PostgreSQL custom-format dump、MinIO bucket 镜像、manifest，以及 Linux 环境下的 SHA256 校验文件。发布脚本创建的 manifest 会分别记录 `source_image_tag` 和 `target_image_tag`，避免把迁移前数据误标为目标版本。在线备份中的 PostgreSQL dump 自身一致，但数据库与 MinIO mirror 之间不是跨服务原子快照；关键发布或灾难恢复前应进入维护窗口、停止写入后再备份。至少保留日备份、周备份和一个异机副本；只存在同一服务器磁盘上的备份不能覆盖磁盘或整机故障。
 
 建议通过 cron 或 systemd timer 定时调用脚本，但不要把密钥写进 crontab；只传入受限权限的环境文件路径。
 

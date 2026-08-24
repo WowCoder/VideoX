@@ -62,7 +62,7 @@ def _after_report(before: dict | None = None) -> dict:
     return {
         "report_version": 1,
         "phase": "after",
-        "alembic_version": "022_normalize_workspace",
+        "alembic_version": "026_unified_narration_cues",
         "counts": {
             **expected,
             "project_asset_links": expected["assets"] + 4,

@@ -49,10 +49,16 @@ if command -v git >/dev/null 2>&1 && git -C "${PROJECT_DIR}" rev-parse --is-insi
     git_revision="$(git -C "${PROJECT_DIR}" rev-parse HEAD)"
 fi
 
+source_image_tag="${OPENVMA_SOURCE_IMAGE_TAG:-${OPENVMA_IMAGE_TAG:-unknown}}"
+target_image_tag="${OPENVMA_TARGET_IMAGE_TAG:-unknown}"
+
 {
     echo "created_at=${BACKUP_TIMESTAMP}"
     echo "git_revision=${git_revision}"
-    echo "image_tag=${OPENVMA_IMAGE_TAG:-unknown}"
+    # image_tag 保留为兼容字段，语义与 source_image_tag 一致。
+    echo "image_tag=${source_image_tag}"
+    echo "source_image_tag=${source_image_tag}"
+    echo "target_image_tag=${target_image_tag}"
     echo "compose_file=${COMPOSE_FILE}"
 } > "${BACKUP_PATH}/manifest.txt"
 

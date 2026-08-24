@@ -42,8 +42,11 @@ request_with_retry() {
     local host_header="$2"
     local url="$3"
     local attempt
+    local status
     for ((attempt = 1; attempt <= HEALTH_RETRIES; attempt += 1)); do
-        if curl --fail --silent --show-error --max-time 10 -H "Host: ${host_header}" "${url}" >/dev/null; then
+        if status="$(curl --silent --show-error --max-time 10 --output /dev/null \
+            --write-out '%{http_code}' -H "Host: ${host_header}" "${url}")" \
+            && [[ "${status}" == "200" ]]; then
             echo "通过：${label}"
             return 0
         fi
@@ -51,7 +54,7 @@ request_with_retry() {
             sleep "${HEALTH_RETRY_DELAY}"
         fi
     done
-    echo "失败：${label}（${url}）" >&2
+    echo "失败：${label}（${url}，最后 HTTP 状态 ${status:-不可用}；必须为 200，重定向不算通过）" >&2
     return 1
 }
 

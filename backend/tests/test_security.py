@@ -83,6 +83,7 @@ class ProductionSettingsTests(unittest.TestCase):
     def test_agnes_availability_requires_agnes_key(self):
         settings = Settings(
             _env_file=None,
+            agnes_api_key="",
             dashscope_api_key="configured-dashscope-key",
             ai_text_provider="agnes",
         )

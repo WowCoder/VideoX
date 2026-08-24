@@ -94,9 +94,9 @@ def compare_workspace_migration(before: dict[str, Any], after: dict[str, Any]) -
         warnings.append(
             f"迁移前版本为 {before.get('alembic_version') or 'unknown'}，正式 021 演练应从 020_team_seats 开始"
         )
-    if after.get("alembic_version") != "022_normalize_workspace":
+    if after.get("alembic_version") != "026_unified_narration_cues":
         warnings.append(
-            f"迁移后版本为 {after.get('alembic_version') or 'unknown'}，当前目标 head 是 022_normalize_workspace"
+            f"迁移后版本为 {after.get('alembic_version') or 'unknown'}，当前目标 head 是 026_unified_narration_cues"
         )
 
     return {
