@@ -2,13 +2,23 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+ARG OPENVMA_APT_MIRROR=""
+ARG OPENVMA_PIP_INDEX_URL=""
+
+RUN if [ -n "${OPENVMA_APT_MIRROR}" ]; then \
+        sed -i "s|deb.debian.org|${OPENVMA_APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN if [ -n "${OPENVMA_PIP_INDEX_URL}" ]; then \
+        pip install --no-cache-dir --index-url "${OPENVMA_PIP_INDEX_URL}" -r requirements.txt; \
+    else \
+        pip install --no-cache-dir -r requirements.txt; \
+    fi
 
 RUN groupadd --system openvma \
     && useradd --system --gid openvma --create-home --home-dir /home/openvma openvma

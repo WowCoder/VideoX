@@ -5,6 +5,9 @@ x-app-image: &app-image
   build:
     context: ./backend
     dockerfile: Dockerfile
+    args:
+      OPENVMA_APT_MIRROR: ${OPENVMA_APT_MIRROR:-}
+      OPENVMA_PIP_INDEX_URL: ${OPENVMA_PIP_INDEX_URL:-}
 
 x-app-runtime: &app-runtime
   <<: *app-image

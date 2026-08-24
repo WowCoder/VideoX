@@ -175,6 +175,18 @@ OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}" \
 ./deploy/deploy.sh
 ```
 
+如果生产服务器访问 Debian 或 PyPI 官方源不稳定，可以只在构建/发布命令的进程环境中增加镜像源，不需要把它们写入包含业务密钥的环境文件：
+
+```bash
+OPENVMA_APT_MIRROR=mirrors.aliyun.com \
+OPENVMA_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+OPENVMA_ENV_FILE=/srv/openvma/.env.production \
+OPENVMA_BACKUP_DIR=/srv/openvma/backups \
+OPENVMA_STATE_DIR=/srv/openvma/.deploy-state \
+OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}" \
+./deploy/deploy.sh
+```
+
 脚本按顺序执行：
 
 1. 校验合并后的 Compose 配置。
