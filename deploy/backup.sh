@@ -8,6 +8,7 @@ OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE:-${PROJECT_DIR}/.env.production}"
 BACKUP_ROOT="${OPENVMA_BACKUP_DIR:-${PROJECT_DIR}/backups}"
 BACKUP_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_PATH="${BACKUP_ROOT}/${BACKUP_TIMESTAMP}"
+MINIO_CURRENT="${BACKUP_ROOT}/minio-current"
 
 if [[ ! -f "${OPENVMA_ENV_FILE}" ]]; then
     echo "生产环境文件不存在：${OPENVMA_ENV_FILE}" >&2
@@ -29,7 +30,7 @@ if [[ -z "${db_container}" || -z "${minio_container}" ]]; then
     exit 1
 fi
 
-mkdir -p "${BACKUP_PATH}/minio"
+mkdir -p "${BACKUP_PATH}" "${MINIO_CURRENT}"
 chmod 700 "${BACKUP_PATH}"
 
 echo "正在备份 PostgreSQL..."
@@ -40,9 +41,30 @@ echo "正在备份 PostgreSQL..."
 echo "正在镜像 MinIO bucket..."
 "${compose[@]}" run --rm --no-deps \
     --entrypoint /bin/sh \
-    -v "${BACKUP_PATH}:/backup" \
+    -v "${BACKUP_ROOT}:/backup-root" \
     minio-init -c \
-    'mc alias set backup http://minio:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null && mc mirror --overwrite "backup/$MINIO_BUCKET" /backup/minio'
+    'mc alias set backup http://minio:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null && mc mirror --overwrite "backup/$MINIO_BUCKET" /backup-root/minio-current && mc ls --json --recursive "backup/$MINIO_BUCKET" > /backup-root/.minio-list'
+
+python3 "${PROJECT_DIR}/deploy/reconcile_minio_tree.py" "${MINIO_CURRENT}" "${BACKUP_ROOT}/.minio-list"
+rm -f "${BACKUP_ROOT}/.minio-list"
+
+previous_snapshot=""
+if [[ -L "${BACKUP_ROOT}/minio-last" ]]; then
+    previous_snapshot="$(readlink -f "${BACKUP_ROOT}/minio-last")"
+elif [[ -d "${BACKUP_ROOT}/minio-last" ]]; then
+    previous_snapshot="${BACKUP_ROOT}/minio-last"
+fi
+
+snapshot_path="${BACKUP_PATH}/minio"
+snapshot_args=("${PROJECT_DIR}/deploy/snapshot_tree.py" "${MINIO_CURRENT}" "${snapshot_path}")
+if [[ -n "${previous_snapshot}" && -d "${previous_snapshot}" ]]; then
+    snapshot_args+=(--previous "${previous_snapshot}")
+fi
+python3 "${snapshot_args[@]}"
+
+new_last_link="${BACKUP_ROOT}/.minio-last-${BACKUP_TIMESTAMP}"
+ln -s "${snapshot_path}" "${new_last_link}"
+mv -Tf "${new_last_link}" "${BACKUP_ROOT}/minio-last"
 
 git_revision="unknown"
 if command -v git >/dev/null 2>&1 && git -C "${PROJECT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

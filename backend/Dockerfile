@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -5,7 +7,8 @@ WORKDIR /app
 ARG OPENVMA_APT_MIRROR=""
 ARG OPENVMA_PIP_INDEX_URL=""
 
-RUN if [ -n "${OPENVMA_APT_MIRROR}" ]; then \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    if [ -n "${OPENVMA_APT_MIRROR}" ]; then \
         sed -i "s|deb.debian.org|${OPENVMA_APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
     fi \
     && apt-get update && apt-get install -y --no-install-recommends \
@@ -14,10 +17,11 @@ RUN if [ -n "${OPENVMA_APT_MIRROR}" ]; then \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN if [ -n "${OPENVMA_PIP_INDEX_URL}" ]; then \
-        pip install --no-cache-dir --index-url "${OPENVMA_PIP_INDEX_URL}" -r requirements.txt; \
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    if [ -n "${OPENVMA_PIP_INDEX_URL}" ]; then \
+        pip install --index-url "${OPENVMA_PIP_INDEX_URL}" -r requirements.txt; \
     else \
-        pip install --no-cache-dir -r requirements.txt; \
+        pip install -r requirements.txt; \
     fi
 
 RUN groupadd --system openvma \

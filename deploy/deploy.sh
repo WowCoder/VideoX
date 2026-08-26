@@ -3,9 +3,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+RELEASES_DIR="$(cd -- "${PROJECT_DIR}/.." && pwd)"
 COMPOSE_FILE="${OPENVMA_COMPOSE_FILE:-${PROJECT_DIR}/compose.prod.yml}"
 OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE:-${PROJECT_DIR}/.env.production}"
 STATE_DIR="${OPENVMA_STATE_DIR:-${PROJECT_DIR}/.deploy-state}"
+OPENVMA_BACKUP_PATH="${OPENVMA_BACKUP_PATH:-}"
+OPENVMA_MIGRATION_MODE="${OPENVMA_MIGRATION_MODE:-auto}"
+OPENVMA_APT_MIRROR="${OPENVMA_APT_MIRROR:-mirrors.aliyun.com}"
+OPENVMA_PIP_INDEX_URL="${OPENVMA_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
 
 if [[ ! -f "${OPENVMA_ENV_FILE}" ]]; then
     echo "生产环境文件不存在：${OPENVMA_ENV_FILE}" >&2
@@ -39,14 +44,34 @@ command -v docker >/dev/null 2>&1 || {
     echo "未找到 docker" >&2
     exit 1
 }
+command -v curl >/dev/null 2>&1 || { echo "未找到 curl，无法预检构建镜像源" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "未找到 python3，无法创建 MinIO 快照" >&2; exit 1; }
+case "${OPENVMA_MIGRATION_MODE}" in auto|always) ;; *) echo "OPENVMA_MIGRATION_MODE 必须是 auto 或 always" >&2; exit 1 ;; esac
+
+echo "预检 apt/PyPI 镜像..."
+apt_mirror_url="${OPENVMA_APT_MIRROR}"
+if [[ "${apt_mirror_url}" != http://* && "${apt_mirror_url}" != https://* ]]; then
+    apt_mirror_url="https://${apt_mirror_url}"
+fi
+curl --fail --silent --show-error --location --max-time 10 "${apt_mirror_url}/debian/dists/bookworm/InRelease" -o /dev/null
+curl --fail --silent --show-error --location --max-time 10 "${OPENVMA_PIP_INDEX_URL}" -o /dev/null
 
 export OPENVMA_ENV_FILE
 export OPENVMA_IMAGE_TAG="${deploy_tag}"
+export OPENVMA_APT_MIRROR OPENVMA_PIP_INDEX_URL DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 compose=(docker compose -f "${COMPOSE_FILE}" --env-file "${OPENVMA_ENV_FILE}")
 
 "${compose[@]}" config --quiet
 
 if [[ -n "$("${compose[@]}" ps -q db)" ]]; then
+    if [[ -n "${OPENVMA_BACKUP_PATH}" ]]; then
+        echo "校验并复用已创建的发布备份..."
+        [[ -d "${OPENVMA_BACKUP_PATH}" && -s "${OPENVMA_BACKUP_PATH}/postgres.dump" && -d "${OPENVMA_BACKUP_PATH}/minio" && -s "${OPENVMA_BACKUP_PATH}/manifest.txt" ]] || { echo "复用备份不完整：${OPENVMA_BACKUP_PATH}" >&2; exit 1; }
+        backup_source="$(awk -F= '$1 == "source_image_tag" {print $2; exit}' "${OPENVMA_BACKUP_PATH}/manifest.txt")"
+        backup_target="$(awk -F= '$1 == "target_image_tag" {print $2; exit}' "${OPENVMA_BACKUP_PATH}/manifest.txt")"
+        [[ "${backup_source}" == "${source_tag}" && "${backup_target}" == "${deploy_tag}" ]] || { echo "复用备份版本不匹配" >&2; exit 1; }
+        [[ ! -s "${OPENVMA_BACKUP_PATH}/SHA256SUMS" ]] || (cd "${OPENVMA_BACKUP_PATH}" && sha256sum --ignore-missing --check SHA256SUMS)
+    else
     echo "发布前创建数据备份..."
     OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE}" \
         OPENVMA_COMPOSE_FILE="${COMPOSE_FILE}" \
@@ -54,6 +79,7 @@ if [[ -n "$("${compose[@]}" ps -q db)" ]]; then
         OPENVMA_SOURCE_IMAGE_TAG="${source_tag}" \
         OPENVMA_TARGET_IMAGE_TAG="${deploy_tag}" \
         "${SCRIPT_DIR}/backup.sh"
+    fi
 else
     echo "首次部署未发现数据库容器，跳过发布前备份"
 fi
@@ -65,8 +91,24 @@ echo "启动数据服务并初始化 bucket..."
 "${compose[@]}" up -d db redis minio
 "${compose[@]}" run --rm minio-init
 
-echo "执行数据库迁移..."
-"${compose[@]}" run --rm migrate
+should_migrate=1
+if [[ "${OPENVMA_MIGRATION_MODE}" == "auto" && "${source_tag}" != "unknown" ]]; then
+    source_migrations="${RELEASES_DIR}/${source_tag}/backend/alembic/versions"
+    target_migrations="${PROJECT_DIR}/backend/alembic/versions"
+    db_version="$("${compose[@]}" exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select version_num from alembic_version limit 1"' 2>/dev/null || true)"
+    target_head="$(grep -h '^revision = ' "${target_migrations}"/*.py 2>/dev/null | tail -n 1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")"
+    if [[ -n "${db_version}" && -n "${target_head}" && "${db_version}" == "${target_head}" ]]; then
+        if [[ -d "${source_migrations}" ]] && diff -qr "${source_migrations}" "${target_migrations}" >/dev/null 2>&1; then
+            should_migrate=0
+        fi
+    fi
+fi
+if [[ "${should_migrate}" == "1" ]]; then
+    echo "执行数据库迁移..."
+    "${compose[@]}" run --rm migrate
+else
+    echo "数据库 schema 已是目标版本且迁移目录未变化，跳过 migration 容器"
+fi
 
 echo "更新 API 与任务进程..."
 "${compose[@]}" up -d --no-deps --force-recreate backend celery-worker celery-beat

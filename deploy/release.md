@@ -77,6 +77,22 @@ docker system df
 
 ## 4. 本地验证和生成发布包
 
+### 4.1 备份复用、镜像预检与构建缓存
+
+发布脚本默认会在切换前创建一次 PostgreSQL + MinIO 备份。如果已经在同一发布窗口创建并校验了最终备份，可将其路径传给发布脚本，脚本会校验 manifest、版本标签和 SHA256 后复用，不会再次执行全量备份：
+
+```bash
+OPENVMA_BACKUP_PATH=/srv/openvma/backups/<timestamp> \
+OPENVMA_IMAGE_TAG=<target-commit-sha> \
+./deploy/deploy.sh
+```
+
+未提供 `OPENVMA_BACKUP_PATH` 时仍按默认策略自动备份。备份脚本会将 MinIO 增量同步到 `minio-current`，并为每次发布生成可独立恢复的快照目录；未变化对象使用硬链接复用磁盘空间。
+
+生产机默认使用阿里云 apt/PyPI 镜像，并在构建前做连通性预检。也可以通过 `OPENVMA_APT_MIRROR` 和 `OPENVMA_PIP_INDEX_URL` 覆盖。Backend 和 Gateway Dockerfile 使用 BuildKit cache mount，生产机应保持 Docker/BuildKit 缓存，不要在普通发布后清理构建缓存。
+
+数据库迁移默认使用 `OPENVMA_MIGRATION_MODE=auto`：仅当数据库已经处于目标 head 且新旧迁移目录一致时跳过 migration 容器；任何不确定情况都会执行迁移。需要强制执行时使用 `OPENVMA_MIGRATION_MODE=always`。
+
 在开发机仓库中运行完整检查：
 
 ```bash
@@ -171,6 +187,8 @@ cd "${OPENVMA_RELEASE_DIR}"
 OPENVMA_ENV_FILE=/srv/openvma/.env.production \
 OPENVMA_BACKUP_DIR=/srv/openvma/backups \
 OPENVMA_STATE_DIR=/srv/openvma/.deploy-state \
+OPENVMA_APT_MIRROR=mirrors.aliyun.com \
+OPENVMA_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}" \
 ./deploy/deploy.sh
 ```
@@ -190,11 +208,11 @@ OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}" \
 脚本按顺序执行：
 
 1. 校验合并后的 Compose 配置。
-2. 备份 PostgreSQL 和 MinIO；manifest 的 `source_image_tag` 记录发布前版本，`target_image_tag` 记录本次目标版本。
+2. 备份 PostgreSQL 和 MinIO；MinIO 先增量同步到稳定镜像目录，再生成可独立恢复的快照。manifest 的 `source_image_tag` 记录发布前版本，`target_image_tag` 记录本次目标版本。
 3. 构建带版本标签的 Backend 和 Gateway 镜像。
 4. 确保 PostgreSQL、Redis 和 MinIO 正常运行。
 5. 初始化 MinIO bucket。
-6. 运行一次性 Alembic migration 容器。
+6. 在数据库已处于目标 head 且迁移目录未变化时跳过 Alembic 容器，否则运行 migration。
 7. 重新创建 Backend、Celery Worker 和 Celery Beat。
 8. 重新创建内部 Gateway。
 9. 执行内部 Nginx、Backend readiness 和 MinIO 健康检查。
