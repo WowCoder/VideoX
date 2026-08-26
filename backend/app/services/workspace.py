@@ -30,6 +30,7 @@ from app.schemas.project import (
     WorkspaceOut,
     WorkspaceSave,
 )
+from app.utils.media import playable_media_path
 from app.utils.storage import get_file_url
 
 
@@ -59,7 +60,7 @@ def _media_version_document(version: ShotMediaVersion) -> ShotMediaVersionDocume
         parameters=version.parameters or {},
         status=version.status,
         is_selected=version.is_selected,
-        media_url=_safe_media_url(loaded_asset.file_path if loaded_asset else None),
+        media_url=_safe_media_url(playable_media_path(loaded_asset)),
         created_at=version.created_at,
     )
 
@@ -320,9 +321,7 @@ async def project_out(db: AsyncSession, project: Project) -> ProjectOut:
             "aspect_ratio": project.composition.aspect_ratio if project.composition else "16:9",
             "matched_percent": matched_percent,
             "cover_media_type": cover_asset.media_type if cover_asset else None,
-            "cover_media_url": _safe_media_url(
-                (cover_asset.preview_path or cover_asset.file_path) if cover_asset else None
-            ),
+            "cover_media_url": _safe_media_url(playable_media_path(cover_asset)),
             "cover_thumbnail_url": _safe_media_url(
                 cover_asset.thumbnail_path if cover_asset else None
             ),

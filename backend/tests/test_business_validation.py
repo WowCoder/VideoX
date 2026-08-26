@@ -2,6 +2,7 @@ import unittest
 import io
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from pydantic import ValidationError
 from fastapi import HTTPException, UploadFile
@@ -358,6 +359,38 @@ class WorkspaceSchemaTests(unittest.TestCase):
 
 
 class AssetCursorAndImageTests(unittest.TestCase):
+    @patch("app.api.assets.get_file_url")
+    def test_video_asset_summary_does_not_expose_original_without_proxy(self, mock_get_file_url):
+        mock_get_file_url.side_effect = lambda path, **_: f"https://cdn.test/{path}"
+        now = datetime(2026, 8, 17, 10, 30, tzinfo=timezone.utc)
+        result = asset_out(
+            SimpleNamespace(
+                id="asset-video",
+                owner_id="user-1",
+                name="source.mp4",
+                media_type="video",
+                source_type="upload",
+                status="ready",
+                processing_status="ready",
+                mime_type="video/mp4",
+                duration_ms=10_000,
+                width=2160,
+                height=3840,
+                has_audio=False,
+                file_size_mb=120.0,
+                tags=[],
+                recognition={},
+                preview_path=None,
+                file_path="assets/source.mp4",
+                thumbnail_path="thumbnails/source.jpg",
+                created_at=now,
+                updated_at=now,
+            ),
+            include_segments=False,
+        )
+        self.assertIsNone(result.media_url)
+        mock_get_file_url.assert_called_once_with("thumbnails/source.jpg")
+
     def test_cursor_round_trip_preserves_sort_key(self):
         created_at = datetime(2026, 8, 17, 10, 30, tzinfo=timezone.utc)
         asset = SimpleNamespace(id="asset-123", created_at=created_at)

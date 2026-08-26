@@ -3,18 +3,64 @@
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy.orm import Session, object_session
 
 from app.models.project import ProjectComposition, ProjectRevision, ProjectUndoToken
 from app.models.script import Script, ScriptUnit, Shot, ShotMediaVersion
 from app.schemas.project import ShotDocument
-from app.services.workspace import _apply_shot, _restore_shot, ensure_shot_material_history, load_project_workspace
+from app.services.workspace import (
+    _apply_shot,
+    _media_version_document,
+    _restore_shot,
+    ensure_shot_material_history,
+    load_project_workspace,
+)
 from app.tasks.generate_tasks import _can_auto_select_media_version
+from app.utils.media import playable_media_path
 
 
 class VersionModelContractTests(unittest.TestCase):
+    def test_editor_media_prefers_video_proxy_over_original(self):
+        asset = SimpleNamespace(
+            media_type="video",
+            preview_path="video-previews/asset-1/preview.mp4",
+            file_path="assets/asset-1/original.mp4",
+        )
+        self.assertEqual(playable_media_path(asset), asset.preview_path)
+
+    def test_editor_media_does_not_fallback_to_original_video_without_proxy(self):
+        asset = SimpleNamespace(
+            media_type="video",
+            preview_path=None,
+            file_path="assets/asset-1/original.mp4",
+        )
+        self.assertIsNone(playable_media_path(asset))
+
+    def test_editor_media_version_uses_proxy_url(self):
+        asset = SimpleNamespace(
+            media_type="video",
+            preview_path="video-previews/asset-1/preview.mp4",
+            file_path="assets/asset-1/original.mp4",
+        )
+        version = SimpleNamespace(
+            id="version-1",
+            asset_id="asset-1",
+            job_id=None,
+            parent_version_id=None,
+            kind="matched_segment",
+            operation="match",
+            parameters={},
+            status="ready",
+            is_selected=True,
+            created_at=datetime(2026, 8, 26, tzinfo=timezone.utc),
+            asset=asset,
+        )
+        with patch("app.services.workspace.get_file_url", side_effect=lambda path: f"https://cdn.test/{path}"):
+            document = _media_version_document(version)
+        self.assertEqual(document.media_url, "https://cdn.test/video-previews/asset-1/preview.mp4")
+
     def test_ai_result_only_auto_selects_for_unchanged_shot(self):
         self.assertTrue(_can_auto_select_media_version(7, 7))
         self.assertFalse(_can_auto_select_media_version(8, 7))

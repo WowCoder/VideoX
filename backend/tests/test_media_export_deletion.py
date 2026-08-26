@@ -11,6 +11,7 @@ from fastapi import UploadFile
 from app.api.assets import _detect_container, _probe_upload_stream
 from app.api.jobs import _export_result_path
 from app.tasks import export_tasks, media_tasks
+from scripts.backfill_video_previews import needs_preview
 
 
 class AudioUploadDetectionTests(unittest.TestCase):
@@ -60,6 +61,32 @@ class AudioUploadDetectionTests(unittest.TestCase):
 
 
 class VideoProxyTests(unittest.TestCase):
+    def test_backfill_only_selects_video_without_proxy(self):
+        self.assertTrue(needs_preview(SimpleNamespace(
+            media_type="video",
+            preview_path=None,
+            file_path="assets/source.mp4",
+            deleted_at=None,
+        )))
+        self.assertFalse(needs_preview(SimpleNamespace(
+            media_type="video",
+            preview_path="video-previews/asset/preview.mp4",
+            file_path="assets/source.mp4",
+            deleted_at=None,
+        )))
+        self.assertTrue(needs_preview(SimpleNamespace(
+            media_type="video",
+            preview_path="",
+            file_path="assets/source.mp4",
+            deleted_at=None,
+        )))
+        self.assertFalse(needs_preview(SimpleNamespace(
+            media_type="image",
+            preview_path=None,
+            file_path="assets/source.png",
+            deleted_at=None,
+        )))
+
     @patch.object(media_tasks.subprocess, "run")
     def test_proxy_is_h264_720p_seek_friendly_mp4(self, mock_run):
         def create_output(command, **_kwargs):

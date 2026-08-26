@@ -36,6 +36,7 @@ from app.schemas.asset import (
 from app.services.project_access import require_project_access
 from app.services.quotas import QuotaExceededError, admit_job_quota
 from app.services.storage_usage import recalculate_storage_usage
+from app.utils.media import playable_media_path
 from app.utils.storage import delete_file, get_file_url, upload_stream
 
 
@@ -320,7 +321,7 @@ def asset_out(
                         break
                 if match_field:
                     break
-    playable_path = asset.preview_path or asset.file_path
+    playable_path = playable_media_path(asset)
     # 显式构造，避免 Pydantic 在 include_segments=False 时仍访问 SQLAlchemy
     # 的 lazy relationship，从而在异步请求中触发 MissingGreenlet。
     return AssetOut(

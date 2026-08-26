@@ -15,7 +15,16 @@ export OPENVMA_TEST_ACCOUNT_NAME := $(if $(strip $(NAME)),$(NAME),测试账号)
 	test backend-test backend-compile frontend-install lint frontend-build compose-check check \
 	db-upgrade db-current db-heads db-history db-revision db-check \
 	shell-backend shell-frontend shell-db worker-ping worker-tasks health config \
-	reindex reindex-all create-test-account reset-ai-usage
+	reindex reindex-all create-test-account reset-ai-usage backfill-video-previews
+
+backfill-video-previews: ## 为缺少代理的历史视频生成浏览器预览（可传 LIMIT=20 或 ASSET_ID=...）
+	@if [[ -n "$(LIMIT)" ]] && ! [[ "$(LIMIT)" =~ ^[1-9][0-9]*$$ ]]; then \
+		echo "LIMIT 必须是正整数" >&2; \
+		exit 1; \
+	fi
+	@$(BACKEND) python scripts/backfill_video_previews.py \
+		$(if $(strip $(LIMIT)),--limit $(LIMIT),) \
+		$(if $(strip $(ASSET_ID)),--asset-id $(ASSET_ID),)
 
 help: ## 显示可用命令
 	@awk 'BEGIN {FS = ":.*## "; printf "OpenVMA 常用命令\n\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
