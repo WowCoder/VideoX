@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useNavigate, useSearchParams } from "@/router";
 import { useAuthStore } from "@/stores/authStore";
+import { decodeWechatNavigationState } from "@/lib/publicNavigation";
 
 export default function WechatCallbackView() {
   const navigate = useNavigate();
@@ -9,6 +10,7 @@ export default function WechatCallbackView() {
   const loginWithWechat = useAuthStore((state) => state.loginWithWechat);
   const started = useRef(false);
   const code = searchParams.get("code");
+  const postAuthAction = decodeWechatNavigationState(searchParams.get("state"));
   const [error, setError] = useState<string | null>(
     code ? null : "微信授权未返回有效 code",
   );
@@ -18,9 +20,12 @@ export default function WechatCallbackView() {
     started.current = true;
     if (!code) return;
     void loginWithWechat(code)
-      .then(() => navigate("/workspace", { replace: true }))
+      .then(() => navigate("/workspace", {
+        replace: true,
+        state: postAuthAction ? { postAuthAction } : undefined,
+      }))
       .catch((reason) => setError(reason instanceof Error ? reason.message : "微信登录失败"));
-  }, [code, loginWithWechat, navigate]);
+  }, [code, loginWithWechat, navigate, postAuthAction]);
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-canvas px-6">

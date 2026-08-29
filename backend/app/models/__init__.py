@@ -10,16 +10,18 @@ from app.models.inspiration import (
 )
 from app.models.invoice import Invoice
 from app.models.job import Job
+from app.models.migration import MigrationAudit
 from app.models.notification import Notification
 from app.models.order import Order
 from app.models.project import Project, ProjectComposition, ProjectRevision, ProjectUndoToken
 from app.models.script import Candidate, Script, ScriptUnit, Shot, ShotMediaVersion
 from app.models.subscription import Subscription
-from app.models.user import Membership, Usage, User
+from app.models.user import Membership, Usage, User, UserIdentity
 from app.models.voice import VoiceLine, VoiceProfile, VoiceTake
 
 __all__ = [
     "User",
+    "UserIdentity",
     "Membership",
     "Usage",
     "Project",
@@ -35,6 +37,7 @@ __all__ = [
     "Candidate",
     "ShotMediaVersion",
     "Job",
+    "MigrationAudit",
     "Order",
     "Subscription",
     "Notification",

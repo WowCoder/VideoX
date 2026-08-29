@@ -2,14 +2,15 @@
 
 import uuid
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.user import User, Membership, Usage
+from app.models.user import User, UserIdentity, Membership, Usage
 from app.schemas.auth import (
     RegisterRequest, LoginRequest, RefreshRequest,
     TokenResponse, UserOut, AuthResponse,
@@ -29,9 +30,23 @@ from app.services.wechat_provider import (
 )
 from app.services.subscriptions import reconcile_user_subscription
 from app.services.quotas import synchronize_user_usage
+from app.services.auth_identities import (
+    EMAIL_PROVIDER,
+    PHONE_PROVIDER,
+    WECHAT_PROVIDER,
+    normalize_email_identity,
+    normalize_phone_identity,
+    phone_from_identity,
+    wechat_identity_identifier,
+)
+from app.config import get_settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 async def _ensure_default_membership(db: AsyncSession):
@@ -72,27 +87,64 @@ async def _serialize_user(user: User) -> UserOut:
     )
 
 
+async def _load_user(db: AsyncSession, user_id: str) -> User:
+    result = await db.execute(
+        select(User)
+        .where(User.id == user_id)
+        .options(
+            selectinload(User.membership),
+            selectinload(User.usage),
+            selectinload(User.subscription),
+        )
+    )
+    return result.scalar_one()
+
+
+async def _find_identity(
+    db: AsyncSession,
+    provider: str,
+    identifier: str,
+) -> UserIdentity | None:
+    result = await db.execute(
+        select(UserIdentity).where(
+            UserIdentity.provider == provider,
+            UserIdentity.identifier == identifier,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 @router.post("/register", response_model=AuthResponse)
 async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     """用户注册。"""
     await _ensure_default_membership(db)
-    normalized_email = str(req.email).strip().lower()
+    normalized_email = normalize_email_identity(str(req.email))
 
     # 检查邮箱是否已注册
-    existing = await db.execute(select(User).where(func.lower(User.email) == normalized_email))
-    if existing.scalar_one_or_none():
+    existing_identity = await _find_identity(db, EMAIL_PROVIDER, normalized_email)
+    existing_user = await db.execute(select(User).where(func.lower(User.email) == normalized_email))
+    if existing_identity or existing_user.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="该邮箱已注册")
 
     # 创建用户
+    password_hash = hash_password(req.password)
     user = User(
         email=normalized_email,
         name=req.name,
-        password_hash=hash_password(req.password),
+        password_hash=password_hash,
         avatar_initial=req.name[0].upper() if req.name else "U",
         membership_id="membership-free",
     )
     db.add(user)
     await db.flush()
+
+    db.add(UserIdentity(
+        user_id=user.id,
+        provider=EMAIL_PROVIDER,
+        identifier=normalized_email,
+        password_hash=password_hash,
+        verified_at=_utcnow(),
+    ))
 
     # 创建用量记录
     usage = Usage(user_id=user.id)
@@ -126,18 +178,39 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/login", response_model=AuthResponse)
 async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     """用户登录。"""
-    result = await db.execute(
-        select(User)
-        .where(func.lower(User.email) == str(req.email).strip().lower())
-        .options(
-            selectinload(User.membership),
-            selectinload(User.usage),
-            selectinload(User.subscription),
-        )
-    )
-    user = result.scalar_one_or_none()
+    normalized_email = normalize_email_identity(str(req.email))
+    identity = await _find_identity(db, EMAIL_PROVIDER, normalized_email)
+    user: User | None = None
 
-    if not user or not verify_password(req.password, user.password_hash):
+    if identity:
+        if identity.password_hash and verify_password(req.password, identity.password_hash):
+            identity.last_login_at = _utcnow()
+            user = await _load_user(db, identity.user_id)
+    else:
+        # 迁移期兼容：身份尚未回填时仍可从旧字段恢复，并立即补齐身份。
+        legacy_result = await db.execute(
+            select(User)
+            .where(func.lower(User.email) == normalized_email)
+            .options(
+                selectinload(User.membership),
+                selectinload(User.usage),
+                selectinload(User.subscription),
+            )
+        )
+        legacy_user = legacy_result.scalar_one_or_none()
+        if legacy_user and verify_password(req.password, legacy_user.password_hash):
+            user = legacy_user
+            if identity is None:
+                db.add(UserIdentity(
+                    user_id=user.id,
+                    provider=EMAIL_PROVIDER,
+                    identifier=normalized_email,
+                    password_hash=user.password_hash,
+                    verified_at=user.created_at,
+                    last_login_at=_utcnow(),
+                ))
+
+    if not user:
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
 
     await reconcile_user_subscription(db, user)
@@ -183,50 +256,66 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
 ):
     """更新当前用户资料和通知偏好。"""
-    normalized_email = str(req.email).strip().lower()
+    normalized_email = normalize_email_identity(str(req.email))
     email_owner = await db.execute(
         select(User).where(func.lower(User.email) == normalized_email, User.id != user.id)
     )
-    if email_owner.scalar_one_or_none():
+    identity_owner = await db.execute(
+        select(UserIdentity).where(
+            UserIdentity.provider == EMAIL_PROVIDER,
+            UserIdentity.identifier == normalized_email,
+            UserIdentity.user_id != user.id,
+        )
+    )
+    if email_owner.scalar_one_or_none() or identity_owner.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="该邮箱已被其他账户使用")
 
+    previous_email = normalize_email_identity(user.email)
     user.name = req.name.strip()
     user.email = normalized_email
     user.avatar_initial = user.name[0].upper()
     user.notify_asset_processing = req.notify_asset_processing
     user.notify_script_generation = req.notify_script_generation
     user.notify_marketing = req.notify_marketing
+    email_identity = await _find_identity(db, EMAIL_PROVIDER, previous_email)
+    if email_identity and email_identity.user_id == user.id:
+        email_identity.identifier = normalized_email
     await db.flush()
     return await _serialize_user(user)
 
 
 # ── 手机验证码登录 ──
 
-async def _find_or_create_user_by_email(
+async def _find_or_create_user_by_identity(
     db: AsyncSession,
-    email: str,
+    *,
+    provider: str,
+    identifier: str,
+    legacy_email: str,
     name: str,
+    provider_app_id: str | None = None,
+    provider_openid: str | None = None,
 ) -> User:
-    """通过 email 查找或创建用户（用于手机/微信登录）。
-
-    由于 User 模型没有 phone / openid 字段，使用构造的 email 作为唯一标识：
-    - 手机登录：phone@openvma.cn
-    - 微信登录：wx_{openid}@openvma.cn
-
-    无密码登录的用户 password_hash 设置为随机值（无法通过密码登录）。
-    """
-    result = await db.execute(
-        select(User)
-        .where(User.email == email)
-        .options(
-            selectinload(User.membership),
-            selectinload(User.usage),
-            selectinload(User.subscription),
+    """根据独立认证身份查找用户；身份不存在时创建新的业务用户。"""
+    identity = await _find_identity(db, provider, identifier)
+    if identity is None and provider == WECHAT_PROVIDER and provider_openid:
+        openid_result = await db.execute(
+            select(UserIdentity).where(
+                UserIdentity.provider == WECHAT_PROVIDER,
+                UserIdentity.provider_openid == provider_openid,
+                or_(
+                    UserIdentity.provider_app_id == provider_app_id,
+                    UserIdentity.provider_app_id.is_(None),
+                ),
+            )
         )
-    )
-    user = result.scalar_one_or_none()
+        identity = openid_result.scalar_one_or_none()
+        if identity and identity.identifier != identifier:
+            identity.identifier = identifier
 
-    if user:
+    if identity:
+        identity.last_login_at = _utcnow()
+        user = await _load_user(db, identity.user_id)
         await reconcile_user_subscription(db, user)
         await synchronize_user_usage(db, user)
         return user
@@ -234,7 +323,7 @@ async def _find_or_create_user_by_email(
     # 创建新用户
     await _ensure_default_membership(db)
     user = User(
-        email=email,
+        email=legacy_email,
         name=name,
         password_hash=hash_password(str(uuid.uuid4())),
         avatar_initial=name[0].upper() if name else "U",
@@ -243,22 +332,23 @@ async def _find_or_create_user_by_email(
     db.add(user)
     await db.flush()
 
+    db.add(UserIdentity(
+        user_id=user.id,
+        provider=provider,
+        identifier=identifier,
+        provider_app_id=provider_app_id,
+        provider_openid=provider_openid,
+        verified_at=_utcnow(),
+        last_login_at=_utcnow(),
+    ))
+
     # 创建用量记录
     usage = Usage(user_id=user.id)
     db.add(usage)
     await db.flush()
 
     # 重新加载关联
-    result = await db.execute(
-        select(User)
-        .where(User.id == user.id)
-        .options(
-            selectinload(User.membership),
-            selectinload(User.usage),
-            selectinload(User.subscription),
-        )
-    )
-    user = result.scalar_one()
+    user = await _load_user(db, user.id)
     await reconcile_user_subscription(db, user)
     await synchronize_user_usage(db, user)
     return user
@@ -282,10 +372,13 @@ async def send_sms_code(req: PhoneCodeRequest):
     调用 sms_provider.send_code 发送真实验证码。
     未配置短信凭证时返回 503。
     """
-    from app.config import get_settings
     if not get_settings().has_sms:
-        raise HTTPException(status_code=503, detail="短信服务未配置，请使用邮箱登录")
-    success = await send_code(req.phone)
+        raise HTTPException(status_code=503, detail="短信服务未配置，请联系管理员")
+    try:
+        phone = phone_from_identity(normalize_phone_identity(req.phone))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    success = await send_code(phone)
     if not success:
         raise HTTPException(status_code=500, detail="验证码发送失败，请稍后重试")
     return SmsCodeResponse(message="验证码已发送")
@@ -298,16 +391,24 @@ async def login_with_phone(
 ):
     """手机验证码登录。
 
-    验证码通过后，查找或创建用户（email = phone@openvma.cn）。
+    验证码通过后，根据独立手机号身份查找或创建用户。
     """
-    # 验证验证码
-    if not await verify_code(req.phone, req.code):
+    try:
+        phone_identifier = normalize_phone_identity(req.phone)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    phone = phone_from_identity(phone_identifier)
+    if not await verify_code(phone, req.code):
         raise HTTPException(status_code=401, detail="验证码错误或已过期")
 
-    # 查找或创建用户
-    email = f"{req.phone}@openvma.cn"
-    name = req.name or f"用户{req.phone[-4:]}"
-    user = await _find_or_create_user_by_email(db, email, name)
+    user = await _find_or_create_user_by_identity(
+        db,
+        provider=PHONE_PROVIDER,
+        identifier=phone_identifier,
+        legacy_email=f"{phone}@openvma.cn",
+        name=req.name or f"用户{phone[-4:]}",
+    )
 
     return await _issue_tokens(user)
 
@@ -360,9 +461,17 @@ async def wechat_callback(
         raise HTTPException(status_code=400, detail=f"获取微信用户信息失败：{str(e)}")
 
     nickname = wx_user.get("nickname", "微信用户")
-
-    # 查找或创建用户（用 openid 构造 email 作为唯一标识）
-    email = f"wx_{openid}@openvma.cn"
-    user = await _find_or_create_user_by_email(db, email, nickname)
+    unionid = token_data.get("unionid") or wx_user.get("unionid")
+    wechat_app_id = get_settings().wechat_app_id or None
+    identity_identifier = wechat_identity_identifier(unionid, openid, wechat_app_id)
+    user = await _find_or_create_user_by_identity(
+        db,
+        provider=WECHAT_PROVIDER,
+        identifier=identity_identifier,
+        legacy_email=f"wx_{openid}@openvma.cn",
+        name=nickname,
+        provider_app_id=wechat_app_id,
+        provider_openid=openid,
+    )
 
     return await _issue_tokens(user)

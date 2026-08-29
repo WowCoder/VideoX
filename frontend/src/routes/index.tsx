@@ -1,10 +1,13 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import AppShell from "@/components/AppShell";
 import { AuthModal, ProjectCreateModal, ToastContainer, UploadDrawer } from "@/components";
-import { Navigate, RouteParams, matchPath, useLocation } from "@/router";
+import { Navigate, RouteParams, matchPath, useLocation, useNavigate } from "@/router";
 import { useAuthStore } from "@/stores/authStore";
+import { useUIStore, type ProjectStartMethod } from "@/stores/uiStore";
+import { postAuthStartAction } from "@/lib/publicNavigation";
 
 const SiteHome = lazy(() => import("@/views/SiteHome"));
+const AuthPage = lazy(() => import("@/views/AuthPage"));
 const HomeDashboard = lazy(() => import("@/views/HomeDashboard"));
 const LibraryView = lazy(() => import("@/views/LibraryView"));
 const ProjectWorkspaceView = lazy(() => import("@/views/ProjectWorkspaceView"));
@@ -61,7 +64,39 @@ function workspaceView(pathname: string): ReactNode | null {
 
 export default function AppRouter() {
   const { pathname } = useLocation();
-  if (pathname === "/") return <><RouteView><SiteHome /></RouteView><AuthModal /></>;
+  const navigate = useNavigate();
+  const { isAuthenticated, user } = useAuthStore();
+  const { openProjectCreate } = useUIStore();
+
+  if (pathname === "/") {
+    return <RouteView><SiteHome
+      isAuthenticated={isAuthenticated}
+      membership={user?.membership}
+      user={user}
+      onOpenAuth={(mode) => navigate(`/${mode}`)}
+      onEnterWorkspace={(view = "projects") => {
+        const path = view === "help"
+          ? "/workspace/help"
+          : view === "library"
+            ? "/workspace/library"
+            : view === "account"
+              ? "/workspace/account?section=membership"
+              : "/workspace";
+        navigate(path);
+      }}
+      onGoToSite={() => navigate("/", { replace: true })}
+      onStartPath={(method) => {
+        if (!isAuthenticated) {
+          navigate("/register", { state: postAuthStartAction(method) });
+          return;
+        }
+        openProjectCreate(method as ProjectStartMethod);
+        navigate("/workspace");
+      }}
+    /></RouteView>;
+  }
+  if (pathname === "/login") return <RouteView><AuthPage mode="login" /></RouteView>;
+  if (pathname === "/register") return <RouteView><AuthPage mode="register" /></RouteView>;
   if (pathname === "/auth/wechat/callback") return <RouteView><WechatCallbackView /></RouteView>;
   if (ProductPreviewView && pathname === "/workspace/library/__preview__") {
     return <RouteView><ProductPreviewView type="library" /></RouteView>;

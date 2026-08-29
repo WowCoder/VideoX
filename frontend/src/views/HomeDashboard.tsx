@@ -18,7 +18,8 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useNavigate } from "@/router";
+import { useLocation, useNavigate } from "@/router";
+import { getPostAuthStartAction } from "@/lib/publicNavigation";
 import * as projectApi from "@/api/projects";
 import type { Project } from "@/api/projects";
 import { useUIStore, type ProjectStartMethod } from "@/stores/uiStore";
@@ -166,6 +167,7 @@ function ProjectCard({
 
 export default function HomeDashboard() {
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const { openProjectCreate, openProjectEdit, notify } = useUIStore();
   const currentProjectId = useProjectStore((state) => state.currentProjectId);
@@ -175,6 +177,13 @@ export default function HomeDashboard() {
   const [page, setPage] = useState(1);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [openMenuProjectId, setOpenMenuProjectId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const action = getPostAuthStartAction(location.state);
+    if (!action) return;
+    openProjectCreate(action.method);
+    navigate("/workspace", { replace: true });
+  }, [location.state, navigate, openProjectCreate]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {

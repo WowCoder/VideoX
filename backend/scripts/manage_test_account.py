@@ -26,8 +26,9 @@ from app.config import get_settings  # noqa: E402
 from app.database import async_session_factory  # noqa: E402
 from app.models.job import Job  # noqa: E402
 from app.models.project import Project  # noqa: E402
-from app.models.user import Membership, Usage, User  # noqa: E402
+from app.models.user import Membership, Usage, User, UserIdentity  # noqa: E402
 from app.security import hash_password  # noqa: E402
+from app.services.auth_identities import EMAIL_PROVIDER  # noqa: E402
 
 
 FREE_MEMBERSHIP_ID = "membership-free"
@@ -152,19 +153,48 @@ async def create_test_account(
             password_changed = False
 
             if user is None:
+                password_hash = hash_password(valid_password)
                 user = User(
                     email=normalized_email,
                     name=valid_name,
-                    password_hash=hash_password(valid_password),
+                    password_hash=password_hash,
                     avatar_initial=valid_name[0].upper(),
                     membership_id=FREE_MEMBERSHIP_ID,
                 )
                 session.add(user)
                 await session.flush()
+                session.add(UserIdentity(
+                    user_id=user.id,
+                    provider=EMAIL_PROVIDER,
+                    identifier=normalized_email,
+                    password_hash=password_hash,
+                    verified_at=user.created_at,
+                ))
                 password_changed = True
             elif reset_password:
-                user.password_hash = hash_password(valid_password)
+                password_hash = hash_password(valid_password)
+                user.password_hash = password_hash
                 password_changed = True
+
+            identity = (
+                await session.execute(
+                    select(UserIdentity).where(
+                        UserIdentity.provider == EMAIL_PROVIDER,
+                        UserIdentity.identifier == normalized_email,
+                    )
+                )
+            ).scalar_one_or_none()
+            if identity is None:
+                identity = UserIdentity(
+                    user_id=user.id,
+                    provider=EMAIL_PROVIDER,
+                    identifier=normalized_email,
+                    password_hash=user.password_hash,
+                    verified_at=user.created_at,
+                )
+                session.add(identity)
+            elif reset_password:
+                identity.password_hash = user.password_hash
 
             usage = await get_or_create_usage(session, user)
             membership = await get_membership(session, user)

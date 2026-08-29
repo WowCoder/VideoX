@@ -195,8 +195,9 @@ export async function loginWithPhone(phone: string, code: string, name?: string)
  * GET /api/auth/wechat/qrcode
  * 未配置微信凭证时返回 503。
  */
-export function getWechatQrcode(): Promise<{ url: string }> {
-  return http.get<{ url: string }>("/auth/wechat/qrcode", { skipAuth: true });
+export function getWechatQrcode(state?: string): Promise<{ url: string }> {
+  const query = state ? `?state=${encodeURIComponent(state)}` : "";
+  return http.get<{ url: string }>(`/auth/wechat/qrcode${query}`, { skipAuth: true });
 }
 
 /**

@@ -134,6 +134,21 @@ function restoreScrollPosition(key?: string): void {
   }
 }
 
+function scrollToLocationHash(hash: string): boolean {
+  if (!hash) return false;
+  let id: string;
+  try {
+    id = decodeURIComponent(hash.slice(1));
+  } catch {
+    id = hash.slice(1);
+  }
+  if (!id) return false;
+  const target = document.getElementById(id);
+  if (!target) return false;
+  target.scrollIntoView({ block: "start" });
+  return true;
+}
+
 export function RouterProvider({ children }: { children: ReactNode }) {
   const [sessionId] = useState(getSessionId);
   const [normalizedMeta] = useState<OpenVMAHistoryMeta>(() => {
@@ -206,7 +221,11 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   }, [canLeave, sessionId]);
 
   useLayoutEffect(() => {
-    const frame = window.requestAnimationFrame(() => restoreScrollPosition(metaRef.current.key));
+    const frame = window.requestAnimationFrame(() => {
+      if (!scrollToLocationHash(location.hash)) {
+        restoreScrollPosition(metaRef.current.key);
+      }
+    });
     return () => window.cancelAnimationFrame(frame);
   }, [location.pathname, location.search, location.hash]);
 

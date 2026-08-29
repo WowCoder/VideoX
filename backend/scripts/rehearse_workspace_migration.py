@@ -226,9 +226,9 @@ async def rehearse(args: argparse.Namespace) -> int:
     )
 
     after = _load_report(after_report)
-    if after.get("alembic_version") != "026_unified_narration_cues":
+    if after.get("alembic_version") != "028_reconcile_schema_drift":
         raise RuntimeError(
-            "迁移必须到达 026_unified_narration_cues；"
+            "迁移必须到达 028_reconcile_schema_drift；"
             f"实际为 {after.get('alembic_version') or 'unknown'}"
         )
     comparison = after.get("comparison", {})

@@ -1,399 +1,516 @@
-// ──────────────────────────────────────────────
-// OpenVMA - 官网首页
-// 顶部导航 + Hero + 四步能力区 + 工作流演示区 + 页脚
-// ──────────────────────────────────────────────
-
-import { useState } from "react";
-import { useNavigate } from "@/router";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
-  ChevronRight,
+  ChevronDown,
   Clapperboard,
+  FileText,
   Film,
-  Layers3,
   LogIn,
+  Menu,
   Play,
-  ScanSearch,
   Sparkles,
   Upload,
-  WandSparkles,
+  X,
 } from "lucide-react";
-import { useAuthStore } from "@/stores/authStore";
-import { useUIStore } from "@/stores/uiStore";
+import { BrandLogo } from "@/components/BrandLogo";
+import type { User } from "@/types/models";
+import {
+  helpCenterCopy,
+  helpFaqs,
+  membershipPlanFeatures,
+  membershipPlans,
+  type MembershipPlan,
+} from "./siteContent";
+import {
+  FEATURED_SHOWCASE_WORKS,
+  STARTING_POINTS,
+  type ShowcaseWork,
+  type StartingPoint,
+} from "./siteContent";
+import "./SiteHome.css";
 
-const capabilities = [
-  {
-    id: "understand",
-    icon: ScanSearch,
-    number: "01",
-    title: "读懂脚本与素材",
-    copy: "交付一份脚本和一些素材视频，AI 自动理解台词、人物、物品、空间与镜头质量。",
-    detail:
-      "系统将脚本拆成可执行的多分镜结构，并同步完成素材转写、画面理解和镜头切分，建立脚本意图与素材语义之间的连接。",
-    tags: ["多分镜脚本", "素材理解", "统一视觉设定"],
-  },
-  {
-    id: "match",
-    icon: Layers3,
-    number: "02",
-    title: "自动找好镜头",
-    copy: "几分钟内围绕每个分镜搜索、排序并锁定素材中最合适的片段。",
-    detail:
-      "AI 综合人物、动作、场景、对白、画面质量和上下镜头连续性选择镜头；创作者仍可随时查看候选并替换不合适的片段。",
-    tags: ["语义匹配", "候选解释", "一键替换"],
-  },
-  {
-    id: "generate",
-    icon: WandSparkles,
-    number: "03",
-    title: "生成缺失画面",
-    copy: "素材里没有合适镜头时，直接生成 AI 分镜图、视频或示意特效画面。",
-    detail:
-      "AI 生成会引用脚本中锁定的人物、物品、空间、画幅和色彩风格，让补拍镜头与原有素材尽量保持视觉连续。",
-    tags: ["AI 生图分镜", "图生视频", "一致性控制"],
-  },
-  {
-    id: "rough-cut",
-    icon: Film,
-    number: "04",
-    title: "拼出可改初剪",
-    copy: "自动把选定与生成的镜头编排为项目唯一主成片，并可继续替换镜头与调整节奏。",
-    detail:
-      "创作者只需调整不合适的镜头、时长与字幕，即可按项目画幅编排并导出主成片。",
-    tags: ["唯一主成片", "镜头精调", "MP4 / MOV 导出"],
-  },
-] as const;
+type AuthMode = "login" | "register";
+type StartMethod = StartingPoint["method"];
 
-const workflowTasks = [
-  { icon: Upload, title: "脚本与素材理解", detail: "1 份脚本 · 128 个视频 · 392 个片段", status: "已完成", progress: 100 },
-  { icon: WandSparkles, title: "统一人物与场景设定", detail: "2 个人物 · 3 个物品 · 2 个空间", status: "已完成", progress: 100 },
-  { icon: ScanSearch, title: "镜头匹配", detail: "12 个镜头 · 48 个候选素材", status: "处理中", progress: 76 },
-  { icon: Sparkles, title: "缺失镜头 AI 补齐", detail: "3 个分镜等待生成画面", status: "排队中", progress: 28 },
-  { icon: Clapperboard, title: "主成片编排", detail: "项目唯一主成片 · 16:9", status: "等待中", progress: 0 },
-] as const;
-
-function BrandMark() {
-  return <img src="/favicon.svg" alt="" className="h-8 w-8 rounded-lg" />;
+interface SiteHomeProps {
+  isAuthenticated: boolean;
+  membership?: { name?: string } | null;
+  user?: User | null;
+  onOpenAuth: (mode: AuthMode) => void;
+  onEnterWorkspace: (view?: string, detail?: string) => void;
+  onGoToSite: () => void;
+  onStartPath: (method: StartMethod) => void;
 }
 
-export function SiteHome() {
-  const navigate = useNavigate();
-  const { isAuthenticated, user } = useAuthStore();
-  const { openAuth } = useUIStore();
-  const [selectedCapability, setSelectedCapability] = useState<string>("match");
+const AGENT_STEPS = [
+  {
+    index: "01",
+    label: "AI CONTENT PLANNER",
+    title: "内容策划",
+    description: "根据你的主题、受众和平台，补齐选题角度、开场钩子与内容结构。",
+    output: "交付：可修改的内容大纲",
+    icon: Sparkles,
+  },
+  {
+    index: "02",
+    label: "AI FILM DIRECTOR",
+    title: "影片导演",
+    description: "把文章拆成场景和镜头，说明每一句话应该出现什么画面、景别和节奏。",
+    output: "交付：脚本、分镜与视觉方向",
+    icon: Clapperboard,
+  },
+  {
+    index: "03",
+    label: "AI VIDEO EDITOR",
+    title: "自动剪辑",
+    description: "匹配或生成画面，自动组织旁白、字幕、转场、音效和背景音乐。",
+    output: "交付：可继续微调的第一版影片",
+    icon: Film,
+  },
+  {
+    index: "04",
+    label: "REAL-TIME DELIVERY",
+    title: "预览成片",
+    description: "你像修改文档一样调整内容，整支影片随脚本实时更新，满意后直接导出。",
+    output: "交付：适配发布平台的成片",
+    icon: Play,
+  },
+];
 
-  const activeCapability =
-    capabilities.find((c) => c.id === selectedCapability) ?? capabilities[1];
-  const ActiveIcon = activeCapability.icon;
+const SIMPLE_PROMISES = [
+  ["不用学时间线", "镜头顺序跟着文档结构走，调整段落就能调整影片。"],
+  ["不用会写分镜", "AI 导演给出镜头建议，你只需要判断是否符合表达。"],
+  ["不用找全素材", "已有素材可以上传，缺少的图片、视频和声音可以直接生成。"],
+  ["不会覆盖原文件", "AI 处理先成为候选版本，确认后才会进入当前影片。"],
+];
 
-  function startCreating() {
-    if (isAuthenticated) {
-      navigate("/workspace");
-    } else {
-      openAuth("register");
+const START_ICON_BY_ID = {
+  concept: Sparkles,
+  script: FileText,
+  assets: Upload,
+};
+
+function ShowcaseMedia({ work, eager = false, className = "" }: { work: ShowcaseWork; eager?: boolean; className?: string }) {
+  const imageSource = work.mediaType === "video" ? work.poster : work.src;
+  return (
+    <img
+      className={className}
+      src={imageSource}
+      alt=""
+      loading={eager ? "eager" : "lazy"}
+      decoding="async"
+      fetchPriority={eager ? "high" : "low"}
+    />
+  );
+}
+
+function SiteBrand({ decorative = false }: { decorative?: boolean } = {}) {
+  return <BrandLogo variant="wordmark" tone="dark" height={16} className="ltx-site-brand" decorative={decorative} />;
+}
+
+function AccountArea({
+  isAuthenticated,
+  membership,
+  user,
+  onOpenAuth,
+  onEnterWorkspace,
+}: Pick<SiteHomeProps, "isAuthenticated" | "membership" | "user" | "onOpenAuth" | "onEnterWorkspace">) {
+  if (isAuthenticated) {
+    return (
+      <button className="ltx-site-account" onClick={() => onEnterWorkspace("projects")} type="button">
+        <span>{user?.initial || "U"}</span>
+        <div><strong>{user?.name || "OpenVMA 用户"}</strong><small>{membership?.name || "Free"} · 进入项目中心</small></div>
+        <ArrowRight size={14} />
+      </button>
+    );
+  }
+  return (
+    <div className="ltx-site-auth-actions">
+      <button className="ltx-site-login" onClick={() => onOpenAuth?.("login")} type="button">
+        <LogIn size={15} aria-hidden="true" />
+        登录
+      </button>
+      <button className="ltx-site-button is-compact is-dark" onClick={() => onOpenAuth?.("register")} type="button">
+        免费注册
+      </button>
+    </div>
+  );
+}
+
+function ComposerPreview({ work }: { work: ShowcaseWork }) {
+  const [playing, setPlaying] = useState(false);
+  const previewTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (previewTimer.current) window.clearTimeout(previewTimer.current);
+  }, []);
+
+  function togglePreview() {
+    if (previewTimer.current) {
+      window.clearTimeout(previewTimer.current);
+      previewTimer.current = null;
     }
+    setPlaying((current) => {
+      const next = !current;
+      if (next) {
+        previewTimer.current = window.setTimeout(() => {
+          setPlaying(false);
+          previewTimer.current = null;
+        }, 5800);
+      }
+      return next;
+    });
   }
 
   return (
-    <main className="min-h-screen bg-surface">
-      {/* 顶部导航栏 */}
-      <header className="sticky top-0 z-30 border-b border-line bg-surface/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-          <button
-            className="flex items-center gap-2.5"
-            onClick={() => navigate("/")}
-            type="button"
-          >
-            <BrandMark />
-            <span className="text-lg font-semibold tracking-wide text-text">OpenVMA</span>
-          </button>
-          <nav className="hidden items-center gap-8 text-sm text-muted md:flex">
-            <a href="#capabilities" className="transition hover:text-text">产品能力</a>
-            <a href="#workflow" className="transition hover:text-text">工作流程</a>
-            <a href="#help" className="transition hover:text-text">帮助中心</a>
-          </nav>
-          <div className="flex items-center gap-2">
-            {isAuthenticated ? (
-              <button
-                onClick={() => navigate("/workspace")}
-                className="flex items-center gap-2 rounded-lg bg-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-2"
-                type="button"
-              >
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/20 text-xs">
-                  {user?.initial || "U"}
-                </span>
-                进入工作区
-              </button>
-            ) : (
-              <>
-                <button
-                  onClick={() => openAuth("login")}
-                  className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-muted transition hover:bg-canvas hover:text-text"
-                  type="button"
-                >
-                  <LogIn size={15} />登录
-                </button>
-                <button
-                  onClick={() => openAuth("register")}
-                  className="rounded-lg bg-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-2"
-                  type="button"
-                >
-                  免费注册
-                </button>
-              </>
-            )}
+    <div className={`ltx-composer-frame ${playing ? "is-playing" : ""}`} aria-label="OpenVMA 文档式脚本编排工作台示意">
+      <header className="ltx-composer-topbar">
+        <div><i /><strong>轨道档案：寻找第二个家园</strong></div>
+        <span>已自动保存</span>
+        <em>导出影片</em>
+      </header>
+
+      <div className="ltx-composer-body">
+        <aside className="ltx-composer-scenes">
+          <small>影片结构</small>
+          {[
+            ["01", "为什么要离开", "已完成"],
+            ["02", "进入未知轨道", "正在编辑"],
+            ["03", "看见第二个家园", "待确认"],
+          ].map(([number, title, status], index) => (
+            <div className={index === 1 ? "is-active" : ""} key={number}>
+              <span>{number}</span>
+              <p><strong>{title}</strong><small>{status}</small></p>
+            </div>
+          ))}
+        </aside>
+
+        <section className="ltx-composer-document">
+          <header><small>SCENE 02 · 12 秒</small><strong>进入未知轨道</strong></header>
+          <div className="ltx-composer-paragraph">
+            <span>旁白</span>
+            <p>当第一束信号穿过黑暗，我们第一次看见它真正的轮廓。</p>
           </div>
+          <article className="is-selected">
+            <span>镜头 01</span>
+            <div><strong>探测器沿地表缓慢推进</strong><p>极远景，低角度。远处的微弱信号形成一条清晰光带。</p></div>
+            <em><Check size={12} />画面已匹配</em>
+          </article>
+          <article>
+            <span>镜头 02</span>
+            <div><strong>信号进入控制舱</strong><p>屏幕波形亮起，人物面部被冷色光线逐渐照亮。</p></div>
+            <em className="is-pending"><Sparkles size={12} />生成 3 个候选</em>
+          </article>
+        </section>
+
+        <aside className="ltx-composer-preview">
+          <header><div><i /><span><strong>成片预览</strong><small>随文档实时更新</small></span></div><em>16:9</em></header>
+          <figure>
+            <ShowcaseMedia work={work} />
+            <button aria-label={playing ? "暂停成片示意" : "播放成片示意"} aria-pressed={playing} onClick={togglePreview} type="button">
+              {playing ? <span className="ltx-preview-pause" aria-hidden="true"><i /><i /></span> : <Play size={17} fill="currentColor" />}
+            </button>
+            <figcaption>当第一束信号穿过黑暗，<br />我们第一次看见它真正的轮廓。</figcaption>
+          </figure>
+          <div className="ltx-composer-controls"><span>{playing ? "00:36" : "00:18"}</span><i><b /></i><span>00:58</span></div>
+          <div className="ltx-composer-tools">
+            <span>画面</span><span>旁白</span><span>字幕</span><span>音乐</span><span>转场</span>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function SiteHelp({
+  isAuthenticated,
+  onOpenAuth,
+  onEnterWorkspace,
+}: Pick<SiteHomeProps, "isAuthenticated" | "onOpenAuth" | "onEnterWorkspace">) {
+  const [openFaq, setOpenFaq] = useState<number | null>(0);
+
+  function openHelp() {
+    if (isAuthenticated) onEnterWorkspace?.("help");
+    else onOpenAuth?.("login");
+  }
+
+  return (
+    <section className="ltx-site-help ltx-site-section" id="site-help" aria-labelledby="ltx-help-title">
+      <div className="ltx-section-heading is-split">
+        <div><span>QUESTIONS</span><h2 id="ltx-help-title">第一次做视频，<br />可以从这里开始。</h2></div>
+        <p>{helpCenterCopy.description}</p>
+      </div>
+      <div className="ltx-help-layout">
+        <div className="ltx-help-intro">
+          <strong>不用先学会剪辑软件。</strong>
+          <p>创建项目后，先把主题或文章交给 AI。每一个策划、分镜和剪辑结果都可以继续修改。</p>
+          <button onClick={openHelp} type="button">打开完整帮助中心<ArrowRight size={15} /></button>
+        </div>
+        <div className="ltx-help-faq">
+          {helpFaqs.slice(0, 5).map(([question, answer], index) => (
+            <article className={openFaq === index ? "is-open" : ""} key={question}>
+              <button onClick={() => setOpenFaq(openFaq === index ? null : index)} aria-expanded={openFaq === index} type="button">
+                <strong>{question}</strong><ChevronDown size={17} />
+              </button>
+              {openFaq === index ? <p>{answer}</p> : null}
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function SiteHome({
+  isAuthenticated,
+  membership,
+  user,
+  onOpenAuth,
+  onEnterWorkspace,
+  onGoToSite,
+  onStartPath,
+}: SiteHomeProps) {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [billingCycle, setBillingCycle] = useState("annual");
+  const heroWork = FEATURED_SHOWCASE_WORKS.find((work) => work.id === "orbital-archive")
+    ?? FEATURED_SHOWCASE_WORKS[0];
+  const previewWork = FEATURED_SHOWCASE_WORKS.find((work) => work.id === "moonset-orbit")
+    ?? FEATURED_SHOWCASE_WORKS[0];
+  const spaceCases = ["orbital-archive", "milky-way-kandersteg"]
+    .map((id) => FEATURED_SHOWCASE_WORKS.find((work) => work.id === id))
+    .filter((work): work is ShowcaseWork => Boolean(work));
+
+  useEffect(() => {
+    if (!window.location.hash) return;
+    let id: string;
+    try {
+      id = decodeURIComponent(window.location.hash.slice(1));
+    } catch {
+      id = window.location.hash.slice(1);
+    }
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  function startPath(startMethod: StartMethod) {
+    setMobileNavOpen(false);
+    if (onStartPath) {
+      onStartPath(startMethod);
+      return;
+    }
+    if (!isAuthenticated) {
+      onOpenAuth?.("register");
+      return;
+    }
+    if (startMethod === "upload-assets") onEnterWorkspace?.("library");
+    else onEnterWorkspace?.("script", "new");
+  }
+
+  function openPlan(planId: MembershipPlan["id"]) {
+    if (isAuthenticated) onEnterWorkspace?.("account", "membership");
+    else onOpenAuth?.(planId === "free" ? "register" : "login");
+  }
+
+  function closeMobileNav() {
+    setMobileNavOpen(false);
+  }
+
+  function goToSiteTop() {
+    closeMobileNav();
+    onGoToSite();
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    });
+  }
+
+  return (
+    <main className="ltx-site">
+      <a className="ltx-site-announcement" href="#site-capabilities">
+        <span>OpenVMA 为第一次做视频的人而设计</span><ArrowRight size={16} />
+      </a>
+
+      <header className={`ltx-site-header ${mobileNavOpen ? "is-menu-open" : ""}`}>
+        <button className="ltx-site-logo-button" onClick={goToSiteTop} aria-label="返回 OpenVMA 官网顶部" type="button">
+          <SiteBrand decorative />
+        </button>
+
+        <nav className="ltx-site-nav" id="ltx-site-navigation" aria-label="官网导航">
+          <a href="#site-capabilities" onClick={closeMobileNav}>如何工作</a>
+          <a href="#site-workflow" onClick={closeMobileNav}>产品体验</a>
+          <a href="#site-showcase" onClick={closeMobileNav}>太空案例</a>
+          <a href="#site-start" onClick={closeMobileNav}>开始方式</a>
+          <a href="#site-pricing" onClick={closeMobileNav}>价格</a>
+          <a href="#site-help" onClick={closeMobileNav}>帮助</a>
+        </nav>
+
+        <div className="ltx-site-header-end">
+          <AccountArea
+            isAuthenticated={isAuthenticated}
+            membership={membership}
+            user={user}
+            onOpenAuth={onOpenAuth}
+            onEnterWorkspace={onEnterWorkspace}
+          />
+          <button
+            className="ltx-site-menu-button"
+            onClick={() => setMobileNavOpen((open) => !open)}
+            aria-expanded={mobileNavOpen}
+            aria-controls="ltx-site-navigation"
+            aria-label={mobileNavOpen ? "关闭官网导航" : "打开官网导航"}
+            type="button"
+          >{mobileNavOpen ? <X size={19} /> : <Menu size={19} />}</button>
         </div>
       </header>
 
-      {/* Hero 区 */}
-      <section className="relative overflow-hidden bg-white px-6 py-20 lg:py-28">
-        <div className="absolute -top-20 left-1/2 h-72 w-[42rem] -translate-x-1/2 rounded-full bg-black/[0.035] blur-3xl" />
-        <div className="relative mx-auto max-w-4xl text-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-blue/20 bg-blue-soft/60 px-3 py-1 text-xs font-medium text-blue">
-            <Sparkles size={13} />AI 视频剪辑工作流 · 从脚本到初剪
-          </span>
-          <h1 className="mt-6 text-3xl font-bold leading-tight text-text lg:text-5xl lg:leading-tight">
-            把脚本和素材交给 AI，<br />
-            几分钟得到一版<span className="text-text">可改的初剪</span>。
-          </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-muted lg:text-lg">
-            OpenVMA 自动理解脚本与素材、找好合适镜头；缺失画面可生成 AI 素材，并装配成一版能继续替换镜头、细化剪辑和多格式导出的初剪。
-          </p>
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <button
-              onClick={startCreating}
-              className="flex items-center gap-2 rounded-xl bg-blue px-6 py-3 text-sm font-semibold text-white shadow-soft transition hover:bg-blue-2"
-              type="button"
-            >
-              {isAuthenticated ? "进入工作区" : "立即体验"}<ArrowRight size={16} />
-            </button>
-            <a
-              href="#capabilities"
-              className="flex items-center gap-2 rounded-xl border border-line bg-surface px-6 py-3 text-sm font-medium text-text transition hover:bg-canvas"
-            >
-              <Play size={15} />了解工作流
-            </a>
+      <section className="ltx-hero" aria-labelledby="ltx-hero-title">
+        <div className="ltx-hero-content">
+          <span className="ltx-kicker">AI 策划 · AI 导演 · AI 剪辑</span>
+          <h1 id="ltx-hero-title">只会写文档，<br />也能完成一支影片。</h1>
+          <p>你负责写下观点。OpenVMA 负责选题策划、影片导演和自动剪辑，把文章变成可以直接发布的视频。</p>
+          <div className="ltx-hero-actions">
+            <button className="ltx-site-button is-dark" onClick={() => startPath("ai-script")} type="button">写下第一个选题<ArrowRight size={17} /></button>
+            <a className="ltx-site-button is-outline" href="#site-workflow">看看如何工作<Play size={15} /></a>
           </div>
-          <div className="mt-10 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-muted">
-            <span className="flex items-center gap-1"><Check size={13} className="text-teal" />无需安装，浏览器直接使用</span>
-            <span className="flex items-center gap-1"><Check size={13} className="text-teal" />Free 方案永久免费</span>
-            <span className="flex items-center gap-1"><Check size={13} className="text-teal" />支持横屏 / 竖屏 / 方形</span>
+          <small><Check size={14} />不需要会分镜、不需要会剪辑，也不需要先准备好全部素材。</small>
+        </div>
+
+        <figure className="ltx-hero-visual">
+          <div><ShowcaseMedia work={heroWork} eager /></div>
+          <figcaption><span>SPACE STORY / 电影级太空视觉参考</span><strong>{heroWork.title}</strong><small>真实影像只负责建立方向，故事仍然从你的文字开始。</small></figcaption>
+        </figure>
+
+        <div className="ltx-hero-proof" aria-label="OpenVMA 创作前提">
+          <span><strong>01</strong>给一个主题</span>
+          <span><strong>02</strong>粘贴一篇文章</span>
+          <span><strong>03</strong>像改文档一样确认成片</span>
+        </div>
+      </section>
+
+      <section className="ltx-agent-flow ltx-site-section" id="site-capabilities" aria-labelledby="ltx-capabilities-title">
+        <div className="ltx-section-heading is-split">
+          <div><span>ONE AGENT, FOUR JOBS</span><h2 id="ltx-capabilities-title">不是复杂的剪辑工具。<br />是替你完成制作的 Agent。</h2></div>
+          <p>你不用在策划、脚本、素材库和剪辑软件之间来回切换。四个制作环节围绕同一份文档连续完成。</p>
+        </div>
+
+        <div className="ltx-agent-grid">
+          {AGENT_STEPS.map((step) => {
+            const Icon = step.icon;
+            return (
+              <article key={step.index}>
+                <header><span>{step.index}</span><Icon size={19} /></header>
+                <small>{step.label}</small>
+                <h3>{step.title}</h3>
+                <p>{step.description}</p>
+                <footer>{step.output}</footer>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="ltx-workflow" id="site-workflow" aria-labelledby="ltx-workflow-title">
+        <div className="ltx-workflow-inner">
+          <div className="ltx-workflow-heading">
+            <div><span>DOCUMENT FIRST</span><h2 id="ltx-workflow-title">会写，<br />就会做视频。</h2></div>
+            <div><p>脚本就是影片的控制台。修改段落、旁白或镜头说明，画面、声音和预览会跟着更新。</p><button className="ltx-site-button is-dark" onClick={() => startPath("write-script")} type="button">用一篇文档开始<ArrowRight size={16} /></button></div>
+          </div>
+
+          <ComposerPreview work={previewWork} />
+
+          <div className="ltx-workflow-notes">
+            {SIMPLE_PROMISES.map(([title, description], index) => (
+              <article key={title}><span>0{index + 1}</span><div><strong>{title}</strong><p>{description}</p></div></article>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* 四步能力区 */}
-      <section id="capabilities" className="bg-surface px-6 py-20">
-        <div className="mx-auto max-w-6xl">
-          <div className="mb-12 text-center">
-            <h2 className="text-2xl font-bold text-text lg:text-3xl">从一份脚本，直接走到可编辑初剪</h2>
-            <p className="mx-auto mt-3 max-w-2xl text-muted">
-              项目内唯一主脚本连接素材理解、镜头选择、AI 画面生成与主成片编排，创作者只处理真正需要判断的部分。
-            </p>
-          </div>
+      <section className="ltx-showcase ltx-site-section" id="site-showcase" aria-labelledby="ltx-showcase-title">
+        <div className="ltx-section-heading is-split">
+          <div><span>SPACE REFERENCES</span><h2 id="ltx-showcase-title">先看见方向，<br />再让故事发生。</h2></div>
+          <p>太空题材适合解释尺度、未知和未来。OpenVMA 会从镜头参考中提取构图与情绪，而不是堆叠无关图片。</p>
+        </div>
 
-          {/* 能力卡片 */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {capabilities.map((item) => {
-              const Icon = item.icon;
-              const isActive = item.id === selectedCapability;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setSelectedCapability(item.id)}
-                  className={`group rounded-2xl border p-5 text-left transition ${
-                    isActive
-                      ? "border-blue bg-blue-soft/40 shadow-soft"
-                      : "border-line bg-surface hover:border-blue/40 hover:shadow-soft"
-                  }`}
-                  type="button"
-                >
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={`flex h-11 w-11 items-center justify-center rounded-xl transition ${
-                        isActive ? "bg-blue text-white" : "bg-canvas text-blue"
-                      }`}
-                    >
-                      <Icon size={20} />
-                    </span>
-                    <span className="text-xs font-semibold text-muted">{item.number}</span>
-                  </div>
-                  <h3 className="mt-4 text-base font-semibold text-text">{item.title}</h3>
-                  <p className="mt-1.5 text-sm leading-relaxed text-muted">{item.copy}</p>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* 能力详情 */}
-          <div className="mt-8 grid gap-6 rounded-2xl border border-line bg-canvas/40 p-6 lg:grid-cols-[1.2fr_1fr] lg:p-8">
-            <div>
-              <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue text-white">
-                  <ActiveIcon size={20} />
-                </span>
-                <span className="text-xs font-semibold text-muted">
-                  {activeCapability.number} / 04
-                </span>
-              </div>
-              <h3 className="mt-4 text-xl font-bold text-text">{activeCapability.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted">{activeCapability.detail}</p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {activeCapability.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="flex items-center gap-1 rounded-full bg-surface px-3 py-1 text-xs text-text shadow-sm"
-                  >
-                    <Check size={12} className="text-teal" />{tag}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-xl bg-gradient-to-br from-ink to-ink-2 p-5 text-white">
-              <div className="flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-sm">
-                <Sparkles size={15} className="text-teal" />
-                <span className="flex-1">
-                  {activeCapability.id === "understand"
-                    ? "上传：发布会脚本.xlsx + 现场素材文件夹"
-                    : activeCapability.id === "match"
-                      ? "为「产品首次亮相」自动找到最有冲击力的镜头"
-                      : activeCapability.id === "generate"
-                        ? "按统一机器人和舞台设定生成缺失近景"
-                        : "将第 4 个片段替换，并导出 16:9 与 9:16 两个版本"}
-                </span>
-                <ArrowRight size={14} className="text-white/40" />
-              </div>
-              <div className="mt-4 space-y-2">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2">
-                    <span className="h-6 w-10 rounded bg-white/10" />
-                    <div className="flex-1">
-                      <span className="block h-2 w-3/4 rounded bg-white/20" />
-                      <span className="mt-1 block h-2 w-1/2 rounded bg-white/10" />
-                    </div>
-                    <Check size={14} className="text-teal" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+        <div className="ltx-showcase-grid">
+          {spaceCases.map((work, index) => (
+            <article key={work.id}>
+              <figure><ShowcaseMedia work={work} /></figure>
+              <div><span>0{index + 1} / {work.eyebrow}</span><h3>{work.title}</h3><p>{work.description}</p><button onClick={() => startPath("ai-script")} type="button">用这个方向创作<ArrowRight size={15} /></button></div>
+            </article>
+          ))}
         </div>
       </section>
 
-      {/* 工作流演示区 */}
-      <section id="workflow" className="bg-canvas px-6 py-20">
-        <div className="mx-auto max-w-6xl">
-          <div className="mb-12 text-center">
-            <h2 className="text-2xl font-bold text-text lg:text-3xl">处理状态，回到每一份内容上</h2>
-            <p className="mx-auto mt-3 max-w-2xl text-muted">
-              脚本解析、镜头匹配、AI 素材生成和初剪装配都持续同步到对应脚本与项目，离开页面也能继续处理。
-            </p>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-            {workflowTasks.map((task, idx) => {
-              const Icon = task.icon;
-              return (
-                <div
-                  key={task.title}
-                  className="rounded-2xl border border-line bg-surface p-5 shadow-soft transition hover:-translate-y-0.5"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-soft text-blue">
-                      <Icon size={18} />
-                    </span>
-                    <span className="text-xs font-semibold text-muted">
-                      {String(idx + 1).padStart(2, "0")}
-                    </span>
-                  </div>
-                  <h3 className="mt-3 text-sm font-semibold text-text">{task.title}</h3>
-                  <p className="mt-1 text-xs text-muted">{task.detail}</p>
-                  <div className="mt-3">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted">{task.status}</span>
-                      <span className="font-medium text-text">{task.progress}%</span>
-                    </div>
-                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-canvas">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          task.progress === 100
-                            ? "bg-teal"
-                            : task.progress > 0
-                              ? "bg-ink"
-                              : "bg-line"
-                        }`}
-                        style={{ width: `${task.progress}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="mt-10 text-center">
-            <button
-              onClick={startCreating}
-              className="inline-flex items-center gap-2 rounded-xl bg-blue px-6 py-3 text-sm font-semibold text-white shadow-soft transition hover:bg-blue-2"
-              type="button"
-            >
-              {isAuthenticated ? "返回工作区" : "免费开始创作"}<ArrowRight size={16} />
-            </button>
-          </div>
+      <section className="ltx-start ltx-site-section" id="site-start" aria-labelledby="ltx-start-title">
+        <div className="ltx-section-heading is-split">
+          <div><span>START WITH WHAT YOU HAVE</span><h2 id="ltx-start-title">你有什么，<br />就从什么开始。</h2></div>
+          <p>没有脚本也没关系。没有素材也没关系。所有入口最后都会回到一份可修改的影片文档。</p>
+        </div>
+        <div className="ltx-start-grid">
+          {STARTING_POINTS.slice(0, 3).map((point) => {
+            const Icon = START_ICON_BY_ID[point.id] ?? Sparkles;
+            return (
+              <button onClick={() => startPath(point.method)} type="button" key={point.id}>
+                <header><span>{point.index}</span><Icon size={19} /></header>
+                <small>{point.label}</small><strong>{point.title}</strong><p>{point.description}</p>
+                <footer>以此开始<ArrowRight size={15} /></footer>
+              </button>
+            );
+          })}
         </div>
       </section>
 
-      {/* 页脚 */}
-      <footer id="help" className="border-t border-line bg-surface px-6 py-12">
-        <div className="mx-auto max-w-6xl">
-          <div className="grid gap-8 md:grid-cols-[1.5fr_1fr_1fr_1fr]">
-            <div>
-              <div className="flex items-center gap-2.5">
-                <BrandMark />
-                <span className="text-lg font-semibold text-text">OpenVMA</span>
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-muted">
-                从脚本和素材到可编辑初剪的 AI 视频工作流。
-              </p>
+      <section className="ltx-pricing ltx-site-section" id="site-pricing" aria-labelledby="ltx-pricing-title">
+        <div className="ltx-section-heading is-split">
+          <div><span>PLANS</span><h2 id="ltx-pricing-title">先完成第一支，<br />再决定做多少。</h2></div>
+          <div className="ltx-pricing-heading-end">
+            <p>从免费体验开始。需要更多生成额度、更高画质或团队空间时再升级。</p>
+            <div className="ltx-billing-toggle" role="group" aria-label="会员付费周期">
+              <button className={billingCycle === "monthly" ? "is-active" : ""} onClick={() => setBillingCycle("monthly")} type="button">月付</button>
+              <button className={billingCycle === "annual" ? "is-active" : ""} onClick={() => setBillingCycle("annual")} type="button">年付 <span>省 20%</span></button>
             </div>
-            <div>
-              <strong className="block text-sm font-semibold text-text">产品</strong>
-              <ul className="mt-3 space-y-2 text-sm text-muted">
-                <li><a href="#capabilities" className="transition hover:text-text">产品能力</a></li>
-                <li><a href="#workflow" className="transition hover:text-text">工作流程</a></li>
-                <li><a href="#capabilities" className="transition hover:text-text">会员方案</a></li>
-              </ul>
-            </div>
-            <div>
-              <strong className="block text-sm font-semibold text-text">支持</strong>
-              <ul className="mt-3 space-y-2 text-sm text-muted">
-                <li><button onClick={() => navigate("/workspace/help")} className="transition hover:text-text" type="button">帮助中心</button></li>
-                <li><a href="#capabilities" className="transition hover:text-text">快速开始</a></li>
-                <li><a href="#capabilities" className="transition hover:text-text">账号与用量</a></li>
-              </ul>
-            </div>
-            <div>
-              <strong className="block text-sm font-semibold text-text">关于</strong>
-              <ul className="mt-3 space-y-2 text-sm text-muted">
-                <li><a href="#" className="transition hover:text-text">关于 OpenVMA</a></li>
-                <li><a href="#" className="transition hover:text-text">隐私政策</a></li>
-                <li><a href="#" className="transition hover:text-text">服务条款</a></li>
-              </ul>
-            </div>
-          </div>
-          <div className="mt-10 flex items-center justify-between border-t border-line pt-6">
-            <small className="text-xs text-muted">© 2026 OpenVMA. 保留所有权利。</small>
-            <button
-              onClick={() => navigate("/workspace/help")}
-              className="flex items-center gap-1 text-xs text-blue transition hover:underline"
-              type="button"
-            >
-              查看帮助中心<ChevronRight size={13} />
-            </button>
           </div>
         </div>
+        <div className="ltx-pricing-grid">
+          {membershipPlans.map((plan) => {
+            const price = billingCycle === "annual" ? plan.annualMonthlyPrice : plan.monthlyPrice;
+            return (
+              <article className={plan.recommended ? "is-featured" : ""} key={plan.id}>
+                <header><span>{plan.id.toUpperCase()}</span>{plan.recommended ? <em>推荐</em> : null}</header>
+                <h3>{plan.name}</h3><p>{plan.description}</p>
+                <div className="ltx-plan-price"><strong>¥{price}</strong><span>/ 月</span></div>
+                <small>{plan.id === "free" ? "永久免费" : billingCycle === "annual" ? `按年支付 ¥${plan.annualTotal}` : "按月支付，可随时取消"}</small>
+                <button onClick={() => openPlan(plan.id)} type="button">{plan.id === "free" ? "免费开始" : "选择此方案"}<ArrowRight size={14} /></button>
+                <ul>{membershipPlanFeatures(plan).map((feature) => <li key={feature}><Check size={13} />{feature}</li>)}</ul>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <SiteHelp isAuthenticated={isAuthenticated} onOpenAuth={onOpenAuth} onEnterWorkspace={onEnterWorkspace} />
+
+      <section className="ltx-final-cta">
+        <span>YOUR FIRST FILM</span>
+        <h2>不用先成为剪辑师。<br />先把想表达的写下来。</h2>
+        <p>OpenVMA 会从内容策划开始，陪你完成导演、剪辑和交付。</p>
+        <div>
+          <button className="ltx-site-button is-light" onClick={() => startPath("ai-script")} type="button">免费开始创作<ArrowRight size={16} /></button>
+          <button className="ltx-site-button is-dark-outline" onClick={() => isAuthenticated ? onEnterWorkspace?.("projects") : onOpenAuth?.("login")} type="button">进入项目中心</button>
+        </div>
+      </section>
+
+      <footer className="ltx-footer" id="site-footer">
+        <div className="ltx-footer-brand"><SiteBrand /><p>为不会策划、导演和剪辑的内容创作者，完成从文字到影片的全过程。</p></div>
+        <nav aria-label="页脚导航">
+          <section><strong>产品</strong><a href="#site-capabilities">如何工作</a><a href="#site-workflow">产品体验</a><a href="#site-start">开始方式</a></section>
+          <section><strong>探索</strong><a href="#site-showcase">太空案例</a><a href="#site-pricing">会员方案</a><a href="#site-help">帮助中心</a></section>
+          <section><strong>OpenVMA</strong><a href="#site-footer">关于我们</a><a href="#site-footer">隐私政策</a><a href="#site-footer">服务条款</a></section>
+        </nav>
+        <div className="ltx-footer-bottom"><span>© 2026 OpenVMA. 保留所有权利。</span><span>FROM DOCUMENT TO FILM</span></div>
       </footer>
     </main>
   );
