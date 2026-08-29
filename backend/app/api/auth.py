@@ -24,7 +24,7 @@ from app.security import (
     create_access_token, create_refresh_token, decode_token,
 )
 from app.dependencies import get_current_user
-from app.services.sms_provider import send_code, verify_code
+from app.services.sms_provider import SmsRateLimitError, send_code, verify_code
 from app.services.wechat_provider import (
     get_qrcode_url, exchange_code_for_token, get_user_info,
 )
@@ -378,7 +378,14 @@ async def send_sms_code(req: PhoneCodeRequest):
         phone = phone_from_identity(normalize_phone_identity(req.phone))
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    success = await send_code(phone)
+    try:
+        success = await send_code(phone)
+    except SmsRateLimitError as error:
+        raise HTTPException(
+            status_code=429,
+            detail=str(error),
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
     if not success:
         raise HTTPException(status_code=500, detail="验证码发送失败，请稍后重试")
     return SmsCodeResponse(message="验证码已发送")

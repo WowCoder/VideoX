@@ -139,8 +139,13 @@ class Settings(BaseSettings):
     # 填入后启用：手机验证码登录/注册
     sms_access_key_id: str = ""
     sms_access_key_secret: str = ""
-    sms_sign_name: str = "OpenVMA"
-    sms_template_code: str = ""
+    sms_sign_name: str = "redacted"
+    sms_template_code: str = "redacted"
+    sms_code_ttl_seconds: int = 300
+    sms_resend_interval_seconds: int = 60
+    sms_hourly_limit: int = 5
+    sms_daily_limit: int = 10
+    sms_max_verify_attempts: int = 5
 
     # ── 支付宝（会员升级支付）──
     # 填入后启用：会员升级、账单、发票
@@ -233,6 +238,27 @@ class Settings(BaseSettings):
             raise ValueError("AI_TTS_OUTPUT_CHANNELS 仅支持 1 或 2")
         if not 1.0 <= self.ai_tts_auto_time_stretch_limit <= 1.2:
             raise ValueError("AI_TTS_AUTO_TIME_STRETCH_LIMIT 必须在 1.0 到 1.2 之间")
+        sms_credentials = (
+            self.sms_access_key_id.strip(),
+            self.sms_access_key_secret.strip(),
+        )
+        if any(sms_credentials) and not all(sms_credentials):
+            raise ValueError("SMS_ACCESS_KEY_ID 和 SMS_ACCESS_KEY_SECRET 必须同时配置")
+        if all(sms_credentials):
+            if not self.sms_sign_name.strip():
+                raise ValueError("启用短信服务时必须配置 SMS_SIGN_NAME")
+            if not self.sms_template_code.startswith("SMS_"):
+                raise ValueError("启用短信服务时 SMS_TEMPLATE_CODE 必须是 SMS_ 开头的模板编号")
+        if not 60 <= self.sms_code_ttl_seconds <= 900:
+            raise ValueError("SMS_CODE_TTL_SECONDS 必须在 60 到 900 之间")
+        if not 30 <= self.sms_resend_interval_seconds <= 300:
+            raise ValueError("SMS_RESEND_INTERVAL_SECONDS 必须在 30 到 300 之间")
+        if self.sms_hourly_limit < 1:
+            raise ValueError("SMS_HOURLY_LIMIT 必须大于等于 1")
+        if self.sms_daily_limit < self.sms_hourly_limit:
+            raise ValueError("SMS_DAILY_LIMIT 不能小于 SMS_HOURLY_LIMIT")
+        if not 1 <= self.sms_max_verify_attempts <= 10:
+            raise ValueError("SMS_MAX_VERIFY_ATTEMPTS 必须在 1 到 10 之间")
 
         if self.environment.lower() != "production":
             return self
@@ -400,7 +426,15 @@ class Settings(BaseSettings):
 
     @property
     def has_sms(self) -> bool:
-        return bool(self.sms_access_key_id and self.sms_access_key_secret)
+        return all(
+            value.strip()
+            for value in (
+                self.sms_access_key_id,
+                self.sms_access_key_secret,
+                self.sms_sign_name,
+                self.sms_template_code,
+            )
+        )
 
     @property
     def has_alipay(self) -> bool:

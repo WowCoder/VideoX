@@ -147,6 +147,24 @@ LOCAL_AI_API_KEY=请替换为至少24位随机字符串
 
 生产环境启用本地 AI 时，后端会拒绝少于 24 位的 `LOCAL_AI_API_KEY`。
 
+### 阿里云手机验证码
+
+手机号登录/注册使用阿里云短信签名“redacted”和模板
+`redacted`，模板参数必须为 `${code}`。开发与测试环境在根目录
+`.env` 中填入专用 RAM 用户的密钥：
+
+```env
+SMS_ACCESS_KEY_ID=请填写RAM用户AccessKeyId
+SMS_ACCESS_KEY_SECRET=请填写RAM用户AccessKeySecret
+SMS_SIGN_NAME=redacted
+SMS_TEMPLATE_CODE=redacted
+```
+
+生产环境将同样的配置写入服务器 `.env.production`，且不得将真实密钥
+提交到 Git。RAM 用户建议仅授予 `dysms:SendSms` 权限。当前仅接受中国
+大陆 11 位手机号；验证码默认 5 分钟有效、60 秒后可重发，并有每小时/
+每日发送上限和输错次数保护。
+
 ### 2. 启动基础应用和本地模型
 
 ```bash

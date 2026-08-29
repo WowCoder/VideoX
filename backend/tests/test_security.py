@@ -61,6 +61,20 @@ class ProductionSettingsTests(unittest.TestCase):
         settings = Settings(_env_file=None, compose_only_value="ignored")
         self.assertEqual(settings.environment, "development")
 
+    def test_sms_requires_both_access_key_fields(self):
+        with self.assertRaisesRegex(ValidationError, "SMS_ACCESS_KEY_ID"):
+            Settings(_env_file=None, sms_access_key_id="configured", sms_access_key_secret="")
+
+    def test_sms_configuration_uses_approved_sign_and_template(self):
+        settings = Settings(
+            _env_file=None,
+            sms_access_key_id="test-key-id",
+            sms_access_key_secret="test-key-secret",
+        )
+        self.assertTrue(settings.has_sms)
+        self.assertEqual(settings.sms_sign_name, "redacted")
+        self.assertEqual(settings.sms_template_code, "redacted")
+
     def test_agnes_is_accepted_and_uses_provider_specific_models(self):
         settings = Settings(
             _env_file=None,
