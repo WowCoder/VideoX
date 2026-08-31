@@ -68,9 +68,10 @@ celery_app.conf.update(
 def fail_stale_jobs():
     """将长时间无更新的排队/运行任务标记为真实失败，避免永久卡死。"""
     from app.database import async_session_factory
+    from app.models.inspiration import InspirationRun
     from app.models.job import Job
     from app.tasks.async_runner import run_async
-    from sqlalchemy import update
+    from sqlalchemy import select, update
 
     async def _fail_stale():
         now = datetime.now(timezone.utc)
@@ -105,6 +106,22 @@ def fail_stale_jobs():
                     result_detail="请检查 Worker 日志后重试任务",
                     result_url=None,
                     updated_at=now,
+                )
+            )
+            # Job 与领域 Run 必须进入同一终态，避免灵感任务被永久视为正在执行。
+            await session.execute(
+                update(InspirationRun)
+                .where(
+                    InspirationRun.status.in_(["QUEUED", "RUNNING"]),
+                    InspirationRun.job_id.in_(
+                        select(Job.id).where(Job.status == "FAILED")
+                    ),
+                )
+                .values(
+                    status="FAILED",
+                    outcome="FAILED",
+                    error="关联后台任务已超时或失败",
+                    finished_at=now,
                 )
             )
             await session.commit()

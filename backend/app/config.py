@@ -68,6 +68,15 @@ class Settings(BaseSettings):
     ai_effect_video_provider: str = "dashscope"
     ai_tts_provider: str = "disabled"
 
+    # ── 灵感岛联网发现 ──
+    # 搜索结果只作为候选，后台仍会重新抓取并校验来源正文。
+    web_search_provider: str = "bing-rss"
+    web_search_url: str = "https://www.bing.com/search"
+    web_search_timeout_seconds: float = 20.0
+    web_search_results_per_query: int = 8
+    inspiration_search_candidate_limit: int = 18
+    inspiration_prompt_character_budget: int = 80000
+
     # ── 本地 AI 服务 ──
     local_ai_api_key: str = ""
     local_ai_timeout_seconds: int = 600
@@ -210,6 +219,16 @@ class Settings(BaseSettings):
             raise ValueError("MAX_UPLOAD_SIZE_GB 必须大于等于 1")
         if self.ai_match_result_limit > self.ai_match_candidate_limit:
             raise ValueError("AI_MATCH_RESULT_LIMIT 不能大于 AI_MATCH_CANDIDATE_LIMIT")
+        if self.web_search_provider.lower() not in {"bing-rss", "disabled"}:
+            raise ValueError("WEB_SEARCH_PROVIDER 必须是 bing-rss 或 disabled")
+        if self.web_search_timeout_seconds < 5:
+            raise ValueError("WEB_SEARCH_TIMEOUT_SECONDS 必须至少为 5 秒")
+        if not 1 <= self.web_search_results_per_query <= 20:
+            raise ValueError("WEB_SEARCH_RESULTS_PER_QUERY 必须在 1 到 20 之间")
+        if not 3 <= self.inspiration_search_candidate_limit <= 50:
+            raise ValueError("INSPIRATION_SEARCH_CANDIDATE_LIMIT 必须在 3 到 50 之间")
+        if not 20000 <= self.inspiration_prompt_character_budget <= 200000:
+            raise ValueError("INSPIRATION_PROMPT_CHARACTER_BUDGET 必须在 20000 到 200000 之间")
         if self.dashscope_poll_interval_seconds < 0.2:
             raise ValueError("DASHSCOPE_POLL_INTERVAL_SECONDS 不能小于 0.2")
         if self.dashscope_generation_timeout_seconds < 30:

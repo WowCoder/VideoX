@@ -2,6 +2,13 @@ import { http } from "./client";
 
 export type InspirationTaskType = "topic-recommendation" | "link-update";
 export type InspirationScheduleType = "manual" | "daily" | "weekly";
+export type InspirationSourceStrategy = "web" | "preferred" | "only";
+
+export interface InspirationDiscoveryConfig {
+  sourceStrategy: InspirationSourceStrategy;
+  monitorBrief: string;
+  searchRecencyDays: number;
+}
 
 export interface InspirationSchedule {
   type: InspirationScheduleType;
@@ -18,6 +25,8 @@ export interface InspirationSource {
   enabled: boolean;
   lastSuccessAt?: string;
   lastError?: string;
+  lastStatus?: string;
+  consecutiveFailures: number;
 }
 
 export interface InspirationTask {
@@ -26,6 +35,7 @@ export interface InspirationTask {
   taskType: InspirationTaskType;
   topicBrief: string;
   topicCount?: number;
+  discoveryConfig: InspirationDiscoveryConfig;
   schedule: InspirationSchedule;
   outputFormat: string;
   enabled: boolean;
@@ -47,6 +57,8 @@ export interface InspirationTopic {
   title: string;
   angle: string;
   summary: string;
+  whyNow?: string;
+  hook?: string;
   references: InspirationReference[];
 }
 
@@ -56,6 +68,8 @@ export interface InspirationUpdate {
   title: string;
   summary: string;
   url: string;
+  changeType?: string;
+  evidence?: Array<{ type?: string; title?: string; text?: string; url?: string }>;
 }
 
 export interface InspirationResult {
@@ -77,6 +91,8 @@ export interface InspirationRun {
   jobId?: string;
   status: string;
   error?: string;
+  outcome?: string;
+  metrics: Record<string, number | string | boolean>;
   startedAt?: string;
   finishedAt?: string;
   createdAt: string;
@@ -88,6 +104,7 @@ export interface InspirationTaskInput {
   taskType: InspirationTaskType;
   topicBrief: string;
   topicCount?: number;
+  discoveryConfig: InspirationDiscoveryConfig;
   schedule: InspirationSchedule;
   enabled: boolean;
   sources: Array<{ sourceType: "web" | "rss"; url: string }>;
@@ -99,6 +116,7 @@ interface RawTask {
   task_type: InspirationTaskType;
   topic_brief: string;
   topic_count: number | null;
+  discovery_config: { source_strategy: InspirationSourceStrategy; monitor_brief: string; search_recency_days: number };
   schedule: { type: InspirationScheduleType; time: string; weekday: number; time_zone: "Asia/Shanghai" };
   output_format: string;
   enabled: boolean;
@@ -106,7 +124,7 @@ interface RawTask {
   last_run_at: string | null;
   created_at: string;
   updated_at: string;
-  sources: Array<{ id: string; source_type: "web" | "rss"; url: string; enabled: boolean; last_success_at: string | null; last_error: string | null }>;
+  sources: Array<{ id: string; source_type: "web" | "rss"; url: string; enabled: boolean; last_success_at: string | null; last_error: string | null; last_status: string | null; consecutive_failures: number }>;
 }
 
 interface RawRun {
@@ -115,6 +133,8 @@ interface RawRun {
   job_id: string | null;
   status: string;
   error: string | null;
+  outcome: string | null;
+  metrics: Record<string, number | string | boolean>;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -138,6 +158,11 @@ function mapTask(raw: RawTask): InspirationTask {
     taskType: raw.task_type,
     topicBrief: raw.topic_brief,
     topicCount: raw.topic_count ?? undefined,
+    discoveryConfig: {
+      sourceStrategy: raw.discovery_config.source_strategy,
+      monitorBrief: raw.discovery_config.monitor_brief,
+      searchRecencyDays: raw.discovery_config.search_recency_days,
+    },
     schedule: {
       type: raw.schedule.type,
       time: raw.schedule.time,
@@ -157,6 +182,8 @@ function mapTask(raw: RawTask): InspirationTask {
       enabled: source.enabled,
       lastSuccessAt: source.last_success_at ?? undefined,
       lastError: source.last_error ?? undefined,
+      lastStatus: source.last_status ?? undefined,
+      consecutiveFailures: source.consecutive_failures,
     })),
   };
 }
@@ -168,6 +195,8 @@ function mapRun(raw: RawRun): InspirationRun {
     jobId: raw.job_id ?? undefined,
     status: raw.status,
     error: raw.error ?? undefined,
+    outcome: raw.outcome ?? undefined,
+    metrics: raw.metrics ?? {},
     startedAt: raw.started_at ?? undefined,
     finishedAt: raw.finished_at ?? undefined,
     createdAt: raw.created_at,
@@ -192,6 +221,11 @@ function taskPayload(input: InspirationTaskInput) {
     task_type: input.taskType,
     topic_brief: input.taskType === "topic-recommendation" ? input.topicBrief : "",
     topic_count: input.taskType === "topic-recommendation" ? input.topicCount ?? 5 : null,
+    discovery_config: {
+      source_strategy: input.taskType === "link-update" ? "only" : input.discoveryConfig.sourceStrategy,
+      monitor_brief: input.taskType === "link-update" ? input.discoveryConfig.monitorBrief : "",
+      search_recency_days: input.discoveryConfig.searchRecencyDays,
+    },
     schedule: {
       type: input.schedule.type,
       time: input.schedule.time,

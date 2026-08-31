@@ -107,9 +107,11 @@ async def create_task(
         task_type=request.task_type,
         topic_brief=request.topic_brief,
         topic_count=request.topic_count,
+        discovery_config=request.discovery_config.model_dump(mode="json"),
         schedule=request.schedule.model_dump(mode="json"),
         enabled=request.enabled,
         next_run_at=next_inspiration_run(request.schedule, now) if request.enabled else None,
+        sources=[],
     )
     for source in request.sources:
         task.sources.append(
@@ -147,19 +149,35 @@ async def update_task(
     next_type = request.task_type or task.task_type
     next_brief = request.topic_brief if request.topic_brief is not None else task.topic_brief
     next_count = request.topic_count if request.topic_count is not None else task.topic_count
+    next_discovery = (
+        request.discovery_config.model_dump(mode="json")
+        if request.discovery_config is not None
+        else dict(task.discovery_config or {})
+    )
+    active_sources = request.sources if request.sources is not None else [
+        source for source in task.sources if source.enabled
+    ]
     if next_type == "topic-recommendation":
         if not next_brief.strip():
             raise HTTPException(status_code=422, detail="选题推荐任务必须填写选题方向")
         next_count = next_count or 5
+        if next_discovery.get("source_strategy") == "only" and not active_sources:
+            raise HTTPException(status_code=422, detail="仅从指定网站发现时，至少需要填写一个网站")
+        if active_sources and next_discovery.get("source_strategy") == "web":
+            next_discovery["source_strategy"] = "preferred"
     else:
         next_brief = ""
         next_count = None
+        next_discovery["source_strategy"] = "only"
+        if not active_sources:
+            raise HTTPException(status_code=422, detail="来源监控至少需要填写一个链接")
 
     if request.name is not None:
         task.name = request.name
     task.task_type = next_type
     task.topic_brief = next_brief
     task.topic_count = next_count
+    task.discovery_config = next_discovery
     if request.schedule is not None:
         task.schedule = request.schedule.model_dump(mode="json")
     if request.enabled is not None:
@@ -179,7 +197,7 @@ async def run_task(
         await db.execute(
             select(InspirationTask).where(
                 InspirationTask.id == task_id, InspirationTask.owner_id == user.id
-            )
+            ).with_for_update()
         )
     ).scalar_one_or_none()
     if not task:
@@ -208,7 +226,9 @@ async def run_task(
         payload={"task_id": task.id},
         eta="预计 1-3 分钟",
     )
-    run = InspirationRun(task_id=task.id, status="QUEUED")
+    # Initialize the relationship so the 202 response can be serialized without
+    # triggering async lazy loading after the transaction has been committed.
+    run = InspirationRun(task_id=task.id, status="QUEUED", results=[])
     db.add_all([job, run])
     await db.flush()
     job.subject_id = run.id
@@ -230,6 +250,7 @@ async def run_task(
         job.stage = "派发失败"
         job.detail = run.error
         await db.commit()
+        raise HTTPException(status_code=503, detail=run.error) from exc
     return InspirationRunOut.model_validate(run)
 
 

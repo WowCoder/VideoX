@@ -26,6 +26,14 @@ class InspirationTask(Base):
     task_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     topic_brief: Mapped[str] = mapped_column(Text, default="")
     topic_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discovery_config: Mapped[dict] = mapped_column(
+        JSON,
+        default=lambda: {
+            "source_strategy": "web",
+            "monitor_brief": "",
+            "search_recency_days": 7,
+        },
+    )
     schedule: Mapped[dict] = mapped_column(
         JSON,
         default=lambda: {"type": "daily", "time": "09:00", "weekday": 1, "time_zone": "Asia/Shanghai"},
@@ -48,8 +56,8 @@ class InspirationTask(Base):
     @property
     def output_format(self) -> str:
         if self.task_type == "link-update":
-            return "更新内容总结 + 原文外链"
-        return "格式化选题 + 参考外链"
+            return "有效变化摘要 + 原文证据"
+        return "联网选题 + 真实参考外链"
 
 
 class InspirationSource(Base):
@@ -67,6 +75,8 @@ class InspirationSource(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     task: Mapped[InspirationTask] = relationship("InspirationTask", back_populates="sources")
@@ -86,6 +96,8 @@ class InspirationRun(Base):
     )
     status: Mapped[str] = mapped_column(String(20), default="QUEUED", index=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

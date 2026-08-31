@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 InspirationTaskType = Literal["topic-recommendation", "link-update"]
 InspirationScheduleType = Literal["manual", "daily", "weekly"]
+InspirationSourceStrategy = Literal["web", "preferred", "only"]
 
 
 class InspirationSchedule(BaseModel):
@@ -23,14 +24,21 @@ class InspirationSourceCreate(BaseModel):
     fetch_config: dict = Field(default_factory=dict)
 
 
+class InspirationDiscoveryConfig(BaseModel):
+    source_strategy: InspirationSourceStrategy = "web"
+    monitor_brief: str = Field("", max_length=5000)
+    search_recency_days: int = Field(7, ge=1, le=30)
+
+
 class InspirationTaskCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     task_type: InspirationTaskType
     topic_brief: str = Field("", max_length=10000)
     topic_count: int | None = Field(None, ge=1, le=20)
+    discovery_config: InspirationDiscoveryConfig = Field(default_factory=InspirationDiscoveryConfig)
     schedule: InspirationSchedule = Field(default_factory=InspirationSchedule)
     enabled: bool = True
-    sources: list[InspirationSourceCreate] = Field(..., min_length=1, max_length=50)
+    sources: list[InspirationSourceCreate] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
     def validate_task_specific_fields(self):
@@ -39,9 +47,16 @@ class InspirationTaskCreate(BaseModel):
                 raise ValueError("选题推荐任务必须填写选题方向")
             if self.topic_count is None:
                 self.topic_count = 5
+            if self.discovery_config.source_strategy == "only" and not self.sources:
+                raise ValueError("仅从指定网站发现时，至少需要填写一个网站")
+            if self.sources and self.discovery_config.source_strategy == "web":
+                self.discovery_config.source_strategy = "preferred"
         else:
             self.topic_brief = ""
             self.topic_count = None
+            self.discovery_config.source_strategy = "only"
+            if not self.sources:
+                raise ValueError("来源监控至少需要填写一个链接")
         return self
 
 
@@ -50,9 +65,10 @@ class InspirationTaskUpdate(BaseModel):
     task_type: InspirationTaskType | None = None
     topic_brief: str | None = Field(None, max_length=10000)
     topic_count: int | None = Field(None, ge=1, le=20)
+    discovery_config: InspirationDiscoveryConfig | None = None
     schedule: InspirationSchedule | None = None
     enabled: bool | None = None
-    sources: list[InspirationSourceCreate] | None = Field(None, min_length=1, max_length=50)
+    sources: list[InspirationSourceCreate] | None = Field(None, max_length=50)
 
 
 class InspirationSourceOut(BaseModel):
@@ -64,6 +80,8 @@ class InspirationSourceOut(BaseModel):
     enabled: bool
     last_success_at: datetime | None = None
     last_error: str | None = None
+    last_status: str | None = None
+    consecutive_failures: int = 0
 
 
 class InspirationTaskOut(BaseModel):
@@ -74,6 +92,7 @@ class InspirationTaskOut(BaseModel):
     task_type: InspirationTaskType
     topic_brief: str
     topic_count: int | None = None
+    discovery_config: InspirationDiscoveryConfig
     schedule: InspirationSchedule
     output_format: str
     enabled: bool
@@ -111,6 +130,8 @@ class InspirationRunOut(BaseModel):
     job_id: str | None = None
     status: str
     error: str | None = None
+    outcome: str | None = None
+    metrics: dict = Field(default_factory=dict)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     created_at: datetime
