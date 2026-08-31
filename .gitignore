@@ -32,6 +32,8 @@ backups/
 # ── IDE ──
 .idea/
 .vscode/
+.workbuddy/
+.claude/
 *.swp
 *.swo
 *~

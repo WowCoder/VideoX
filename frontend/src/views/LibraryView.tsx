@@ -21,6 +21,7 @@ import * as assetApi from "@/api/assets";
 import * as projectApi from "@/api/projects";
 import type { Project } from "@/api/projects";
 import { VideoThumb } from "@/components/VideoThumb";
+import { useNavigate } from "@/router";
 import { useUIStore } from "@/stores/uiStore";
 
 type SourceFilter = "all" | assetApi.AssetSourceCategory;
@@ -162,9 +163,9 @@ export default function LibraryView({
   previewProjects?: Project[];
 } = {}) {
   const previewMode = Boolean(previewAssets);
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const openUploadDrawer = useUIStore((state) => state.openUploadDrawer);
-  const openProjectCreate = useUIStore((state) => state.openProjectCreate);
   const notify = useUIStore((state) => state.notify);
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
@@ -287,7 +288,7 @@ export default function LibraryView({
           <p className="mt-1.5 max-w-3xl text-xs leading-5 text-muted">从素材库选择已有图片、音频或视频，AI 自动理解内容、提取叙事线索并生成可继续编辑的影片结构；确认结果后再创建项目。</p>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] font-medium text-[#317d83]"><span className="rounded-full bg-white/70 px-2.5 py-1">理解素材</span><span>→</span><span className="rounded-full bg-white/70 px-2.5 py-1">提取线索</span><span>→</span><span className="rounded-full bg-white/70 px-2.5 py-1">编排影片</span></div>
         </div>
-        <button type="button" disabled={previewMode} onClick={() => openProjectCreate("upload-assets")} className="workspace-primary-button whitespace-nowrap bg-[#147f88] disabled:opacity-45"><Sparkles size={16} />选择素材开始</button>
+        <button type="button" disabled={previewMode} onClick={() => navigate("/workspace?create=upload-assets")} className="workspace-primary-button whitespace-nowrap bg-[#147f88] disabled:opacity-45"><Sparkles size={16} />选择素材开始</button>
       </section>
 
       <section className="mb-5 overflow-hidden rounded-2xl border border-line bg-surface">

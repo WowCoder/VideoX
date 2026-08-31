@@ -3,7 +3,6 @@ import AppShell from "@/components/AppShell";
 import { AuthModal, ProjectCreateModal, ToastContainer, UploadDrawer } from "@/components";
 import { Navigate, RouteParams, matchPath, useLocation, useNavigate } from "@/router";
 import { useAuthStore } from "@/stores/authStore";
-import { useUIStore, type ProjectStartMethod } from "@/stores/uiStore";
 import { postAuthStartAction } from "@/lib/publicNavigation";
 
 const SiteHome = lazy(() => import("@/views/SiteHome"));
@@ -66,7 +65,6 @@ export default function AppRouter() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { isAuthenticated, user } = useAuthStore();
-  const { openProjectCreate } = useUIStore();
 
   if (pathname === "/") {
     return <RouteView><SiteHome
@@ -90,8 +88,7 @@ export default function AppRouter() {
           navigate("/register", { state: postAuthStartAction(method) });
           return;
         }
-        openProjectCreate(method as ProjectStartMethod);
-        navigate("/workspace");
+        navigate(`/workspace?create=${method}`);
       }}
     /></RouteView>;
   }
@@ -103,6 +100,9 @@ export default function AppRouter() {
   }
   if (ProductPreviewView && pathname === "/workspace/inspiration/__preview__") {
     return <RouteView><ProductPreviewView type="inspiration" /></RouteView>;
+  }
+  if (ProductPreviewView && pathname === "/workspace/creation/__preview__") {
+    return <RouteView><ProductPreviewView type="creation" /></RouteView>;
   }
 
   const projectParams = matchPath("/workspace/projects/:projectId", pathname);

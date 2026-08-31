@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -20,11 +20,16 @@ import {
 } from "lucide-react";
 import { useLocation, useNavigate } from "@/router";
 import { getPostAuthStartAction } from "@/lib/publicNavigation";
+import {
+  loadWorkspaceCreationDraft,
+  type WorkspaceCreationSource,
+} from "@/lib/workspaceCreationDraft";
 import * as projectApi from "@/api/projects";
 import type { Project } from "@/api/projects";
 import { useUIStore, type ProjectStartMethod } from "@/stores/uiStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { VideoThumb } from "@/components/VideoThumb";
+import { WorkspaceCreationFlow } from "@/components/WorkspaceCreationFlow";
 import { formatTime } from "@/lib/utils";
 
 const statusLabels: Record<string, string> = {
@@ -37,6 +42,11 @@ const statusLabels: Record<string, string> = {
 };
 
 const PROJECT_PAGE_SIZE = 12;
+
+function creationSourceFromSearch(search: string): WorkspaceCreationSource | null {
+  const source = new URLSearchParams(search).get("create");
+  return source === "ai-script" || source === "write-script" || source === "upload-assets" ? source : null;
+}
 
 const startPaths = [
   {
@@ -177,13 +187,24 @@ export default function HomeDashboard() {
   const [page, setPage] = useState(1);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [openMenuProjectId, setOpenMenuProjectId] = useState<string | null>(null);
+  const [creationSource, setCreationSource] = useState<WorkspaceCreationSource | null>(() => (
+    creationSourceFromSearch(window.location.search) ?? loadWorkspaceCreationDraft()?.source ?? null
+  ));
+  const previousCreationSearchRef = useRef(location.search);
 
   useEffect(() => {
     const action = getPostAuthStartAction(location.state);
     if (!action) return;
-    openProjectCreate(action.method);
-    navigate("/workspace", { replace: true });
-  }, [location.state, navigate, openProjectCreate]);
+    setCreationSource(action.method);
+    navigate(`/workspace?create=${action.method}`, { replace: true });
+  }, [location.state, navigate]);
+
+  useEffect(() => {
+    const source = creationSourceFromSearch(location.search);
+    if (source) setCreationSource(source);
+    else if (creationSourceFromSearch(previousCreationSearchRef.current)) setCreationSource(null);
+    previousCreationSearchRef.current = location.search;
+  }, [location.search]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -246,7 +267,24 @@ export default function HomeDashboard() {
   }
 
   function startProject(intent: ProjectStartMethod) {
-    openProjectCreate(intent);
+    if (intent === "blank") {
+      openProjectCreate("blank");
+      return;
+    }
+    setCreationSource(intent);
+    navigate(`/workspace?create=${intent}`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function exitCreation() {
+    setCreationSource(null);
+    navigate("/workspace", { replace: true });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function changeCreationSource(source: WorkspaceCreationSource) {
+    setCreationSource(source);
+    navigate(`/workspace?create=${source}`, { replace: true });
   }
 
   function deleteProject(project: Project) {
@@ -257,10 +295,11 @@ export default function HomeDashboard() {
 
   return (
     <div className="mx-auto w-full max-w-[1280px] px-5 pb-16 pt-8 sm:px-7 lg:px-8 lg:pt-10">
+      {creationSource ? <WorkspaceCreationFlow initialSource={creationSource} onSourceChange={changeCreationSource} onExit={exitCreation} /> : <>
       <section aria-labelledby="workspace-start-title">
         <header className="max-w-4xl">
           <h1 id="workspace-start-title" className="text-[32px] font-semibold leading-tight tracking-[-0.045em] text-text sm:text-[38px]">从你已经有的内容开始</h1>
-          <p className="mt-2.5 max-w-4xl text-sm leading-6 text-muted">一个项目就是一支视频。无论已有脚本还是素材，都先填写项目信息，再进入同一个脚本编排工作台，边组织镜头、边处理素材、边实时预览成片。</p>
+          <p className="mt-2.5 max-w-4xl text-sm leading-6 text-muted">一个项目就是一支视频。无论已有想法、脚本还是素材，都先在工作台整理成可编辑脚本；确认内容和创作方式后，再创建项目并进入同一个脚本编排工作台。</p>
         </header>
 
         <div className="mt-7 grid gap-4 lg:grid-cols-2">
@@ -359,6 +398,7 @@ export default function HomeDashboard() {
           </>
         )}
       </section>
+      </>}
     </div>
   );
 }

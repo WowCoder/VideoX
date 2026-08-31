@@ -50,35 +50,37 @@ export const previewInspirationTasks: InspirationTask[] = [
   {
     id: "preview-topic-task", name: "AI 视频创作选题", taskType: "topic-recommendation",
     topicBrief: "AI 视频创作与工具更新", topicCount: 5,
+    discoveryConfig: { sourceStrategy: "preferred", monitorBrief: "", searchRecencyDays: 7 },
     schedule: { type: "daily", time: "09:00", weekday: 1, timeZone: "Asia/Shanghai" },
-    outputFormat: "格式化选题 + 参考外链", enabled: true,
+    outputFormat: "联网选题 + 真实参考外链", enabled: true,
     nextRunAt: new Date(Date.now() + 18 * 60 * 60 * 1000).toISOString(), lastRunAt: now,
     createdAt: now, updatedAt: now,
     sources: [
-      { id: "preview-source-1", sourceType: "web", url: "https://openai.com/news/", enabled: true },
-      { id: "preview-source-2", sourceType: "web", url: "https://example.com/video-news", enabled: true },
+      { id: "preview-source-1", sourceType: "web", url: "https://openai.com/news/", enabled: true, consecutiveFailures: 0 },
+      { id: "preview-source-2", sourceType: "web", url: "https://example.com/video-news", enabled: true, consecutiveFailures: 0 },
     ],
   },
   {
     id: "preview-link-task", name: "重点产品更新动态", taskType: "link-update",
     topicBrief: "", schedule: { type: "daily", time: "18:00", weekday: 1, timeZone: "Asia/Shanghai" },
-    outputFormat: "更新内容总结 + 原文外链", enabled: true,
+    discoveryConfig: { sourceStrategy: "only", monitorBrief: "只关注产品能力和编辑工作流变化", searchRecencyDays: 7 },
+    outputFormat: "有效变化摘要 + 原文证据", enabled: true,
     nextRunAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(), lastRunAt: now,
     createdAt: now, updatedAt: now,
     sources: [
-      { id: "preview-source-3", sourceType: "web", url: "https://openai.com/news/", enabled: true },
-      { id: "preview-source-4", sourceType: "web", url: "https://example.com/changelog", enabled: true },
+      { id: "preview-source-3", sourceType: "web", url: "https://openai.com/news/", enabled: true, consecutiveFailures: 0 },
+      { id: "preview-source-4", sourceType: "web", url: "https://example.com/changelog", enabled: true, consecutiveFailures: 0 },
     ],
   },
 ];
 
 export const previewInspirationRuns: Record<string, InspirationRun> = {
   "preview-topic-task": {
-    id: "preview-topic-run", taskId: "preview-topic-task", status: "SUCCEEDED", createdAt: now, finishedAt: now,
+    id: "preview-topic-run", taskId: "preview-topic-task", status: "SUCCEEDED", outcome: "CHANGED", metrics: {}, createdAt: now, finishedAt: now,
     results: [{
       id: "preview-topic-result", title: "AI 视频创作 · 最新选题", summary: "根据两个参考来源整理了 5 个可继续创作的方向。",
       topics: [
-        { id: "topic-1", order: 1, title: "多模态模型如何改变视频预演", angle: "创作效率", summary: "从脚本理解、分镜预演到镜头替换，解释新工作流的真实变化。", references: [{ label: "OpenAI News", url: "https://openai.com/news/" }] },
+        { id: "topic-1", order: 1, title: "多模态模型如何改变视频预演", angle: "创作效率", summary: "从脚本理解、分镜预演到镜头替换，解释新工作流的真实变化。", whyNow: "近期产品更新正在把视频预演从概念变成可测试的工作流。", hook: "以前拍完才发现脚本不成立，现在能不能在生成前就看见问题？", references: [{ label: "OpenAI News", url: "https://openai.com/news/" }] },
         { id: "topic-2", order: 2, title: "AI 视频工具进入可控编辑阶段", angle: "产品观察", summary: "比较一次性生成与可继续编辑的差异，以及创作者需要保留的判断。", references: [{ label: "Video News", url: "https://example.com/video-news" }] },
         { id: "topic-3", order: 3, title: "从素材理解到自动初剪", angle: "工作流", summary: "拆解素材识别、镜头匹配和主时间线装配。", references: [{ label: "OpenAI News", url: "https://openai.com/news/" }] },
         { id: "topic-4", order: 4, title: "可追溯来源为何成为 AI 内容底座", angle: "内容可信度", summary: "讨论外链、快照与结构化结果如何帮助创作者核查信息。", references: [{ label: "Video News", url: "https://example.com/video-news" }] },
@@ -87,7 +89,7 @@ export const previewInspirationRuns: Record<string, InspirationRun> = {
     }],
   },
   "preview-link-task": {
-    id: "preview-link-run", taskId: "preview-link-task", status: "SUCCEEDED", createdAt: now, finishedAt: now,
+    id: "preview-link-run", taskId: "preview-link-task", status: "SUCCEEDED", outcome: "CHANGED", metrics: {}, createdAt: now, finishedAt: now,
     results: [{
       id: "preview-link-result", title: "重点产品 · 最新动态", summary: "已检查 2 个链接并整理本轮变化。", topics: [],
       updates: [

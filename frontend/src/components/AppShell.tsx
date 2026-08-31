@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   Bell,
   CheckCheck,
@@ -209,11 +210,11 @@ function AccountMenu({ placement }: { placement: "sidebar" | "topbar" }) {
     navigate(`/workspace/account?section=${section}`);
   }
 
-  return (
+  return createPortal(
     <>
       <button className="fixed inset-0 z-40 cursor-default" onClick={closeAccountMenu} aria-label="关闭账号菜单" type="button" />
       <section
-        className={`absolute z-50 w-[310px] overflow-hidden rounded-2xl border border-line bg-surface shadow-soft ${placement === "sidebar" ? "bottom-[66px] left-3" : "right-4 top-[58px]"}`}
+        className={`fixed z-50 w-[310px] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-line bg-surface shadow-soft ${placement === "sidebar" ? "bottom-[66px] left-3" : "right-4 top-[58px]"}`}
         aria-label="个人中心菜单"
       >
         <header className="flex items-center gap-3 border-b border-line px-4 py-4">
@@ -245,7 +246,8 @@ function AccountMenu({ placement }: { placement: "sidebar" | "topbar" }) {
           <button className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-red transition hover:bg-red/5" onClick={() => { closeAccountMenu(); logout(); notify("已退出登录"); navigate("/"); }} type="button"><LogOut size={16} />退出登录</button>
         </footer>
       </section>
-    </>
+    </>,
+    document.body,
   );
 }
 
