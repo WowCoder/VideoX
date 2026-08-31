@@ -92,7 +92,7 @@ class ProductionSettingsTests(unittest.TestCase):
         self.assertTrue(settings.has_image_to_video)
         self.assertEqual(settings.active_text_model, "agnes-2.5-flash")
         self.assertEqual(settings.active_image_model, "agnes-image-2.1-flash")
-        self.assertEqual(settings.active_text_to_video_model, "agnes-video-v2.0")
+        self.assertEqual(settings.active_text_to_video_model, "agnes-video-2.5-flash")
 
     def test_agnes_availability_requires_agnes_key(self):
         settings = Settings(

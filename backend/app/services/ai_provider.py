@@ -868,9 +868,16 @@ def _agnes_video_payload(
     first_frame: str,
     duration: Optional[int],
     aspect_ratio: str,
+    *,
+    mode: Optional[str] = None,
+    last_frame: str = "",
+    reference_images: Optional[list[str]] = None,
 ) -> tuple[dict, bool]:
-    """构造 Agnes 视频请求，返回 payload 与是否为免费 V2.0 协议。"""
+    """构造 Agnes 视频请求，返回 payload 与是否使用 agnesapi 轮询。"""
+    reference_images = reference_images or []
     if model == "agnes-video-v2.0":
+        if last_frame or reference_images or mode == "reference":
+            raise RuntimeError("Agnes Video V2.0 不支持尾帧或多图参考")
         frame_rate = 24
         selected_duration = max(
             3,
@@ -895,18 +902,37 @@ def _agnes_video_payload(
         4,
         min(12, duration or settings.ai_video_duration_seconds),
     )
+    selected_mode = mode or ("keyframe" if first_frame or last_frame else "text")
+    if selected_mode not in {"text", "keyframe", "reference"}:
+        raise RuntimeError("Agnes 视频生成模式无效")
+    if selected_mode == "text" and (first_frame or last_frame or reference_images):
+        raise RuntimeError("文生视频模式不能携带参考图片")
+    if selected_mode == "keyframe" and not (first_frame or last_frame):
+        raise RuntimeError("关键帧模式至少需要首帧或尾帧")
+    if selected_mode == "reference" and not reference_images:
+        raise RuntimeError("图片参考模式至少需要一张参考图片")
+    if len(reference_images) > 5:
+        raise RuntimeError("Agnes Video 2.5 Flash 最多支持 5 张参考图片")
+
     payload = {
         "model": model,
         "prompt": prompt,
-        "seconds": selected_duration,
+        "mode": selected_mode,
+        "seconds": str(selected_duration),
         "size": "720P",
         "aspect_ratio": (
             aspect_ratio if aspect_ratio in {"16:9", "9:16", "1:1", "4:3"} else "16:9"
         ),
     }
-    if first_frame:
-        payload.update({"mode": "keyframe", "first_frame": first_frame})
-    return payload, False
+    if selected_mode == "keyframe":
+        if first_frame:
+            payload["first_frame"] = first_frame
+        if last_frame:
+            payload["last_frame"] = last_frame
+    elif selected_mode == "reference":
+        payload["images"] = reference_images
+    uses_agnesapi_poll = model == "agnes-video-v2.0" or model.startswith("agnes-video-2.5")
+    return payload, uses_agnesapi_poll
 
 
 def _agnes_error_detail(response: httpx.Response) -> str:
@@ -1013,23 +1039,43 @@ async def _generate_agnes_video(
     duration: Optional[int],
     aspect_ratio: str,
     capability: str,
+    *,
+    mode: Optional[str] = None,
+    first_frame_source: str = "",
+    last_frame_source: str = "",
+    reference_image_sources: Optional[list[str]] = None,
 ) -> str:
     _require_agnes(capability)
     selected_model = model or settings.agnes_video_model
     if not selected_model:
         raise RuntimeError(f"{capability}模型未配置")
+    first_frame_source = first_frame_source or image_source
     first_frame = ""
-    if image_source:
+    last_frame = ""
+    reference_images: list[str] = []
+    if first_frame_source:
         first_frame = await _prepare_agnes_video_first_frame(
-            image_source,
+            first_frame_source,
             aspect_ratio,
         )
-    payload, uses_v20_protocol = _agnes_video_payload(
+    if last_frame_source:
+        last_frame = await _prepare_agnes_video_first_frame(
+            last_frame_source,
+            aspect_ratio,
+        )
+    for source in reference_image_sources or []:
+        reference_images.append(
+            await _prepare_agnes_video_first_frame(source, aspect_ratio)
+        )
+    payload, uses_agnesapi_poll = _agnes_video_payload(
         selected_model,
         prompt,
         first_frame,
         duration,
         aspect_ratio,
+        mode=mode,
+        last_frame=last_frame,
+        reference_images=reference_images,
     )
 
     headers = {
@@ -1055,12 +1101,15 @@ async def _generate_agnes_video(
         for _ in range(attempts):
             # V2.0 刚接收任务时立即查询容易触发限流，首次查询也遵循轮询间隔。
             await asyncio.sleep(poll_delay)
-            if uses_v20_protocol:
+            if uses_agnesapi_poll:
                 api_root = settings.agnes_base_url.rstrip("/").removesuffix("/v1")
                 poll_response = await client.get(
                     f"{api_root}/agnesapi",
                     headers=headers,
-                    params={"video_id": task_id},
+                    params={
+                        "video_id": task_id,
+                        **({"model_name": selected_model} if selected_model != "agnes-video-v2.0" else {}),
+                    },
                 )
             else:
                 poll_response = await client.get(
@@ -1107,19 +1156,26 @@ async def generate_video(
     model: Optional[str] = None,
     duration: Optional[int] = None,
     aspect_ratio: str = "16:9",
+    *,
+    provider: Optional[str] = None,
+    mode: Optional[str] = None,
+    first_frame_url: str = "",
+    last_frame_url: str = "",
+    reference_image_urls: Optional[list[str]] = None,
 ) -> str:
     """生成文生或图生视频，轮询完成后统一返回最终媒体 URL。"""
-    if image_url:
-        provider = settings.ai_image_to_video_provider.lower()
-        if provider not in {"agnes", "dashscope"}:
+    has_image_input = bool(image_url or first_frame_url or last_frame_url or reference_image_urls)
+    if has_image_input:
+        selected_provider = (provider or settings.ai_image_to_video_provider).lower()
+        if selected_provider not in {"agnes", "dashscope"}:
             raise RuntimeError("图生视频服务未启用")
         capability = "图生视频"
     else:
-        provider = settings.ai_text_to_video_provider.lower()
-        if provider not in {"agnes", "dashscope"}:
+        selected_provider = (provider or settings.ai_text_to_video_provider).lower()
+        if selected_provider not in {"agnes", "dashscope"}:
             raise RuntimeError("文生视频服务未启用")
         capability = "文生视频"
-    if provider == "agnes":
+    if selected_provider == "agnes":
         return await _generate_agnes_video(
             prompt,
             image_url,
@@ -1127,7 +1183,16 @@ async def generate_video(
             duration,
             aspect_ratio,
             capability,
+            mode=mode,
+            first_frame_source=first_frame_url,
+            last_frame_source=last_frame_url,
+            reference_image_sources=reference_image_urls,
         )
+
+    if mode == "reference" or last_frame_url or reference_image_urls:
+        raise RuntimeError("当前视频服务不支持多图参考或尾帧控制")
+    if first_frame_url:
+        image_url = first_frame_url
 
     selected_model = model or (
         settings.ai_image_to_video_model if image_url else settings.ai_text_to_video_model

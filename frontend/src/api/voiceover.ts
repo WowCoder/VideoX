@@ -26,14 +26,6 @@ export function getVoiceoverWorkspace(projectId: string): Promise<VoiceoverWorks
   return http.get(`/voiceover/projects/${projectId}`);
 }
 
-export function estimateVoiceover(projectId: string, input: { source: string; model: string; sceneIds?: string[] }): Promise<{ lineCount: number; billableCharacters: number; estimatedCostYuan: number }> {
-  return http.post(`/voiceover/projects/${projectId}/estimate`, {
-    source: input.source,
-    model: input.model,
-    scene_ids: input.sceneIds ?? [],
-  });
-}
-
 export function applyVoiceoverMaster(projectId: string, assetId: string, expectedRevision: number): Promise<{ assetId: string; revision: number; applied: boolean }> {
   return http.post(`/voiceover/projects/${projectId}/apply-master`, {
     asset_id: assetId,

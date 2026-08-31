@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Loader2, Mic2, RefreshCw, X } from "lucide-react";
-import { estimateVoiceover, getVoiceoverWorkspace, type VoiceLine, type VoiceoverWorkspace } from "@/api/voiceover";
+import { getVoiceoverWorkspace, type VoiceLine, type VoiceoverWorkspace } from "@/api/voiceover";
 import type { Scene, Shot } from "@/api/projects";
 import { Select } from "@/components/ui/Select";
 
@@ -38,6 +38,13 @@ function staleCopy(line: VoiceLine) {
   return labels.filter(Boolean).join("、");
 }
 
+function userFacingVoiceoverError(message: string) {
+  if (/dashscope|qwen|provider|model|api[_ -]?key|ai_tts_provider/i.test(message)) {
+    return "AI 配音服务暂不可用，请稍后重试；如持续失败，请联系管理员。";
+  }
+  return message;
+}
+
 function selectedShotRange(scenes: Scene[], selectedShot?: Shot) {
   if (!selectedShot?.id) return null;
   let cursor = 0;
@@ -64,7 +71,6 @@ export function AIVoiceoverModal({
   const [instruction, setInstruction] = useState("自然、清晰，语速适中，保持前后声线一致");
   const [emotion, setEmotion] = useState("");
   const [force, setForce] = useState(false);
-  const [estimate, setEstimate] = useState<{ lineCount: number; billableCharacters: number; estimatedCostYuan: number } | null>(null);
 
   useEffect(() => {
     if (!open || !projectId || projectId === "__preview__") return;
@@ -78,7 +84,7 @@ export function AIVoiceoverModal({
         setModel(workspace.defaultModel);
         setVoice(workspace.defaultVoice);
       })
-      .catch((reason) => active && setLoadError(reason instanceof Error ? reason.message : "配音状态加载失败"))
+      .catch((reason) => active && setLoadError(userFacingVoiceoverError(reason instanceof Error ? reason.message : "配音状态加载失败")))
       .finally(() => active && setLoading(false));
     return () => { active = false; };
   }, [open, projectId]);
@@ -97,20 +103,6 @@ export function AIVoiceoverModal({
     if (range === "scene") return line.sceneId === selectedScene?.id;
     return Boolean(shotRange && line.startMs < shotRange.endMs && line.endMs > shotRange.startMs);
   }) ?? [], [data?.lines, range, selectedScene?.id, shotRange]);
-
-  useEffect(() => {
-    if (!open || projectId === "__preview__") return;
-    let active = true;
-    const sceneIds = range === "project"
-      ? []
-      : range === "scene" && selectedScene?.id
-        ? [selectedScene.id]
-        : shotRange?.sceneId ? [shotRange.sceneId] : [];
-    void estimateVoiceover(projectId, { source: "effective_subtitles", model, sceneIds })
-      .then((value) => active && setEstimate(value))
-      .catch(() => active && setEstimate(null));
-    return () => { active = false; };
-  }, [open, projectId, range, selectedScene?.id, shotRange?.sceneId, model]);
 
   const statusCounts = visibleLines.reduce(
     (counts, line) => ({ ...counts, [line.status]: (counts[line.status] ?? 0) + 1 }),
@@ -145,25 +137,25 @@ export function AIVoiceoverModal({
   return <div className="fixed inset-0 z-50 grid place-items-center bg-ink/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="voiceover-title">
     <section className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-2xl">
       <header className="flex items-start justify-between border-b border-line px-5 py-4">
-        <div className="flex gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-soft text-blue"><Mic2 size={18} /></span><div><h2 id="voiceover-title" className="text-sm font-semibold text-text">AI 旁白生成</h2><p className="mt-1 text-[11px] text-muted">按照字幕逐段生成并拼接旁白母带；字幕变化后不会自动产生费用。</p></div></div>
+        <div className="flex gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-soft text-blue"><Mic2 size={18} /></span><div><h2 id="voiceover-title" className="text-sm font-semibold text-text">AI 旁白生成</h2><p className="mt-1 text-[11px] text-muted">按照字幕逐段生成并合成旁白；字幕变化后会标记为需要更新，不会自动重新生成。</p></div></div>
         <button type="button" aria-label="关闭旁白生成" onClick={onClose} disabled={pending} className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-canvas"><X size={15} /></button>
       </header>
       <div className="grid min-h-0 flex-1 md:grid-cols-[310px_1fr]">
         <div className="space-y-4 overflow-y-auto border-r border-line p-5">
-          {(loadError || error) && <div className="flex gap-2 rounded-lg bg-red/5 p-3 text-xs text-red"><AlertTriangle size={14} className="shrink-0" />{loadError || error}</div>}
-          {loading ? <div className="flex items-center gap-2 text-xs text-muted"><Loader2 size={14} className="animate-spin" />加载配音配置…</div> : data && !data.enabled ? <div className="rounded-lg bg-amber/10 p-3 text-xs leading-5 text-amber">后端尚未启用 AI 配音。请配置 <code>AI_TTS_PROVIDER=dashscope</code> 和 <code>DASHSCOPE_API_KEY</code>。</div> : null}
+          {(loadError || error) && <div className="flex gap-2 rounded-lg bg-red/5 p-3 text-xs text-red"><AlertTriangle size={14} className="shrink-0" />{userFacingVoiceoverError(loadError || error || "配音服务暂不可用")}</div>}
+          {loading ? <div className="flex items-center gap-2 text-xs text-muted"><Loader2 size={14} className="animate-spin" />加载配音配置…</div> : data && !data.enabled ? <div className="rounded-lg bg-amber/10 p-3 text-xs leading-5 text-amber">AI 配音服务暂不可用，请稍后重试或联系管理员。</div> : null}
           <fieldset><legend className="text-xs font-semibold text-text">生成范围</legend><div className="mt-2 grid grid-cols-3 gap-2">
             <button type="button" onClick={() => setRange("project")} className={`rounded-lg border py-2 text-xs ${range === "project" ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>全片</button>
             <button type="button" disabled={!selectedScene} onClick={() => setRange("scene")} className={`rounded-lg border py-2 text-xs disabled:opacity-40 ${range === "scene" ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>当前场景</button>
             <button type="button" disabled={!shotRange} onClick={() => setRange("shot")} className={`rounded-lg border py-2 text-xs disabled:opacity-40 ${range === "shot" ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>当前镜头</button>
           </div></fieldset>
           <div className="rounded-xl border border-blue/15 bg-blue-soft/50 p-3 text-[11px] leading-5 text-muted"><strong className="block text-xs text-text">状态依据清晰可查</strong>文字、开始时间或结束时间变化时，旧版本会保留并标出具体原因；仍可试听，但更新后才会进入新母带。</div>
-          <label className="block text-xs font-medium text-muted">表达模式<Select value={model} onChange={(event) => setModel(event.target.value)} wrapperClassName="mt-1.5">{data?.models.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</Select><span className="mt-1 block text-[10px] leading-4">{selectedModel?.description}</span></label>
+          <label className="block text-xs font-medium text-muted">表达模式<Select value={model} onChange={(event) => setModel(event.target.value)} wrapperClassName="mt-1.5">{data?.models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><span className="mt-1 block text-[10px] leading-4">{selectedModel?.description}</span></label>
           <label className="block text-xs font-medium text-muted">音色<Select value={voice} onChange={(event) => setVoice(event.target.value)} wrapperClassName="mt-1.5">{selectedModel?.voices.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.description}</option>)}</Select></label>
           <label className="block text-xs font-medium text-muted">导演指令<textarea rows={3} value={instruction} onChange={(event) => setInstruction(event.target.value)} className="mt-1.5 w-full resize-y rounded-lg border border-line p-2.5 text-xs leading-5 text-text" /></label>
           {model.startsWith("qwen-audio-") && <label className="block text-xs font-medium text-muted">情绪标签<Select value={emotion} onChange={(event) => setEmotion(event.target.value)} wrapperClassName="mt-1.5"><option value="">自动 / 无标签</option><option value="serious">严肃</option><option value="excited">兴奋</option><option value="empathetic">共情</option><option value="whispers">耳语</option><option value="curious">好奇</option><option value="sad">悲伤</option></Select></label>}
-          <label className="flex items-start gap-2 rounded-lg border border-line p-3 text-[11px] leading-5 text-muted"><input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} className="mt-1" /><span><strong className="block text-text">全部重新生成</strong>关闭时只生成缺失或过期台词；开启会绕过缓存并产生新的调用费用。</span></label>
-          {estimate && <div className="rounded-xl bg-canvas p-3 text-[11px] leading-5 text-muted"><strong className="block text-xs text-text">本次预计</strong>{range === "shot" ? visibleLines.length : estimate.lineCount} 条台词{range !== "shot" && <> · {estimate.billableCharacters.toLocaleString()} 计费字符 · 约 ¥{estimate.estimatedCostYuan.toFixed(4)}</>}</div>}
+          <label className="flex items-start gap-2 rounded-lg border border-line p-3 text-[11px] leading-5 text-muted"><input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} className="mt-1" /><span><strong className="block text-text">全部重新生成</strong>关闭时只生成缺失或需要更新的台词；开启后已有台词也会重新生成，并重新消耗配音额度。</span></label>
+          <div className="rounded-xl bg-canvas p-3 text-[11px] leading-5 text-muted"><strong className="block text-xs text-text">本次将处理</strong>{visibleLines.length} 条台词<span className="block">将消耗 AI 配音额度，实际以套餐用量为准。</span></div>
         </div>
         <div className="min-h-0 overflow-y-auto p-5">
           <div className="flex items-center justify-between"><div><strong className="text-xs text-text">全部台词与历史版本</strong><p className="mt-1 text-[10px] text-muted">最新 {statusCounts.ready ?? 0} · 过期 {statusCounts.stale ?? 0} · 生成中 {statusCounts.generating ?? 0}</p></div><span className="rounded-full bg-canvas px-2.5 py-1 text-[10px] text-muted">{visibleLines.length} 条</span></div>
@@ -175,12 +167,12 @@ export function AIVoiceoverModal({
               <p className="mt-2 text-xs leading-5 text-text">{line.text}</p>
               {selected?.audioUrl && <audio controls preload="none" src={selected.audioUrl} className="mt-2 h-7 w-full" />}
               <div className="mt-2 flex items-center justify-between"><span className="text-[9px] text-muted">当前版本{selected ? ` · ${(selected.durationMs / 1000).toFixed(1)}s` : "尚未生成"}</span><button type="button" disabled={pending || !data?.enabled} onClick={() => onGenerate({ type: "scene", sceneIds: [line.sceneId] }, { source: "effective_subtitles", model, voice, instruction, emotion, voice_line_ids: [line.id], generate_mode: "force_regenerate", apply_after_success: true })} className="rounded-md bg-blue-soft px-2 py-1 text-[10px] font-semibold text-blue disabled:opacity-40">重生成本句</button></div>
-              {line.takes.length > 1 && <details className="mt-2 rounded-lg bg-canvas px-2.5 py-2"><summary className="cursor-pointer text-[10px] font-medium text-muted">查看全部 {line.takes.length} 个语音版本</summary><div className="mt-2 space-y-2">{line.takes.map((take, index) => <div key={take.id} className="rounded-lg border border-line bg-white p-2"><div className="flex items-center justify-between text-[9px] text-muted"><span>版本 {line.takes.length - index}{take.id === selected?.id ? " · 当前使用" : ""}</span><span>{(take.durationMs / 1000).toFixed(1)}s · {take.voiceId}</span></div>{take.audioUrl && <audio controls preload="none" src={take.audioUrl} className="mt-1.5 h-7 w-full" />}</div>)}</div></details>}
+              {line.takes.length > 1 && <details className="mt-2 rounded-lg bg-canvas px-2.5 py-2"><summary className="cursor-pointer text-[10px] font-medium text-muted">查看全部 {line.takes.length} 个语音版本</summary><div className="mt-2 space-y-2">{line.takes.map((take, index) => <div key={take.id} className="rounded-lg border border-line bg-white p-2"><div className="flex items-center justify-between text-[9px] text-muted"><span>版本 {line.takes.length - index}{take.id === selected?.id ? " · 当前使用" : ""}</span><span>{(take.durationMs / 1000).toFixed(1)}s</span></div>{take.audioUrl && <audio controls preload="none" src={take.audioUrl} className="mt-1.5 h-7 w-full" />}</div>)}</div></details>}
             </article>;
           })}</div></section>) : <div className="rounded-xl border border-dashed border-line p-8 text-center text-xs text-muted">当前范围没有旁白台词。字幕台词将在保存后显示，可逐条生成和试听。</div>}</div>
         </div>
       </div>
-      <footer className="flex items-center justify-between border-t border-line bg-canvas/60 px-5 py-4"><span className="text-[10px] text-muted">内部母带：48kHz WAV · 严格锁定字幕时间窗</span><div className="flex gap-2"><button type="button" onClick={onClose} disabled={pending} className="rounded-lg border border-line bg-white px-4 py-2 text-xs text-text">取消</button><button type="button" disabled={pending || !data?.enabled || !visibleLines.length} onClick={generateVisible} className="flex items-center gap-1.5 rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white disabled:opacity-45">{pending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}{pending ? "正在创建任务…" : force ? "全部重新生成" : "生成缺失/过期配音"}</button></div></footer>
+      <footer className="flex items-center justify-between border-t border-line bg-canvas/60 px-5 py-4"><span className="text-[10px] text-muted">生成后会按字幕时间自动合成并应用到项目</span><div className="flex gap-2"><button type="button" onClick={onClose} disabled={pending} className="rounded-lg border border-line bg-white px-4 py-2 text-xs text-text">取消</button><button type="button" disabled={pending || !data?.enabled || !visibleLines.length} onClick={generateVisible} className="flex items-center gap-1.5 rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white disabled:opacity-45">{pending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}{pending ? "正在创建任务…" : force ? "全部重新生成" : "生成缺失/需更新配音"}</button></div></footer>
     </section>
   </div>;
 }

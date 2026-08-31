@@ -26,7 +26,7 @@ settings = get_settings()
 MODEL_OPTIONS = [
     {"id": "qwen-audio-3.0-tts-flash", "name": "剧情表现", "description": "支持情绪和拟声标签，适合剧情台词"},
     {"id": "qwen3-tts-instruct-flash", "name": "可控表达", "description": "使用自然语言控制语速、情绪和风格"},
-    {"id": "qwen3-tts-flash", "name": "标准旁白", "description": "适合普通解说和低成本草稿"},
+    {"id": "qwen3-tts-flash", "name": "标准旁白", "description": "适合普通解说和快速草稿"},
 ]
 
 VOICE_OPTIONS = {

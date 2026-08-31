@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AlignLeft, ArrowDown, ArrowUp, AudioLines, Copy, Film, History, Image as ImageIcon, Library, Maximize2,
+  AlignLeft, ArrowDown, ArrowUp, AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, Film, GripVertical, History, Image as ImageIcon, Library, Maximize2,
   Mic2, MoreHorizontal, Music2, Pause, Pencil, Play, Plus, RotateCcw, Scissors, Search, SlidersHorizontal, Sparkles,
   Trash2, Volume2, VolumeX, WandSparkles, X,
 } from "lucide-react";
@@ -21,6 +21,12 @@ import {
 
 type ResourceTab = "outline" | "assets" | "settings";
 type InspectorTab = "visual" | "audio" | "caption";
+type EditorPaneSide = "left" | "right";
+
+const EDITOR_PANE_STORAGE_KEY = "openvma:project-editor-pane-widths:v1";
+const EDITOR_PANE_DEFAULTS = { left: 260, right: 420 };
+const EDITOR_PANE_MINIMUMS = { left: 200, center: 420, right: 340 };
+const EDITOR_SPLITTER_WIDTH = 8;
 
 interface Props {
   workspace: Workspace;
@@ -35,6 +41,7 @@ interface Props {
   onUpdateScene: (sceneId: string, patch: Partial<Scene>) => void;
   onMoveScene: (sceneId: string, direction: -1 | 1) => void;
   onUpdateShot: (sceneId: string, shotId: string, patch: Partial<Shot>) => void;
+  onMoveShot: (sceneId: string, shotId: string, direction: -1 | 1) => void;
   onSplitShot: (sceneId: string, shotId: string, offsetMs: number) => void;
   onRemoveShotAsset: (sceneId: string, shotId: string) => void;
   onDuplicateShot: (sceneId: string, shotId: string) => void;
@@ -443,7 +450,7 @@ function AudioAssetPicker({ role, assets, onClose, onSelect }: {
 
 export function MvpScriptComposer({
   workspace, selectedScene, selectedShot, operationPending, onSelectScene, onSelectShot,
-  onUpdateDocumentSettings, onApplyGlobalColorGrade, onUpdateProject, onUpdateScene, onMoveScene, onUpdateShot, onSplitShot, onRemoveShotAsset, onDuplicateShot, onRestoreSubtitle, onAddScene,
+  onUpdateDocumentSettings, onApplyGlobalColorGrade, onUpdateProject, onUpdateScene, onMoveScene, onUpdateShot, onMoveShot, onSplitShot, onRemoveShotAsset, onDuplicateShot, onRestoreSubtitle, onAddScene,
   onAddShot, onDeleteScene, onDeleteShot, onRunOperation, onOpenQuickAI, onOpenVoiceover, onApplyVoiceoverMaster,
 }: Props) {
   const [resourceTab, setResourceTab] = useState<ResourceTab>("outline");
@@ -453,6 +460,10 @@ export function MvpScriptComposer({
   const [replacementPicking, setReplacementPicking] = useState(false);
   const [assetToApply, setAssetToApply] = useState<Asset | null>(null);
   const [editingSceneId, setEditingSceneId] = useState<string | null>(null);
+  const [shotPickerOpen, setShotPickerOpen] = useState(false);
+  const [arrangeMode, setArrangeMode] = useState(false);
+  const [arrangeDrag, setArrangeDrag] = useState<{ type: "scene"; sceneId: string } | { type: "shot"; sceneId: string; shotId: string } | null>(null);
+  const [arrangeDropTarget, setArrangeDropTarget] = useState<{ type: "scene"; id: string } | { type: "shot"; id: string } | null>(null);
   const [audioPickerRole, setAudioPickerRole] = useState<"voice" | "music" | null>(null);
   const [audioApplyPending, setAudioApplyPending] = useState(false);
   const [trimOpen, setTrimOpen] = useState(false);
@@ -462,6 +473,21 @@ export function MvpScriptComposer({
   const [playing, setPlaying] = useState(false);
   const [previewMuted, setPreviewMuted] = useState(false);
   const [playheadMs, setPlayheadMs] = useState(0);
+  const [paneWidths, setPaneWidths] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(EDITOR_PANE_STORAGE_KEY) ?? "null") as Partial<typeof EDITOR_PANE_DEFAULTS> | null;
+      return {
+        left: typeof stored?.left === "number" ? stored.left : EDITOR_PANE_DEFAULTS.left,
+        right: typeof stored?.right === "number" ? stored.right : EDITOR_PANE_DEFAULTS.right,
+      };
+    } catch {
+      return EDITOR_PANE_DEFAULTS;
+    }
+  });
+  const editorGridRef = useRef<HTMLDivElement | null>(null);
+  const arrangeItemRefs = useRef(new Map<string, HTMLElement>());
+  const arrangePreviousRects = useRef(new Map<string, DOMRect>());
+  const shotPickerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const stageHostRef = useRef<HTMLDivElement | null>(null);
   const [stageAvailable, setStageAvailable] = useState({ width: 1, height: 1 });
@@ -517,16 +543,60 @@ export function MvpScriptComposer({
 
   useEffect(() => { playheadRef.current = playheadMs; }, [playheadMs]);
   useEffect(() => {
+    if (!shotPickerOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!shotPickerRef.current?.contains(event.target as Node)) setShotPickerOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShotPickerOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [shotPickerOpen]);
+  useLayoutEffect(() => {
+    if (!arrangePreviousRects.current.size) return;
+    arrangeItemRefs.current.forEach((element, key) => {
+      const previous = arrangePreviousRects.current.get(key);
+      if (!previous) return;
+      const current = element.getBoundingClientRect();
+      const deltaX = previous.left - current.left;
+      const deltaY = previous.top - current.top;
+      if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+      element.animate([
+        { transform: `translate(${deltaX}px, ${deltaY}px)` },
+        { transform: "translate(0, 0)" },
+      ], {
+        duration: 220,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      });
+    });
+    arrangePreviousRects.current.clear();
+  }, [scenes]);
+  useEffect(() => {
+    localStorage.setItem(EDITOR_PANE_STORAGE_KEY, JSON.stringify(paneWidths));
+  }, [paneWidths]);
+  useEffect(() => {
     if (!globalColorDirty) setGlobalColorDraft(globalColorGrade);
   }, [globalColorDirty, globalColorGrade]);
   useEffect(() => {
     const host = stageHostRef.current;
     if (!host) return;
-    const update = () => setStageAvailable({ width: host.clientWidth, height: host.clientHeight });
+    const update = () => setStageAvailable({
+      width: host.clientWidth,
+      height: Math.min(460, Math.max(240, window.innerHeight * 0.46)),
+    });
     update();
     const observer = new ResizeObserver(update);
     observer.observe(host);
-    return () => observer.disconnect();
+    window.addEventListener("resize", update);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
   }, []);
   useEffect(() => {
     if (!playing) return;
@@ -555,9 +625,6 @@ export function MvpScriptComposer({
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
   }, [model.durationMs, playing]);
-  useEffect(() => {
-    if (playing && activeShot?.id && activeShot.id !== selectedShot?.id) onSelectShot(activeShot.id);
-  }, [activeShot?.id, onSelectShot, playing, selectedShot?.id]);
   useEffect(() => {
     if (playing || !selectedShot?.id) return;
     const selectedMeta = model.shots.find((shot) => shot.id === selectedShot.id);
@@ -697,6 +764,106 @@ export function MvpScriptComposer({
     else void stageRef.current.requestFullscreen();
   }
 
+  function moveSceneTo(sceneId: string, targetIndex: number) {
+    const from = scenes.findIndex((scene) => scene.id === sceneId);
+    if (from < 0 || from === targetIndex) return;
+    const direction: -1 | 1 = targetIndex > from ? 1 : -1;
+    for (let index = from; index !== targetIndex; index += direction) onMoveScene(sceneId, direction);
+  }
+  function setArrangeItemRef(key: string, element: HTMLElement | null) {
+    if (element) arrangeItemRefs.current.set(key, element);
+    else arrangeItemRefs.current.delete(key);
+  }
+  function showArrangeDropTarget(target: { type: "scene" | "shot"; id: string }) {
+    setArrangeDropTarget((current) => current?.type === target.type && current.id === target.id ? current : target);
+  }
+  function captureArrangePositions(type: "scene" | "shot") {
+    const prefix = `${type}:`;
+    arrangePreviousRects.current = new Map(
+      [...arrangeItemRefs.current.entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, element]) => [key, element.getBoundingClientRect()]),
+    );
+  }
+  function moveShotTo(sceneId: string, shotId: string, targetIndex: number) {
+    const scene = scenes.find((item) => item.id === sceneId);
+    const from = scene?.shots.findIndex((shot) => shot.id === shotId) ?? -1;
+    if (from < 0 || from === targetIndex) return;
+    const direction: -1 | 1 = targetIndex > from ? 1 : -1;
+    for (let index = from; index !== targetIndex; index += direction) onMoveShot(sceneId, shotId, direction);
+  }
+  function dropScene(targetIndex: number, event: React.DragEvent) {
+    event.preventDefault();
+    if (arrangeDrag?.type === "scene") {
+      const sourceIndex = scenes.findIndex((scene) => scene.id === arrangeDrag.sceneId);
+      if (sourceIndex >= 0 && sourceIndex !== targetIndex) {
+        captureArrangePositions("scene");
+        moveSceneTo(arrangeDrag.sceneId, targetIndex);
+      }
+    }
+    setArrangeDrag(null);
+    setArrangeDropTarget(null);
+  }
+  function dropShot(sceneId: string, targetIndex: number, event: React.DragEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (arrangeDrag?.type === "shot" && arrangeDrag.sceneId === sceneId) {
+      const scene = scenes.find((item) => item.id === sceneId);
+      const sourceIndex = scene?.shots.findIndex((shot) => shot.id === arrangeDrag.shotId) ?? -1;
+      if (sourceIndex >= 0 && sourceIndex !== targetIndex) {
+        captureArrangePositions("shot");
+        moveShotTo(sceneId, arrangeDrag.shotId, targetIndex);
+      }
+    }
+    setArrangeDrag(null);
+    setArrangeDropTarget(null);
+  }
+
+  function paneWidthLimit(side: EditorPaneSide) {
+    const total = editorGridRef.current?.clientWidth ?? 1440;
+    const reserved = EDITOR_SPLITTER_WIDTH * 2 + EDITOR_PANE_MINIMUMS.center;
+    return side === "left"
+      ? Math.max(EDITOR_PANE_MINIMUMS.left, total - paneWidths.right - reserved)
+      : Math.max(EDITOR_PANE_MINIMUMS.right, total - paneWidths.left - reserved);
+  }
+  function adjustPaneWidth(side: EditorPaneSide, nextWidth: number) {
+    const minimum = EDITOR_PANE_MINIMUMS[side];
+    const maximum = paneWidthLimit(side);
+    setPaneWidths((current) => ({ ...current, [side]: Math.round(clamp(nextWidth, minimum, maximum)) }));
+  }
+  function startPaneResize(side: EditorPaneSide, event: React.PointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = paneWidths[side];
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const delta = moveEvent.clientX - startX;
+      adjustPaneWidth(side, startWidth + (side === "left" ? delta : -delta));
+    };
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  }
+  function paneSplitter(side: EditorPaneSide) {
+    const label = side === "left" ? "调整场景与分镜编辑区域宽度" : "调整分镜编辑与全片预览区域宽度";
+    return <button
+      type="button"
+      aria-label={label}
+      title={`${label}；双击恢复默认宽度`}
+      onPointerDown={(event) => startPaneResize(side, event)}
+      onDoubleClick={() => adjustPaneWidth(side, EDITOR_PANE_DEFAULTS[side])}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const direction = event.key === "ArrowRight" ? 1 : -1;
+        adjustPaneWidth(side, paneWidths[side] + direction * (side === "left" ? 16 : -16));
+      }}
+      className={`group relative z-20 row-[1/4] min-h-0 cursor-col-resize bg-line/80 outline-none transition hover:bg-blue/35 focus-visible:bg-blue/40 ${side === "left" ? "col-[2]" : "col-[4]"}`}
+    ><span className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-transparent transition group-hover:inset-y-4 group-hover:bg-blue group-focus-visible:inset-y-4 group-focus-visible:bg-blue" /></button>;
+  }
+
   const voiceoverQuery = useQuery({
     queryKey: ["voiceover", workspace.project.id, workspace.document.revision],
     queryFn: () => getVoiceoverWorkspace(workspace.project.id),
@@ -737,15 +904,122 @@ export function MvpScriptComposer({
   const canSplitSelectedShot = Boolean(selectedShotMeta)
     && selectedSplitOffsetMs >= 200
     && selectedSplitOffsetMs <= (selectedShot?.durationMs ?? 0) - 200;
+  const selectedSceneShotIndex = selectedScene?.shots.findIndex((shot) => shot.id === selectedShot?.id) ?? -1;
+  const previousShot = selectedSceneShotIndex > 0 ? selectedScene?.shots[selectedSceneShotIndex - 1] : undefined;
+  const nextEditingShot = selectedScene && selectedSceneShotIndex >= 0 && selectedSceneShotIndex < selectedScene.shots.length - 1
+    ? selectedScene.shots[selectedSceneShotIndex + 1]
+    : undefined;
 
-  return <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_258px] overflow-hidden bg-[#e9eaed]">
-    <div className="grid min-h-0 grid-cols-[264px_minmax(480px,1fr)_320px] gap-px overflow-hidden bg-line">
-      <aside className="flex min-h-0 flex-col bg-white">
+  return <div
+    ref={editorGridRef}
+    className="grid min-h-0 flex-1 grid-rows-[auto_258px_minmax(0,1fr)] overflow-hidden bg-[#e9eaed]"
+    style={{ gridTemplateColumns: `${paneWidths.left}px ${EDITOR_SPLITTER_WIDTH}px minmax(${EDITOR_PANE_MINIMUMS.center}px,1fr) ${EDITOR_SPLITTER_WIDTH}px ${paneWidths.right}px` }}
+  >
+    <div className="contents">
+      <aside className="col-[1] row-[1/4] flex min-h-0 flex-col bg-white">
         <nav className="grid shrink-0 grid-cols-3 gap-1 border-b border-line p-2">{resources.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setResourceTab(id)} className={`flex min-w-0 items-center justify-center gap-1 rounded-lg px-1 py-2 text-[10px] ${resourceTab === id ? "bg-blue-soft font-semibold text-blue" : "text-muted hover:bg-canvas"}`}><Icon size={14} /><span className="truncate">{label}</span></button>)}</nav>
         <div className="min-w-0 flex-1 overflow-y-auto p-3">
           {resourceTab === "outline" && <>
-            <div className="mb-3 flex items-center justify-between"><div><strong className="text-sm text-text">影片结构</strong><p className="text-[10px] text-muted">{scenes.length} 个场景 · {model.shots.length} 个镜头</p></div><button type="button" onClick={onAddScene} aria-label="新增场景" className="rounded-md bg-blue-soft p-1.5 text-blue"><Plus size={14} /></button></div>
-            <div className="space-y-2">{scenes.map((scene, sceneIndex) => { const active = scene.id === selectedScene?.id; return <article key={scene.id ?? sceneIndex} className={`group overflow-hidden rounded-xl border ${active ? "border-blue bg-blue-soft/30" : "border-line"}`}><div className="flex items-start gap-1 p-2.5"><button type="button" onClick={() => onSelectScene(scene.id ?? null)} className="min-w-0 flex-1 text-left"><span className="text-[10px] font-medium text-muted">场景 {sceneIndex + 1} · {scene.shots.length} 镜头</span><strong className="mt-1 block truncate text-xs text-text">{scene.outline || "未命名场景"}</strong></button><button type="button" aria-label={`编辑场景 ${sceneIndex + 1}`} title="编辑场景" onClick={() => { if (!active) onSelectScene(scene.id ?? null); setEditingSceneId(scene.id ?? null); }} className={`grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted transition hover:bg-white hover:text-blue focus:opacity-100 ${active ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}><Pencil size={13} /></button></div>{active && <div className="border-t border-blue/10 px-2 pb-2 pt-1">{scene.shots.map((shot, index) => <button type="button" key={shot.id ?? index} onClick={() => selectShotForPreview(shot.id ?? null)} className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] ${shot.id === selectedShot?.id ? "bg-blue text-white" : "text-muted hover:bg-white"}`}><span>{index + 1}</span><span className="truncate">{shot.description || "空镜头"}</span></button>)}</div>}</article>; })}</div>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div><strong className="text-sm text-text">场景</strong><p className="text-[10px] text-muted">{scenes.length} 个场景 · {model.shots.length} 个镜头</p></div>
+              <details className="group relative shrink-0">
+                <summary
+                  aria-label="更多场景操作"
+                  title="更多操作"
+                  className={`relative grid h-8 w-8 cursor-pointer list-none place-items-center rounded-md border transition ${arrangeMode ? "border-ink bg-ink text-white" : "border-line text-muted hover:border-blue hover:text-blue"}`}
+                >
+                  <MoreHorizontal size={15} />
+                  {arrangeMode && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-white bg-blue" />}
+                </summary>
+                <div className="absolute right-0 top-9 z-30 w-36 rounded-lg border border-line bg-white p-1 shadow-lg">
+                  <button
+                    type="button"
+                    disabled={arrangeMode}
+                    onClick={(event) => {
+                      onAddScene();
+                      (event.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open");
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[10px] text-text hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-35"
+                  ><Plus size={13} className="text-blue" />新增场景</button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      setArrangeMode((value) => !value);
+                      setArrangeDrag(null);
+                      setArrangeDropTarget(null);
+                      arrangePreviousRects.current.clear();
+                      (event.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open");
+                    }}
+                    className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[10px] hover:bg-canvas ${arrangeMode ? "font-semibold text-blue" : "text-text"}`}
+                  ><GripVertical size={13} className={arrangeMode ? "text-blue" : "text-muted"} />{arrangeMode ? "完成编排" : "编排顺序"}</button>
+                </div>
+              </details>
+            </div>
+            {arrangeMode && <p className="mb-3 rounded-lg bg-blue-soft/60 px-2.5 py-2 text-[9px] leading-4 text-muted">拖动场景可调整场景顺序；拖动镜头可在所属场景内调整顺序。镜头暂不支持跨场景移动。</p>}
+            <div className="space-y-2">{scenes.map((scene, sceneIndex) => {
+              const active = scene.id === selectedScene?.id;
+              const dragging = arrangeDrag?.type === "scene" && arrangeDrag.sceneId === scene.id;
+              const dropTarget = arrangeDropTarget?.type === "scene" && arrangeDropTarget.id === scene.id;
+              return <article
+                key={scene.id ?? sceneIndex}
+                ref={(element) => { if (scene.id) setArrangeItemRef(`scene:${scene.id}`, element); }}
+                onDragOver={(event) => {
+                  if (arrangeMode && arrangeDrag?.type === "scene" && scene.id) {
+                    event.preventDefault();
+                    showArrangeDropTarget({ type: "scene", id: scene.id });
+                  }
+                }}
+                onDrop={(event) => dropScene(sceneIndex, event)}
+                className={`group overflow-hidden rounded-xl border transition-[border-color,background-color,box-shadow,opacity] duration-150 ${dragging ? "border-blue opacity-45" : dropTarget ? "border-blue bg-blue-soft/50 ring-1 ring-blue/20" : active ? "border-blue bg-blue-soft/30" : "border-line"} ${arrangeMode ? "will-change-transform" : ""}`}
+              >
+                <div
+                  draggable={arrangeMode}
+                  onDragStart={() => {
+                    if (scene.id) {
+                      setArrangeDrag({ type: "scene", sceneId: scene.id });
+                      setArrangeDropTarget(null);
+                    }
+                  }}
+                  onDragEnd={() => { setArrangeDrag(null); setArrangeDropTarget(null); }}
+                  className={`flex items-start gap-1 p-2.5 ${arrangeMode ? "cursor-grab active:cursor-grabbing" : ""}`}
+                >
+                  {arrangeMode && <GripVertical size={14} className="mt-1 shrink-0 text-muted" />}
+                  <button type="button" onClick={() => !arrangeMode && onSelectScene(scene.id ?? null)} className="min-w-0 flex-1 text-left"><span className="text-[10px] font-medium text-muted">场景 {sceneIndex + 1} · {scene.shots.length} 镜头</span><strong className="mt-1 block truncate text-xs text-text">{scene.outline || "未命名场景"}</strong></button>
+                  {!arrangeMode && <button type="button" aria-label={`编辑场景 ${sceneIndex + 1}`} title="编辑场景" onClick={() => { if (!active) onSelectScene(scene.id ?? null); setEditingSceneId(scene.id ?? null); }} className={`grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted transition hover:bg-white hover:text-blue focus:opacity-100 ${active ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}><Pencil size={13} /></button>}
+                </div>
+                {(active || arrangeMode) && <div className="border-t border-blue/10 px-2 pb-2 pt-1">{scene.shots.map((shot, index) => {
+                  const shotDragging = arrangeDrag?.type === "shot" && arrangeDrag.shotId === shot.id;
+                  const shotDropTarget = arrangeDropTarget?.type === "shot" && arrangeDropTarget.id === shot.id;
+                  return <button
+                    type="button"
+                    draggable={arrangeMode}
+                    key={shot.id ?? index}
+                    ref={(element) => { if (shot.id) setArrangeItemRef(`shot:${shot.id}`, element); }}
+                    onDragStart={(event) => {
+                      event.stopPropagation();
+                      if (scene.id && shot.id) {
+                        setArrangeDrag({ type: "shot", sceneId: scene.id, shotId: shot.id });
+                        setArrangeDropTarget(null);
+                      }
+                    }}
+                    onDragEnd={() => { setArrangeDrag(null); setArrangeDropTarget(null); }}
+                    onDragOver={(event) => {
+                      if (arrangeMode && arrangeDrag?.type === "shot" && arrangeDrag.sceneId === scene.id && shot.id) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        showArrangeDropTarget({ type: "shot", id: shot.id });
+                      }
+                    }}
+                    onDrop={(event) => scene.id && dropShot(scene.id, index, event)}
+                    onClick={() => !arrangeMode && selectShotForPreview(shot.id ?? null)}
+                    className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] transition-[background-color,box-shadow,opacity] duration-150 ${shotDragging ? "opacity-40" : shotDropTarget ? "bg-blue-soft/70 text-blue ring-1 ring-blue/30" : shot.id === selectedShot?.id ? "bg-blue text-white" : "text-muted hover:bg-white"} ${arrangeMode ? "cursor-grab will-change-transform active:cursor-grabbing" : ""}`}
+                  >
+                    {arrangeMode && <GripVertical size={12} className="shrink-0" />}
+                    <span>{index + 1}</span><span className="truncate">{shot.description || "空镜头"}</span>
+                  </button>;
+                })}</div>}
+              </article>;
+            })}</div>
           </>}
           {resourceTab === "assets" && <><div className="mb-3"><strong className="text-sm text-text">项目画面素材</strong><p className="mt-1 text-[10px] leading-4 text-muted">点击只查看素材，使用“应用”才会替换当前镜头。</p></div><label className="mb-3 flex items-center gap-2 rounded-lg border border-line px-2.5 py-2 text-muted"><Search size={13} /><input value={assetSearch} onChange={(event) => setAssetSearch(event.target.value)} placeholder="搜索项目素材" className="min-w-0 flex-1 bg-transparent text-xs outline-none" /></label><div className="grid grid-cols-2 gap-2">{visibleAssets.map((asset) => { const selected = asset.id === selectedResourceAssetId; const inUse = asset.id === selectedShot?.assetId; return <article key={asset.id} className={`overflow-hidden rounded-lg border ${selected ? "border-blue ring-1 ring-blue/20" : "border-line"}`}><button type="button" onClick={() => setSelectedResourceAssetId(asset.id)} className="w-full text-left"><div className="relative aspect-video bg-canvas"><VideoThumb fill imageUrl={asset.thumbnailUrl ?? (asset.mediaType === "image" ? asset.mediaUrl : undefined)} videoUrl={asset.mediaType === "video" ? asset.mediaUrl : undefined} showPlay={false} />{inUse && <span className="absolute left-1.5 top-1.5 rounded bg-blue px-1.5 py-0.5 text-[8px] text-white">当前镜头</span>}</div><span className="block truncate p-1.5 text-[10px] text-text">{asset.name}</span></button>{selected && <div className="border-t border-line p-1.5"><button type="button" disabled={inUse || !selectedShot} onClick={() => setAssetToApply(asset)} className="w-full rounded-md bg-blue-soft py-1.5 text-[9px] font-semibold text-blue disabled:opacity-40">{inUse ? "正在使用" : "应用到当前镜头"}</button></div>}</article>; })}</div>{!visibleAssets.length && <div className="py-12 text-center text-xs text-muted">当前项目没有匹配的画面素材，请从顶部“添加素材”加入。</div>}</>}
           {resourceTab === "settings" && <div>
@@ -764,13 +1038,39 @@ export function MvpScriptComposer({
           </div>}
         </div>
       </aside>
+      {paneSplitter("left")}
 
-      <main className="flex min-h-0 flex-col overflow-hidden bg-[#f5f5f6]">
-        <div className="min-h-0 flex-1 p-5"><div ref={stageHostRef} className="flex h-full w-full items-center justify-center"><div ref={stageRef} style={stageFrameStyle(workspace.document.settings.aspectRatio, stageAvailable)} className="group relative shrink-0 overflow-hidden rounded-xl bg-[#111318] shadow-xl [&:fullscreen]:h-screen [&:fullscreen]:w-screen [&:fullscreen]:max-w-none [&:fullscreen]:rounded-none"><div className="absolute inset-0" style={transition.active ? transitionLayerStyle(transition.type, transition.progress, "current") : undefined}><CompositionMedia meta={activeShot} playheadMs={playheadMs} playing={playing} muted={previewMuted} globalVisualSettings={previewVisualSettings} /></div>{transition.active && <div className="absolute inset-0" style={transitionLayerStyle(transition.type, transition.progress, "next")}><CompositionMedia meta={nextShot} playheadMs={nextShot?.startMs ?? 0} playing={false} muted globalVisualSettings={previewVisualSettings} /></div>}<CompositionOverlays workspace={workspace} model={model} activeShot={activeShot} playheadMs={playheadMs} playing={playing} /><CompositionAudioMix workspace={workspace} model={model} activeShot={activeShot} playheadMs={playheadMs} playing={playing} muted={previewMuted} /><div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-black/10" />{activeShot?.shot.subtitleText && <div className="pointer-events-none absolute inset-x-[7%] z-10" style={subtitleStyle(activeShot.shot)}><span className="inline-block rounded-md bg-black/60 px-3 py-1.5 leading-relaxed text-white shadow-sm backdrop-blur-sm">{activeShot.shot.subtitleText}</span></div>}<div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-black/45 px-2.5 py-1 text-[10px] text-white/80 backdrop-blur"><span>场景 {(activeShot?.scene.index ?? 0) + 1}</span><i className="h-1 w-1 rounded-full bg-white/35" /><span>镜头 {(activeShot?.shot.index ?? 0) + 1}</span>{transition.active && <><i className="h-1 w-1 rounded-full bg-white/35" /><span>{transition.type} {Math.round(transition.progress * 100)}%</span></>}</div><div className="absolute right-3 top-3 flex gap-1 opacity-0 transition group-hover:opacity-100"><button type="button" onClick={() => setPreviewMuted((value) => !value)} aria-label={previewMuted ? "打开声音" : "静音"} className="grid h-8 w-8 place-items-center rounded-lg bg-black/45 text-white backdrop-blur">{previewMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}</button><button type="button" onClick={toggleFullscreen} aria-label="全屏预览" className="grid h-8 w-8 place-items-center rounded-lg bg-black/45 text-white backdrop-blur"><Maximize2 size={14} /></button></div><button type="button" onClick={togglePlayback} aria-label={playing ? "暂停" : "播放"} className="absolute left-1/2 top-1/2 z-20 grid h-12 w-12 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur transition hover:bg-black/70 group-hover:opacity-100">{playing ? <Pause size={19} /> : <Play size={19} className="translate-x-px" />}</button></div></div></div>
+      <main className="col-[5] row-[1] overflow-hidden bg-[#f5f5f6]">
+        <header className="flex h-10 shrink-0 items-center justify-between border-b border-line bg-white px-3"><div><strong className="text-xs text-text">全片预览</strong><span className="ml-2 text-[10px] text-muted">播放时不会切换正在编辑的镜头</span></div><span className="rounded-md bg-canvas px-2 py-1 text-[9px] text-muted">{workspace.document.settings.aspectRatio} · 实时合成</span></header>
+        <div className="p-3"><div ref={stageHostRef} className="flex w-full justify-center"><div ref={stageRef} style={stageFrameStyle(workspace.document.settings.aspectRatio, stageAvailable)} className="group relative shrink-0 overflow-hidden rounded-xl bg-[#111318] shadow-xl [&:fullscreen]:h-screen [&:fullscreen]:w-screen [&:fullscreen]:max-w-none [&:fullscreen]:rounded-none"><div className="absolute inset-0" style={transition.active ? transitionLayerStyle(transition.type, transition.progress, "current") : undefined}><CompositionMedia meta={activeShot} playheadMs={playheadMs} playing={playing} muted={previewMuted} globalVisualSettings={previewVisualSettings} /></div>{transition.active && <div className="absolute inset-0" style={transitionLayerStyle(transition.type, transition.progress, "next")}><CompositionMedia meta={nextShot} playheadMs={nextShot?.startMs ?? 0} playing={false} muted globalVisualSettings={previewVisualSettings} /></div>}<CompositionOverlays workspace={workspace} model={model} activeShot={activeShot} playheadMs={playheadMs} playing={playing} /><CompositionAudioMix workspace={workspace} model={model} activeShot={activeShot} playheadMs={playheadMs} playing={playing} muted={previewMuted} /><div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-black/10" />{activeShot?.shot.subtitleText && <div className="pointer-events-none absolute inset-x-[7%] z-10" style={subtitleStyle(activeShot.shot)}><span className="inline-block rounded-md bg-black/60 px-3 py-1.5 leading-relaxed text-white shadow-sm backdrop-blur-sm">{activeShot.shot.subtitleText}</span></div>}<div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-black/45 px-2.5 py-1 text-[10px] text-white/80 backdrop-blur"><span>场景 {(activeShot?.scene.index ?? 0) + 1}</span><i className="h-1 w-1 rounded-full bg-white/35" /><span>镜头 {(activeShot?.shot.index ?? 0) + 1}</span>{transition.active && <><i className="h-1 w-1 rounded-full bg-white/35" /><span>{transition.type} {Math.round(transition.progress * 100)}%</span></>}</div><div className="absolute right-3 top-3 flex gap-1 opacity-0 transition group-hover:opacity-100"><button type="button" onClick={() => setPreviewMuted((value) => !value)} aria-label={previewMuted ? "打开声音" : "静音"} className="grid h-8 w-8 place-items-center rounded-lg bg-black/45 text-white backdrop-blur">{previewMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}</button><button type="button" onClick={toggleFullscreen} aria-label="全屏预览" className="grid h-8 w-8 place-items-center rounded-lg bg-black/45 text-white backdrop-blur"><Maximize2 size={14} /></button></div><button type="button" onClick={togglePlayback} aria-label={playing ? "暂停" : "播放"} className="absolute left-1/2 top-1/2 z-20 grid h-12 w-12 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur transition hover:bg-black/70 group-hover:opacity-100">{playing ? <Pause size={19} /> : <Play size={19} className="translate-x-px" />}</button></div></div></div>
         <div className="flex h-12 items-center gap-3 border-t border-line bg-white px-4"><button type="button" onClick={togglePlayback} className="grid h-8 w-8 place-items-center rounded-full bg-ink text-white">{playing ? <Pause size={14} /> : <Play size={14} />}</button><button type="button" onClick={() => seek(playheadMs - 5000)} aria-label="后退 5 秒" className="rounded-md px-1.5 py-1 text-[10px] text-muted hover:bg-canvas">−5s</button><span className="w-28 text-xs tabular-nums text-muted">{formatTime(playheadMs)} / {formatTime(model.durationMs)}</span><input type="range" min={0} max={model.durationMs} value={playheadMs} onChange={(event) => { setPlaying(false); seek(Number(event.target.value)); }} className="min-w-0 flex-1 accent-blue" /><button type="button" onClick={() => seek(playheadMs + 5000)} aria-label="前进 5 秒" className="rounded-md px-1.5 py-1 text-[10px] text-muted hover:bg-canvas">+5s</button><span className="rounded-md bg-canvas px-2 py-1 text-[10px] text-muted">实时预览</span></div>
       </main>
 
-      <aside className="min-h-0 overflow-y-auto bg-white">{!selectedShot || !selectedScene?.id ? <div className="grid min-h-[360px] place-items-center p-8 text-center text-xs text-muted">选择一个镜头查看属性</div> : <div><div className="sticky top-0 z-10 border-b border-line bg-white"><div className="flex items-center justify-between px-4 py-3"><div><span className="text-[10px] text-muted">当前选中</span><strong className="block text-sm text-text">场景 {selectedScene.index + 1} / 镜头 {selectedShot.index + 1}</strong></div><div className="flex gap-0.5"><button type="button" onClick={() => onDuplicateShot(selectedScene.id!, selectedShot.id!)} aria-label="复制镜头" className="rounded-lg p-2 text-muted hover:bg-canvas"><Copy size={14} /></button><button type="button" onClick={onDeleteShot} aria-label="删除镜头" className="rounded-lg p-2 text-muted hover:bg-red/10 hover:text-red"><Trash2 size={15} /></button></div></div><div className="grid grid-cols-3">{inspectors.map((item) => <button key={item.id} type="button" onClick={() => setInspectorTab(item.id)} className={`border-b-2 px-1 py-2.5 text-[11px] ${inspectorTab === item.id ? "border-blue font-semibold text-blue" : "border-transparent text-muted"}`}>{item.label}</button>)}</div></div><div className="space-y-4 p-4">
+      <aside className="col-[3] row-[1/4] flex min-h-0 flex-col overflow-hidden bg-white">
+        <section className="relative z-20 shrink-0 border-b border-line bg-[#fbfbfc] p-2.5">
+          <div className="flex h-11 items-center gap-1.5">
+            <button type="button" disabled={!previousShot?.id} onClick={() => previousShot?.id && selectShotForPreview(previousShot.id)} aria-label="上一个镜头" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-line bg-white text-muted hover:border-blue hover:text-blue disabled:cursor-not-allowed disabled:opacity-35"><ChevronLeft size={15} /></button>
+            <div
+              ref={shotPickerRef}
+              className="relative min-w-0 flex-1"
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShotPickerOpen(false);
+              }}
+            >
+              <button
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={shotPickerOpen}
+                onClick={() => setShotPickerOpen((open) => !open)}
+                className={`flex h-11 w-full items-center justify-between gap-2 rounded-lg border bg-white px-3 text-left transition ${shotPickerOpen ? "border-blue/40 ring-2 ring-blue/10" : "border-line hover:border-blue/40"}`}
+              ><span className="min-w-0"><small className="block text-[9px] text-muted">分镜编辑{selectedScene ? ` · 场景 ${selectedScene.index + 1}` : ""}</small><strong className="block truncate text-[11px] text-text">{selectedShot && selectedSceneShotIndex >= 0 ? `镜头 ${selectedSceneShotIndex + 1} / ${selectedScene?.shots.length} · ${selectedShot.description || "空镜头"}` : "请选择镜头"}</strong></span><ChevronDown size={13} className={`shrink-0 text-muted transition ${shotPickerOpen ? "rotate-180" : ""}`} /></button>
+              {shotPickerOpen && selectedScene && <div role="listbox" aria-label="选择分镜" className="absolute left-0 right-0 top-12 z-40 max-h-80 overflow-y-auto rounded-xl border border-line bg-white p-2 shadow-xl"><div className="mb-2 flex items-center justify-between px-1"><strong className="text-[10px] text-text">全部分镜</strong><span className="text-[9px] text-muted">{selectedScene.shots.length} 个镜头</span></div><div className="grid grid-cols-2 gap-2">{selectedScene.shots.map((shot, index) => { const asset = workspace.linkedAssets.find((item) => item.id === shot.assetId); const previewing = activeShot?.id === shot.id; const editing = selectedShot?.id === shot.id; return <button key={shot.id ?? index} type="button" role="option" aria-selected={editing} onClick={() => { selectShotForPreview(shot.id ?? null); setShotPickerOpen(false); }} className={`overflow-hidden rounded-lg border bg-white text-left transition ${editing ? "border-blue ring-1 ring-blue/20" : previewing ? "border-amber ring-1 ring-amber/20" : "border-line hover:border-blue/40"}`}><div className="relative aspect-video bg-canvas"><VideoThumb fill imageUrl={asset?.thumbnailUrl ?? (asset?.mediaType === "image" ? asset.mediaUrl : undefined)} videoUrl={asset?.mediaType === "video" ? asset.mediaUrl : undefined} showPlay={false} /><span className="absolute left-1 top-1 rounded bg-black/60 px-1 py-0.5 text-[8px] text-white">{index + 1}</span>{previewing && <span className="absolute right-1 top-1 rounded bg-amber px-1 py-0.5 text-[8px] font-semibold text-white">播放</span>}</div><div className="px-2 py-1.5"><span className="block truncate text-[9px] font-medium text-text">{shot.description || "空镜头"}</span><span className="mt-0.5 block text-[8px] text-muted">{(shot.durationMs / 1000).toFixed(1)}s{editing ? " · 正在编辑" : ""}</span></div></button>; })}</div>{!selectedScene.shots.length && <button type="button" onClick={() => { if (selectedScene.id) onAddShot(selectedScene.id); setShotPickerOpen(false); }} className="w-full rounded-lg border border-dashed border-line py-8 text-[10px] text-muted hover:border-blue hover:text-blue">当前场景没有镜头，点击新增</button>}</div>}
+            </div>
+            <button type="button" disabled={!nextEditingShot?.id} onClick={() => nextEditingShot?.id && selectShotForPreview(nextEditingShot.id)} aria-label="下一个镜头" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-line bg-white text-muted hover:border-blue hover:text-blue disabled:cursor-not-allowed disabled:opacity-35"><ChevronRight size={15} /></button>
+            {selectedScene?.id && <button type="button" onClick={() => onAddShot(selectedScene.id!)} aria-label="新增镜头" title="新增镜头" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-blue-soft text-blue"><Plus size={13} /></button>}
+          </div>
+        </section>
+        <div className="min-h-0 flex-1 overflow-y-auto">{!selectedShot || !selectedScene?.id ? <div className="grid min-h-[360px] place-items-center p-8 text-center text-xs text-muted">选择一个镜头查看属性</div> : <div><div className="sticky top-0 z-10 border-b border-line bg-white"><div className="flex items-center justify-between px-4 py-3"><div><span className="text-[10px] text-muted">当前选中</span><strong className="block text-sm text-text">场景 {selectedScene.index + 1} / 镜头 {selectedShot.index + 1}</strong></div><div className="flex gap-0.5"><button type="button" onClick={() => onDuplicateShot(selectedScene.id!, selectedShot.id!)} aria-label="复制镜头" className="rounded-lg p-2 text-muted hover:bg-canvas"><Copy size={14} /></button><button type="button" onClick={onDeleteShot} aria-label="删除镜头" className="rounded-lg p-2 text-muted hover:bg-red/10 hover:text-red"><Trash2 size={15} /></button></div></div><div className="grid grid-cols-3">{inspectors.map((item) => <button key={item.id} type="button" onClick={() => setInspectorTab(item.id)} className={`border-b-2 px-1 py-2.5 text-[11px] ${inspectorTab === item.id ? "border-blue font-semibold text-blue" : "border-transparent text-muted"}`}>{item.label}</button>)}</div></div><div className="space-y-4 p-4">
         {inspectorTab === "visual" && <SourceTrimControl shot={selectedShot} asset={selectedAsset} onChange={patchSelectedShot} onOpen={() => setTrimOpen(true)} onReplace={() => { setResourceTab("assets"); setSelectedResourceAssetId(selectedAsset?.id ?? null); setReplacementPicking(true); }} onRemove={() => selectedScene.id && selectedShot.id && onRemoveShotAsset(selectedScene.id, selectedShot.id)} />}
         {inspectorTab === "visual" && replacementPicking && <div className="rounded-lg border border-blue/20 bg-blue-soft px-3 py-2 text-[10px] leading-4 text-blue"><strong className="block">正在更换当前镜头素材</strong>在左侧选择素材后点击“应用到当前镜头”；仅查看不会替换。<button type="button" onClick={() => setReplacementPicking(false)} className="ml-1 font-semibold underline">取消</button></div>}
         {inspectorTab === "visual" && selectedShot.candidates.length > 0 && <section className="rounded-xl border border-line p-3"><header className="flex items-start justify-between gap-2"><div><strong className="text-xs text-text">素材匹配候选</strong><p className="mt-1 text-[9px] text-muted">匹配不会替换当前素材，点击候选才会应用。</p></div><span className="shrink-0 text-[9px] text-muted">{selectedShot.candidates.length} 个</span></header><div className="mt-2 space-y-1.5">{selectedShot.candidates.slice(0, 5).map((candidate) => { const available = workspace.linkedAssets.some((asset) => asset.segments.some((segment) => segment.id === candidate.segmentId)); return <button type="button" key={candidate.id} disabled={!available} onClick={() => chooseCandidate(candidate.id)} className="w-full rounded-lg border border-line p-2 text-left hover:border-blue/40 disabled:opacity-45"><span className="flex items-center justify-between gap-2"><strong className="truncate text-[10px] text-text">{candidate.title || "候选片段"}</strong><span className="flex shrink-0 items-center gap-2"><em className="text-[9px] not-italic text-teal">{candidate.score}%</em><b className="text-[9px] font-medium text-blue">应用</b></span></span><small className="mt-1 block line-clamp-2 text-[9px] leading-4 text-muted">{available ? candidate.reason || candidate.source : "源片段不可用，记录仍保留"}</small></button>; })}</div></section>}
@@ -786,10 +1086,11 @@ export function MvpScriptComposer({
         </>}
         {inspectorTab === "audio" && <><section className="rounded-xl border border-line p-3"><div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2"><AudioLines size={15} className="text-blue" /><strong className="text-xs">镜头原声</strong></div><span className={`rounded px-1.5 py-0.5 text-[9px] ${selectedShot.audioSettings.originalVolume === undefined ? "bg-canvas text-muted" : "bg-blue-soft text-blue"}`}>{selectedShot.audioSettings.originalVolume === undefined ? "继承项目默认" : "当前镜头覆盖"}</span></div><div className="mt-3"><RangeControl label="音量" value={numeric(selectedShot.audioSettings.originalVolume, numeric(audioMix.originalVolume, 30))} minimum={0} maximum={100} suffix="%" onChange={(originalVolume) => patchRecord("audioSettings", { originalVolume })} /></div>{selectedShot.audioSettings.originalVolume !== undefined && <button type="button" onClick={() => patchRecord("audioSettings", { originalVolume: undefined })} className="mt-2 text-[10px] font-medium text-blue">恢复项目默认</button>}</section><section className="rounded-xl border border-line p-3"><div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2"><Mic2 size={15} className="text-blue" /><strong className="text-xs">当前镜头关联旁白</strong></div><span className={`rounded px-1.5 py-0.5 text-[9px] ${selectedShotVoiceStatus === "已生成" ? "bg-teal/10 text-teal" : selectedShotVoiceStatus === "存在过期旁白" || selectedShotVoiceStatus === "需要处理" ? "bg-amber/10 text-amber" : "bg-canvas text-muted"}`}>{selectedShotVoiceStatus}</span></div><p className="mt-2 text-[11px] leading-5 text-muted">{selectedShotVoiceLines.length ? `${selectedShotVoiceLines.length} 条旁白与当前镜头时间范围重叠` : "当前镜头时间范围内没有已生成旁白"}</p><p className="mt-1 truncate text-[10px] text-muted">项目母带：{audioAssets.find((asset) => asset.id === audioMix.voiceAssetId)?.name ?? "尚未生成或选择"}</p><button type="button" onClick={onOpenVoiceover} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue px-3 py-2 text-xs font-semibold text-white"><Sparkles size={13} />生成 / 更新旁白</button><p className="mt-2 text-[9px] leading-4 text-muted">生成面板会默认展示全片，也可切换当前场景或当前镜头；母带和音量仍属于项目级配置。</p></section><section className="rounded-xl border border-line p-3"><div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2"><Music2 size={15} className="text-blue" /><strong className="text-xs">背景音乐</strong></div><span className={`rounded px-1.5 py-0.5 text-[9px] ${selectedShotMusic ? "bg-blue-soft text-blue" : "bg-canvas text-muted"}`}>{effectiveMusicSource}</span></div><p className="mt-2 truncate text-[10px] text-muted">当前生效：{effectiveMusic ? audioAssets.find((asset) => asset.id === effectiveMusic.assetId)?.name ?? "音频素材不可用" : "无背景音乐"}</p><Select aria-label="镜头背景音乐" value={String(selectedShotMusic?.assetId ?? "")} onChange={(event) => patchRecord("audioSettings", { backgroundMusic: event.target.value ? { assetId: event.target.value, volume: 28, loop: true } : null })} wrapperClassName="mt-2"><option value="">继承场景 / 全片 / 项目默认</option>{audioAssets.filter((asset) => asset.metadata.purpose !== "voice_take" && asset.metadata.purpose !== "voiceover_master" && asset.sourceType !== "ai_tts").map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</Select>{selectedShotMusic && <div className="mt-3"><RangeControl label="镜头覆盖音量" value={numeric(selectedShotMusic.volume, 28)} minimum={0} maximum={100} suffix="%" onChange={(volume) => patchRecord("audioSettings", { backgroundMusic: { ...selectedShotMusic, volume } })} /></div>}</section><button type="button" onClick={() => setResourceTab("settings")} className="w-full rounded-lg bg-blue-soft py-2 text-xs font-semibold text-blue">打开项目声音默认值</button></>}
         {inspectorTab === "caption" && <><label className="block text-xs font-medium text-muted">字幕<textarea rows={5} value={selectedShot.subtitleText} onChange={(event) => patchSelectedShot({ subtitleText: event.target.value, subtitleOverridden: event.target.value !== selectedScene.narrationText, subtitleOutdated: false })} className="mt-1.5 w-full resize-y rounded-lg border border-line p-2.5 text-sm leading-5 text-text" /></label>{selectedShot.subtitleOutdated && <div className="rounded-lg bg-amber/10 p-2.5 text-[11px] leading-5 text-amber">场景旁白已变化，当前手工字幕需要复核。<button type="button" onClick={() => onRestoreSubtitle(selectedScene.id!, selectedShot.id!)} className="ml-1 font-semibold underline">恢复跟随旁白</button></div>}<section className="rounded-xl border border-line p-3"><strong className="text-xs text-text">字幕位置</strong><div className="mt-2 grid grid-cols-3 gap-1">{[["top", "顶部"], ["center", "居中"], ["bottom", "底部"]].map(([value, label]) => <button key={value} type="button" onClick={() => patchRecord("subtitleSettings", { position: value })} className={`rounded-md border py-1.5 text-[10px] ${String(selectedShot.subtitleSettings.position ?? "bottom") === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted"}`}>{label}</button>)}</div><div className="mt-3"><RangeControl label="字号" value={numeric(selectedShot.subtitleSettings.fontSize, 16)} minimum={10} maximum={48} suffix="px" onChange={(value) => patchRecord("subtitleSettings", { fontSize: value })} /></div></section><p className="text-xs leading-5 text-muted">{selectedShot.subtitleOverridden ? "当前字幕为手动覆盖；场景旁白变化时会提示复核。" : "字幕正在跟随场景旁白。"}</p></>}
-        </div></div>}</aside>
+        </div></div>}</div></aside>
+      {paneSplitter("right")}
     </div>
 
-    <section className="border-t border-line bg-[#f9f9fa]">
+    <section className="col-[5] row-[2] min-w-0 border-t border-line bg-[#f9f9fa]">
       <header className="flex h-10 items-center justify-between border-b border-line px-3">
         <div className="flex items-center gap-2"><strong className="text-xs text-text">主时间线</strong><span className="text-[10px] text-muted">{formatTime(model.durationMs)}</span></div>
         <div className="flex items-center gap-2">

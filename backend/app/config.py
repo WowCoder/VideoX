@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     agnes_text_model: str = "agnes-2.5-flash"
     agnes_vision_model: str = "agnes-2.5-flash"
     agnes_image_model: str = "agnes-image-2.1-flash"
-    agnes_video_model: str = "agnes-video-v2.0"
+    agnes_video_model: str = "agnes-video-2.5-flash"
 
     # ── 微信开放平台（扫码登录）──
     # 填入后启用：微信扫码登录/注册

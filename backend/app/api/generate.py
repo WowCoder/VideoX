@@ -247,6 +247,84 @@ def _generation_prompt(shot: Shot, parameters: dict, prompt_key: str) -> str:
     return "。".join(part.rstrip("。") for part in parts if part) + ("。" if any(parts) else "")
 
 
+def _validated_video_generation(
+    project: Project,
+    user_id: str,
+    scope: ScopeSelection,
+    shot_ids: list[str],
+    parameters: dict,
+) -> dict:
+    """校验 Flash 媒体输入，并保存可审计、不可变的素材来源。"""
+    mode = str(parameters.get("generation_mode") or "text").strip().lower()
+    if mode not in {"text", "keyframe", "reference"}:
+        raise HTTPException(status_code=422, detail="视频生成模式无效")
+    if mode != "text" and (scope.type != "shot" or len(shot_ids) != 1):
+        raise HTTPException(status_code=422, detail="关键帧和图片参考模式暂时只支持单个镜头")
+    try:
+        duration_seconds = int(parameters.get("duration_seconds") or 5)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="视频时长必须是整数秒") from exc
+    if not 4 <= duration_seconds <= 12:
+        raise HTTPException(status_code=422, detail="Agnes Video 2.5 Flash 时长需为 4–12 秒")
+
+    first_frame_id = str(parameters.get("first_frame_asset_id") or "").strip()
+    last_frame_id = str(parameters.get("last_frame_asset_id") or "").strip()
+    raw_reference_ids = parameters.get("reference_image_asset_ids") or []
+    if not isinstance(raw_reference_ids, list):
+        raise HTTPException(status_code=422, detail="参考图片参数格式无效")
+    reference_ids = list(dict.fromkeys(str(item).strip() for item in raw_reference_ids if str(item).strip()))
+    if len(reference_ids) > 5:
+        raise HTTPException(status_code=422, detail="Agnes Video 2.5 Flash 最多支持 5 张参考图片")
+    if mode == "text" and (first_frame_id or last_frame_id or reference_ids):
+        raise HTTPException(status_code=422, detail="文生视频模式不能携带参考图片")
+    if mode == "keyframe" and not (first_frame_id or last_frame_id):
+        raise HTTPException(status_code=422, detail="关键帧模式至少需要首帧或尾帧")
+    if mode == "reference" and not reference_ids:
+        raise HTTPException(status_code=422, detail="图片参考模式至少需要一张参考图片")
+    if mode == "keyframe" and reference_ids:
+        raise HTTPException(status_code=422, detail="关键帧模式不能同时使用参考图片列表")
+    if mode == "reference" and (first_frame_id or last_frame_id):
+        raise HTTPException(status_code=422, detail="图片参考模式不能同时设置首尾帧")
+
+    linked_assets = {
+        link.asset.id: link.asset
+        for link in project.asset_links
+        if link.asset is not None
+    }
+    requested_ids = list(dict.fromkeys(
+        asset_id for asset_id in [first_frame_id, last_frame_id, *reference_ids] if asset_id
+    ))
+    for asset_id in requested_ids:
+        asset = linked_assets.get(asset_id)
+        if (
+            not asset
+            or asset.owner_id != user_id
+            or asset.deleted_at is not None
+            or asset.status != "ready"
+            or asset.processing_status != "ready"
+            or asset.media_type != "image"
+            or not asset.file_path
+        ):
+            raise HTTPException(status_code=422, detail="部分参考素材不可用；请选择当前项目中处理完成的图片")
+
+    reference_assets = []
+    if first_frame_id:
+        reference_assets.append({"asset_id": first_frame_id, "role": "first_frame", "ordinal": 1})
+    if last_frame_id:
+        reference_assets.append({"asset_id": last_frame_id, "role": "last_frame", "ordinal": 1})
+    reference_assets.extend(
+        {"asset_id": asset_id, "role": "reference", "ordinal": index + 1}
+        for index, asset_id in enumerate(reference_ids)
+    )
+    return {
+        "provider": "agnes",
+        "model": settings.agnes_video_model,
+        "mode": mode,
+        "duration_seconds": duration_seconds,
+        "reference_assets": reference_assets,
+    }
+
+
 async def _dispatch_job(db: AsyncSession, project: Project, job: Job):
     if job.type == "镜头匹配":
         from app.tasks.match_tasks import match_script_shots
@@ -443,6 +521,13 @@ async def execute_project_operation(
         shots_by_id = {
             shot.id: shot for scene in project.script.units for shot in scene.shots
         }
+        video_generation = _validated_video_generation(
+            project,
+            user.id,
+            request.scope,
+            shot_ids,
+            request.parameters,
+        ) if request.operation == "generate_video" else None
         for shot_id in shot_ids:
             shot = shots_by_id[shot_id]
             job = Job(
@@ -459,6 +544,7 @@ async def execute_project_operation(
                     "shot_id": shot_id,
                     config[2]: _generation_prompt(shot, request.parameters, config[2]),
                     "base_shot_revision": shot.revision,
+                    **({"video_generation": video_generation} if video_generation else {}),
                 },
             )
             try:

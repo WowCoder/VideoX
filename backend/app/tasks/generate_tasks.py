@@ -189,6 +189,7 @@ async def _generate_media(
             "adjust": shot.adjust or {},
             "motion": shot.motion or {},
         }
+        generation_provenance: dict = {}
         if kind == "image":
             ratio = project.composition.aspect_ratio
             size = {
@@ -203,31 +204,81 @@ async def _generate_media(
             provider_name = settings.ai_image_provider
             provider_model = settings.active_image_model
         elif kind == "video":
+            video_generation = dict((job.payload or {}).get("video_generation") or {})
+            mode = str(video_generation.get("mode") or "").strip() or None
+            reference_assets = list(video_generation.get("reference_assets") or [])
+            linked_assets = {
+                link.asset.id: link.asset
+                for link in project.asset_links
+                if link.asset is not None
+            }
+            first_frame_source = ""
+            last_frame_source = ""
+            reference_image_sources: list[str] = []
+            for reference in reference_assets:
+                asset_id = str(reference.get("asset_id") or "")
+                role = str(reference.get("role") or "")
+                source_asset = linked_assets.get(asset_id)
+                if (
+                    not source_asset
+                    or source_asset.owner_id != job.owner_id
+                    or source_asset.media_type != "image"
+                    or source_asset.processing_status != "ready"
+                    or source_asset.deleted_at is not None
+                    or not source_asset.file_path
+                ):
+                    raise RuntimeError("参考图片已被移除、尚未处理完成或不属于当前项目")
+                if role == "first_frame":
+                    first_frame_source = source_asset.file_path
+                elif role == "last_frame":
+                    last_frame_source = source_asset.file_path
+                elif role == "reference":
+                    reference_image_sources.append(source_asset.file_path)
+                else:
+                    raise RuntimeError("视频生成任务包含无效的参考素材角色")
+
+            # 兼容升级前已经入队的任务：旧任务没有显式模式时，仍使用镜头当前图片作为首帧。
             image_source = ""
-            if shot.asset_id:
-                source_asset = await session.get(Asset, shot.asset_id)
+            if not video_generation and shot.asset_id:
+                source_asset = linked_assets.get(shot.asset_id)
                 if source_asset and source_asset.media_type == "image" and source_asset.file_path:
-                    # Provider 层各自准备首帧：DashScope 上传临时 OSS，Agnes
-                    # 对私有对象执行图生图公网中转；任务层不耦合供应商协议。
                     image_source = source_asset.file_path
+            duration_seconds = int(
+                video_generation.get("duration_seconds")
+                or max(4, min(12, round(shot.duration_ms / 1000)))
+            )
+            requested_provider = str(video_generation.get("provider") or "").strip()
             remote_url = await generate_video(
                 prompt=prompt,
                 image_url=image_source,
-                duration=max(2, min(15, round(shot.duration_ms / 1000))),
+                model=str(video_generation.get("model") or "") or None,
+                duration=duration_seconds,
                 aspect_ratio=project.composition.aspect_ratio,
+                provider=requested_provider or None,
+                mode=mode,
+                first_frame_url=first_frame_source,
+                last_frame_url=last_frame_source,
+                reference_image_urls=reference_image_sources,
             )
             media_type = "video"
             media_kind = "generated_video"
-            provider_name = (
+            provider_name = requested_provider or (
                 settings.ai_image_to_video_provider
-                if image_source
+                if image_source or first_frame_source or last_frame_source or reference_image_sources
                 else settings.ai_text_to_video_provider
             )
-            provider_model = (
+            provider_model = str(video_generation.get("model") or (
                 settings.active_image_to_video_model
-                if image_source
+                if image_source or first_frame_source or last_frame_source or reference_image_sources
                 else settings.active_text_to_video_model
-            )
+            ))
+            generation_provenance = {
+                "provider": provider_name,
+                "model": provider_model,
+                "mode": mode or ("keyframe" if image_source else "text"),
+                "duration_seconds": duration_seconds,
+                "reference_assets": reference_assets,
+            }
         else:
             if not shot.sketch_data:
                 raise RuntimeError("示意特效视频需要先保存 Canvas 草图")
@@ -284,7 +335,12 @@ async def _generate_media(
             ai_provider=provider_name,
             ai_model=provider_model,
             ai_prompt=prompt,
-            asset_metadata={"shot_id": shot.id, "job_id": job.id, "operation": kind},
+            asset_metadata={
+                "shot_id": shot.id,
+                "job_id": job.id,
+                "operation": kind,
+                **({"generation": generation_provenance} if generation_provenance else {}),
+            },
         )
         session.add(asset)
         await session.flush()
@@ -333,6 +389,7 @@ async def _generate_media(
                 "base_revision": base_revision,
                 "base_shot_revision": base_shot_revision,
                 "stale_result": not selected,
+                **({"generation": generation_provenance} if generation_provenance else {}),
                 "material_history": {
                     "segment_id": None,
                     "source_start_ms": 0,

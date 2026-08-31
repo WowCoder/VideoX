@@ -11,7 +11,6 @@ import {
   ImagePlus,
   Library,
   Loader2,
-  MoreHorizontal,
   RotateCcw,
   Sparkles,
   WandSparkles,
@@ -54,6 +53,13 @@ const operationLabels: Record<ProjectOperation, string> = {
   export: "导出主成片",
 };
 
+function userFacingOperationError(message: string) {
+  if (/agnes|dashscope|qwen|provider|model|api[_ -]?key|ai_[a-z_]+/i.test(message)) {
+    return "AI 服务暂不可用，请稍后重试；如持续失败，请联系管理员。";
+  }
+  return message;
+}
+
 export default function ProjectWorkspaceView() {
   const { projectId = "" } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -74,20 +80,20 @@ export default function ProjectWorkspaceView() {
   const [quickAIScope, setQuickAIScope] = useState<"project" | "scene" | "shot">("shot");
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
   const [voiceoverOpen, setVoiceoverOpen] = useState(false);
-  const [addAssetMenuOpen, setAddAssetMenuOpen] = useState(false);
+  const [creationMenuOpen, setCreationMenuOpen] = useState(false);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   const [submittedJobs, setSubmittedJobs] = useState<Job[]>([]);
   const mountedRef = useRef(true);
-  const addAssetMenuRef = useRef<HTMLDivElement | null>(null);
+  const creationMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!addAssetMenuOpen) return;
+    if (!creationMenuOpen) return;
     const closeOnOutsideClick = (event: PointerEvent) => {
-      if (!addAssetMenuRef.current?.contains(event.target as Node)) setAddAssetMenuOpen(false);
+      if (!creationMenuRef.current?.contains(event.target as Node)) setCreationMenuOpen(false);
     };
     document.addEventListener("pointerdown", closeOnOutsideClick);
     return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
-  }, [addAssetMenuOpen]);
+  }, [creationMenuOpen]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -194,7 +200,7 @@ export default function ProjectWorkspaceView() {
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
     onError: (error) => {
-      const message = error instanceof Error ? error.message : "操作失败";
+      const message = userFacingOperationError(error instanceof Error ? error.message : "操作失败");
       setOperationError(message);
       notify(message, "error");
     },
@@ -314,6 +320,7 @@ export default function ProjectWorkspaceView() {
           open={quickAIOpen}
           projectName={workspace.project.name}
           scenes={workspace.document.storyboard.scenes}
+          assets={workspace.linkedAssets}
           selectedScene={selectedScene}
           selectedShot={selectedShot}
           initialKind={quickAIKind}
@@ -330,11 +337,43 @@ export default function ProjectWorkspaceView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-canvas">
-      <header className="relative z-20 shrink-0 border-b border-line bg-surface/95 px-4 py-2.5 backdrop-blur-xl">
+      <header className="relative z-40 shrink-0 border-b border-line bg-surface/95 px-4 py-2.5 backdrop-blur-xl">
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
           <div className="flex min-w-0 items-center gap-3"><button type="button" onClick={() => navigate("/workspace")} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted hover:bg-canvas hover:text-text" aria-label="返回工作台"><ArrowLeft size={17} /></button><button type="button" onClick={() => navigate(`/workspace/projects/${workspace.project.id}?view=overview`)} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-ink text-xs font-bold text-white" aria-label="打开项目概览" title="项目概览">{workspace.project.initial}</button><strong title={workspace.project.name} className="max-w-[420px] truncate text-sm font-semibold text-text">{workspace.project.name}</strong></div>
           <div className="flex items-center gap-2 rounded-full bg-canvas px-3 py-1.5 text-xs text-muted"><FileText size={13} /><span>脚本编排</span><i className="h-1 w-1 rounded-full bg-line" /><strong className="flex items-center gap-1 font-medium text-teal"><span className="h-1.5 w-1.5 rounded-full bg-teal" />实时预览</strong></div>
-          <div className="flex items-center justify-end gap-2">{hasMeaningfulScript ? <details className="relative"><summary aria-label="更多项目操作" className="grid h-9 w-9 cursor-pointer list-none place-items-center rounded-lg border border-line bg-white text-muted hover:border-blue/40 hover:text-blue"><MoreHorizontal size={15} /></summary><div className="absolute right-0 top-11 z-40 w-48 rounded-xl border border-line bg-white p-1.5 shadow-xl"><button type="button" disabled={operationMutation.isPending} onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open"); setOperationError(null); setAiScriptOpen(true); }} className="flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-xs text-amber hover:bg-amber/5 disabled:opacity-45"><WandSparkles size={14} className="mt-0.5 shrink-0" /><span><strong className="block font-medium">AI 重写全片…</strong><small className="mt-0.5 block text-[9px] leading-4 text-muted">将生成新结构并替换现有场景</small></span></button></div></details> : <button type="button" disabled={operationMutation.isPending} onClick={() => { setOperationError(null); setAiScriptOpen(true); }} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-white px-3 py-2 text-xs font-medium text-text hover:border-blue/40 hover:text-blue disabled:opacity-45"><WandSparkles size={14} />AI 写脚本</button>}<div ref={addAssetMenuRef} className="relative"><button type="button" aria-expanded={addAssetMenuOpen} onClick={() => setAddAssetMenuOpen((open) => !open)} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-white px-3 py-2 text-xs font-medium text-text hover:border-blue/40 hover:text-blue"><ImagePlus size={14} />添加素材<ChevronDown size={12} /></button>{addAssetMenuOpen && <div className="absolute right-0 top-11 z-40 w-44 overflow-hidden rounded-xl border border-line bg-white p-1.5 shadow-xl"><button type="button" onClick={() => { setAddAssetMenuOpen(false); setAssetPickerOpen(true); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-text hover:bg-canvas"><Library size={14} className="text-muted" />从素材库添加</button><button type="button" onClick={() => { setAddAssetMenuOpen(false); openUploadDrawer(workspace.project.id); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-text hover:bg-canvas"><CloudUpload size={14} className="text-muted" />上传新素材</button></div>}</div><span className={`ml-1 flex items-center gap-1.5 text-xs ${saveTone}`}>{store.saveState === "saving" ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}{saveLabels[store.saveState]}</span><ProjectTaskButton projectId={workspace.project.id} submittedJobs={submittedJobs} open={taskPanelOpen} onOpen={() => setTaskPanelOpen(true)} /><button type="button" onClick={openExportDialog} disabled={operationMutation.isPending} className="flex items-center gap-1.5 rounded-lg bg-blue px-3.5 py-2 text-xs font-semibold text-white disabled:opacity-50"><Download size={14} />导出</button></div>
+          <div className="flex items-center justify-end gap-2">
+            <div ref={creationMenuRef} className="relative">
+              <button
+                type="button"
+                aria-expanded={creationMenuOpen}
+                aria-haspopup="menu"
+                onClick={() => setCreationMenuOpen((open) => !open)}
+                className={`flex shrink-0 items-center gap-1.5 rounded-lg border bg-white px-3 py-2 text-xs font-medium transition ${creationMenuOpen ? "border-blue/40 text-blue ring-2 ring-blue/10" : "border-line text-text hover:border-blue/40 hover:text-blue"}`}
+              ><ImagePlus size={14} />创作工具<ChevronDown size={12} className={`transition ${creationMenuOpen ? "rotate-180" : ""}`} /></button>
+              {creationMenuOpen && <div role="menu" className="absolute right-0 top-11 z-40 w-56 overflow-hidden rounded-xl border border-line bg-white p-1.5 shadow-xl">
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={operationMutation.isPending}
+                  onClick={() => {
+                    setCreationMenuOpen(false);
+                    setOperationError(null);
+                    setAiScriptOpen(true);
+                  }}
+                  className={`flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-xs hover:bg-amber/5 disabled:cursor-not-allowed disabled:opacity-45 ${hasMeaningfulScript ? "text-amber" : "text-text"}`}
+                >
+                  <WandSparkles size={14} className={`mt-0.5 shrink-0 ${hasMeaningfulScript ? "text-amber" : "text-blue"}`} />
+                  <span><strong className="block font-medium">{hasMeaningfulScript ? "AI 重写全片…" : "AI 写脚本"}</strong><small className="mt-0.5 block text-[9px] leading-4 text-muted">{hasMeaningfulScript ? "生成新结构并替换现有场景" : "根据主题生成场景和分镜结构"}</small></span>
+                </button>
+                <div className="my-1 border-t border-line" />
+                <button type="button" role="menuitem" onClick={() => { setCreationMenuOpen(false); setAssetPickerOpen(true); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-text hover:bg-canvas"><Library size={14} className="text-muted" />从素材库添加</button>
+                <button type="button" role="menuitem" onClick={() => { setCreationMenuOpen(false); openUploadDrawer(workspace.project.id); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-text hover:bg-canvas"><CloudUpload size={14} className="text-muted" />上传新素材</button>
+              </div>}
+            </div>
+            <span className={`ml-1 flex items-center gap-1.5 text-xs ${saveTone}`}>{store.saveState === "saving" ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}{saveLabels[store.saveState]}</span>
+            <ProjectTaskButton projectId={workspace.project.id} submittedJobs={submittedJobs} open={taskPanelOpen} onOpen={() => setTaskPanelOpen(true)} />
+            <button type="button" onClick={openExportDialog} disabled={operationMutation.isPending} className="flex items-center gap-1.5 rounded-lg bg-blue px-3.5 py-2 text-xs font-semibold text-white disabled:opacity-50"><Download size={14} />导出</button>
+          </div>
         </div>
         {(store.saveError || operationError) && <div className="mt-2 flex items-center gap-2 rounded-lg bg-red/5 px-3 py-2 text-xs text-red"><AlertTriangle size={14} />{store.saveError ?? operationError}{store.saveState === "conflict" && <button type="button" onClick={() => void store.reloadServer()} className="ml-auto font-semibold underline">重新加载服务器版本</button>}</div>}
       </header>
@@ -355,6 +394,7 @@ export default function ProjectWorkspaceView() {
         onUpdateScene={store.updateScene}
         onMoveScene={store.moveScene}
         onUpdateShot={store.updateShot}
+        onMoveShot={store.moveShot}
         onSplitShot={store.splitShot}
         onRemoveShotAsset={store.removeShotAsset}
         onDuplicateShot={store.duplicateShot}
@@ -371,7 +411,7 @@ export default function ProjectWorkspaceView() {
       {taskPanel}
       {exportOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-ink/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="export-dialog-title"><section className="w-full max-w-md overflow-hidden rounded-2xl border border-line bg-white shadow-2xl"><header className="flex items-start justify-between border-b border-line px-5 py-4"><div className="flex gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-blue-soft text-blue"><Download size={17} /></span><div><h2 id="export-dialog-title" className="text-sm font-semibold text-text">导出主成片</h2><p className="mt-1 text-[11px] leading-5 text-muted">一个项目对应一支主成片，导出时可以适配其他画幅。</p></div></div><button type="button" aria-label="关闭导出设置" onClick={() => setExportOpen(false)} disabled={operationMutation.isPending} className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-canvas disabled:opacity-40"><X size={15} /></button></header><div className="space-y-5 px-5 py-5"><fieldset><legend className="text-xs font-semibold text-text">导出画幅</legend><div className="mt-2 grid grid-cols-2 gap-2">{["16:9", "9:16", "1:1", "4:3"].map((aspectRatio) => <button key={aspectRatio} type="button" onClick={() => setExportAspectRatio(aspectRatio)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${exportAspectRatio === aspectRatio ? "border-blue bg-blue-soft text-blue" : "border-line text-muted hover:border-blue/40"}`}>{aspectRatio}</button>)}</div></fieldset><fieldset><legend className="text-xs font-semibold text-text">清晰度</legend><div className="mt-2 grid grid-cols-2 gap-2">{[["1080p", "1080P"], ["4k", "4K"]].map(([value, label]) => <button key={value} type="button" onClick={() => setExportResolution(value)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${exportResolution === value ? "border-blue bg-blue-soft text-blue" : "border-line text-muted hover:border-blue/40"}`}>{label}</button>)}</div></fieldset><div className="rounded-xl bg-canvas px-4 py-3"><strong className="block truncate text-xs text-text">{workspace.project.name}</strong><span className="mt-1 block text-[11px] text-muted">{Math.round(workspace.document.timeline.durationMs / 1000)} 秒 · MP4 · {exportAspectRatio} · {exportResolution === "4k" ? "4K" : "1080P"} · 自动适配字幕安全区</span></div></div><footer className="flex justify-end gap-2 border-t border-line bg-canvas/60 px-5 py-4"><button type="button" onClick={() => setExportOpen(false)} disabled={operationMutation.isPending} className="rounded-lg border border-line bg-white px-4 py-2 text-xs font-medium text-text disabled:opacity-40">取消</button><button type="button" onClick={() => operationMutation.mutate({ operation: "export", parameters: { format: "mp4", resolution: exportResolution, aspect_ratio: exportAspectRatio } })} disabled={operationMutation.isPending || workspace.project.id === "__preview__"} className="flex items-center gap-1.5 rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{operationMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}{workspace.project.id === "__preview__" ? "预览模式" : operationMutation.isPending ? "正在创建任务…" : "开始导出"}</button></footer></section></div>}
       <AIScriptGeneratorModal open={aiScriptOpen} projectName={workspace.project.name} existingSceneCount={hasMeaningfulScript ? workspace.document.storyboard.scenes.length : 0} pending={operationMutation.isPending} error={operationError} onClose={() => !operationMutation.isPending && setAiScriptOpen(false)} onGenerate={(request: AIScriptRequest) => operationMutation.mutate({ operation: "generate_script", parameters: request })} />
-      <QuickAIGenerateModal open={quickAIOpen} projectName={workspace.project.name} scenes={workspace.document.storyboard.scenes} selectedScene={selectedScene} selectedShot={selectedShot} initialKind={quickAIKind} initialScope={quickAIScope} pending={operationMutation.isPending} error={operationError} onClose={() => !operationMutation.isPending && setQuickAIOpen(false)} onGenerate={(operation, scope, parameters) => operationMutation.mutate({ operation, scope, parameters })} />
+      <QuickAIGenerateModal open={quickAIOpen} projectName={workspace.project.name} scenes={workspace.document.storyboard.scenes} assets={workspace.linkedAssets} selectedScene={selectedScene} selectedShot={selectedShot} initialKind={quickAIKind} initialScope={quickAIScope} pending={operationMutation.isPending} error={operationError} onClose={() => !operationMutation.isPending && setQuickAIOpen(false)} onGenerate={(operation, scope, parameters) => operationMutation.mutate({ operation, scope, parameters })} />
       <AIVoiceoverModal open={voiceoverOpen} projectId={workspace.project.id} scenes={workspace.document.storyboard.scenes} selectedScene={selectedScene} selectedShot={selectedShot} pending={operationMutation.isPending} error={operationError} onClose={() => !operationMutation.isPending && setVoiceoverOpen(false)} onGenerate={(scope, parameters) => operationMutation.mutate({ operation: "generate_voiceover", scope, parameters })} />
       <ProjectAssetPickerModal open={assetPickerOpen} projectId={workspace.project.id} linkedAssetIds={workspace.linkedAssets.map((asset) => asset.id)} onClose={() => setAssetPickerOpen(false)} onAdded={async () => { await store.reloadServer(); notify("素材已添加到项目"); }} />
     </div>

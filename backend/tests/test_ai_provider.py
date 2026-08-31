@@ -335,6 +335,137 @@ class AgnesGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
             has_agnes=True,
         )
 
+    def flash_settings(self):
+        selected = self.settings()
+        selected.agnes_video_model = "agnes-video-2.5-flash"
+        return selected
+
+    async def test_flash_text_payload_and_poll_query(self):
+        calls = []
+        responses = [
+            FakeResponse({"video_id": "flash-text"}),
+            FakeResponse({
+                "status": "completed",
+                "metadata": {"url": "https://output.agnes-ai.cn/flash-text.mp4"},
+            }),
+        ]
+        with patch.object(ai_provider, "settings", self.flash_settings()), patch.object(
+            ai_provider.httpx,
+            "AsyncClient",
+            side_effect=lambda *args, **kwargs: RecordingAsyncClient(
+                responses, calls, *args, **kwargs
+            ),
+        ), patch.object(ai_provider.asyncio, "sleep", new_callable=AsyncMock):
+            url = await ai_provider.generate_video(
+                "雨夜中的城市街道",
+                duration=6,
+                mode="text",
+            )
+
+        self.assertEqual(url, "https://output.agnes-ai.cn/flash-text.mp4")
+        submit = calls[0][2]["json"]
+        self.assertEqual(submit["model"], "agnes-video-2.5-flash")
+        self.assertEqual(submit["mode"], "text")
+        self.assertEqual(submit["seconds"], "6")
+        self.assertEqual(submit["size"], "720P")
+        self.assertNotIn("images", submit)
+        self.assertTrue(calls[1][1].endswith("/agnesapi"))
+        self.assertEqual(calls[1][2]["params"], {
+            "video_id": "flash-text",
+            "model_name": "agnes-video-2.5-flash",
+        })
+
+    async def test_flash_keyframe_payload_supports_first_and_last_frame(self):
+        calls = []
+        responses = [
+            FakeResponse({"video_id": "flash-keyframe"}),
+            FakeResponse({
+                "status": "completed",
+                "metadata": {"url": "https://output.agnes-ai.cn/keyframe.mp4"},
+            }),
+        ]
+        prepared = ["https://public.example.com/first.png", "https://public.example.com/last.png"]
+        with patch.object(ai_provider, "settings", self.flash_settings()), patch.object(
+            ai_provider.httpx,
+            "AsyncClient",
+            side_effect=lambda *args, **kwargs: RecordingAsyncClient(
+                responses, calls, *args, **kwargs
+            ),
+        ), patch.object(
+            ai_provider,
+            "_prepare_agnes_video_first_frame",
+            new_callable=AsyncMock,
+            side_effect=prepared,
+        ), patch.object(ai_provider.asyncio, "sleep", new_callable=AsyncMock):
+            await ai_provider.generate_video(
+                "人物从室内走到室外",
+                duration=8,
+                mode="keyframe",
+                first_frame_url="private/first.png",
+                last_frame_url="private/last.png",
+            )
+
+        submit = calls[0][2]["json"]
+        self.assertEqual(submit["mode"], "keyframe")
+        self.assertEqual(submit["first_frame"], prepared[0])
+        self.assertEqual(submit["last_frame"], prepared[1])
+
+    async def test_flash_reference_payload_uses_up_to_five_images(self):
+        calls = []
+        responses = [
+            FakeResponse({"video_id": "flash-reference"}),
+            FakeResponse({
+                "status": "completed",
+                "metadata": {"url": "https://output.agnes-ai.cn/reference.mp4"},
+            }),
+        ]
+        prepared = [f"https://public.example.com/reference-{index}.png" for index in range(3)]
+        with patch.object(ai_provider, "settings", self.flash_settings()), patch.object(
+            ai_provider.httpx,
+            "AsyncClient",
+            side_effect=lambda *args, **kwargs: RecordingAsyncClient(
+                responses, calls, *args, **kwargs
+            ),
+        ), patch.object(
+            ai_provider,
+            "_prepare_agnes_video_first_frame",
+            new_callable=AsyncMock,
+            side_effect=prepared,
+        ), patch.object(ai_provider.asyncio, "sleep", new_callable=AsyncMock):
+            await ai_provider.generate_video(
+                "保持人物和场景风格一致",
+                duration=12,
+                mode="reference",
+                reference_image_urls=["private/one.png", "private/two.png", "private/three.png"],
+            )
+
+        submit = calls[0][2]["json"]
+        self.assertEqual(submit["mode"], "reference")
+        self.assertEqual(submit["images"], prepared)
+        self.assertNotIn("videos", submit)
+
+    def test_flash_reference_payload_rejects_more_than_five_images(self):
+        with self.assertRaisesRegex(RuntimeError, "最多支持 5 张参考图片"):
+            ai_provider._agnes_video_payload(
+                "agnes-video-2.5-flash",
+                "保持一致",
+                "",
+                5,
+                "16:9",
+                mode="reference",
+                reference_images=[f"https://example.com/{index}.png" for index in range(6)],
+            )
+
+    def test_flash_duration_is_clamped_to_supported_range(self):
+        short, _ = ai_provider._agnes_video_payload(
+            "agnes-video-2.5-flash", "短镜头", "", 1, "16:9", mode="text"
+        )
+        long, _ = ai_provider._agnes_video_payload(
+            "agnes-video-2.5-flash", "长镜头", "", 30, "16:9", mode="text"
+        )
+        self.assertEqual(short["seconds"], "4")
+        self.assertEqual(long["seconds"], "12")
+
     async def test_video_submit_limiter_waits_for_shared_redis_slot(self):
         selected = self.settings()
         selected.redis_url = "redis://redis:6379/0"
