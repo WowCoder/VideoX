@@ -12,7 +12,7 @@ export OPENVMA_TEST_ACCOUNT_NAME := $(if $(strip $(NAME)),$(NAME),测试账号)
 .PHONY: help setup doctor \
 	up up-ai rebuild rebuild-ai stop down restart restart-backend restart-worker ps \
 	logs logs-backend logs-worker logs-frontend logs-ai \
-	test backend-test backend-compile frontend-install lint frontend-build compose-check check \
+	test backend-test backend-compile frontend-install frontend-test lint frontend-build compose-check check \
 	db-upgrade db-current db-heads db-history db-revision db-check \
 	shell-backend shell-frontend shell-db worker-ping worker-tasks health config \
 	reindex reindex-all create-test-account reset-ai-usage backfill-video-previews
@@ -102,6 +102,9 @@ backend-compile: ## 编译检查后端 Python 文件
 frontend-install: ## 按 lockfile 安装/修复前端容器依赖
 	@$(FRONTEND) npm install
 
+frontend-test: ## 运行前端 Node 单元测试
+	@$(FRONTEND) npm test
+
 lint: ## 运行前端 ESLint
 	@$(FRONTEND) npm run lint
 
@@ -111,7 +114,7 @@ frontend-build: ## 运行前端类型检查和生产构建
 compose-check: ## 校验 Docker Compose 配置
 	@$(COMPOSE) config --quiet
 
-check: compose-check backend-test backend-compile lint frontend-build ## 运行提交前完整检查
+check: compose-check backend-test backend-compile frontend-test lint frontend-build ## 运行提交前完整检查
 	@echo "全部检查通过"
 
 db-upgrade: ## 升级数据库到最新迁移
