@@ -11,6 +11,7 @@ OPENVMA_BACKUP_PATH="${OPENVMA_BACKUP_PATH:-}"
 OPENVMA_MIGRATION_MODE="${OPENVMA_MIGRATION_MODE:-auto}"
 OPENVMA_APT_MIRROR="${OPENVMA_APT_MIRROR:-mirrors.aliyun.com}"
 OPENVMA_PIP_INDEX_URL="${OPENVMA_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
+OPENVMA_NPM_REGISTRY="${OPENVMA_NPM_REGISTRY:-https://registry.npmmirror.com}"
 
 if [[ ! -f "${OPENVMA_ENV_FILE}" ]]; then
     echo "生产环境文件不存在：${OPENVMA_ENV_FILE}" >&2
@@ -48,17 +49,18 @@ command -v curl >/dev/null 2>&1 || { echo "未找到 curl，无法预检构建�
 command -v python3 >/dev/null 2>&1 || { echo "未找到 python3，无法创建 MinIO 快照" >&2; exit 1; }
 case "${OPENVMA_MIGRATION_MODE}" in auto|always) ;; *) echo "OPENVMA_MIGRATION_MODE 必须是 auto 或 always" >&2; exit 1 ;; esac
 
-echo "预检 apt/PyPI 镜像..."
+echo "预检 apt/PyPI/npm 镜像..."
 apt_mirror_url="${OPENVMA_APT_MIRROR}"
 if [[ "${apt_mirror_url}" != http://* && "${apt_mirror_url}" != https://* ]]; then
     apt_mirror_url="https://${apt_mirror_url}"
 fi
 curl --fail --silent --show-error --location --max-time 10 "${apt_mirror_url}/debian/dists/bookworm/InRelease" -o /dev/null
 curl --fail --silent --show-error --location --max-time 10 "${OPENVMA_PIP_INDEX_URL}" -o /dev/null
+curl --fail --silent --show-error --location --max-time 10 "${OPENVMA_NPM_REGISTRY%/}/-/ping" -o /dev/null
 
 export OPENVMA_ENV_FILE
 export OPENVMA_IMAGE_TAG="${deploy_tag}"
-export OPENVMA_APT_MIRROR OPENVMA_PIP_INDEX_URL DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
+export OPENVMA_APT_MIRROR OPENVMA_PIP_INDEX_URL OPENVMA_NPM_REGISTRY DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 compose=(docker compose -f "${COMPOSE_FILE}" --env-file "${OPENVMA_ENV_FILE}")
 
 "${compose[@]}" config --quiet

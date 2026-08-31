@@ -164,6 +164,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
+      args:
+        OPENVMA_NPM_REGISTRY: ${OPENVMA_NPM_REGISTRY:-https://registry.npmjs.org}
     restart: unless-stopped
     depends_on:
       backend:

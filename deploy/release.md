@@ -89,7 +89,7 @@ OPENVMA_IMAGE_TAG=<target-commit-sha> \
 
 未提供 `OPENVMA_BACKUP_PATH` 时仍按默认策略自动备份。备份脚本会将 MinIO 增量同步到 `minio-current`，并为每次发布生成可独立恢复的快照目录；未变化对象使用硬链接复用磁盘空间。
 
-生产机默认使用阿里云 apt/PyPI 镜像，并在构建前做连通性预检。也可以通过 `OPENVMA_APT_MIRROR` 和 `OPENVMA_PIP_INDEX_URL` 覆盖。Backend 和 Gateway Dockerfile 使用 BuildKit cache mount，生产机应保持 Docker/BuildKit 缓存，不要在普通发布后清理构建缓存。
+生产机默认使用阿里云 apt/PyPI 镜像和 npmmirror npm 镜像，并在构建前做连通性预检。也可以通过 `OPENVMA_APT_MIRROR`、`OPENVMA_PIP_INDEX_URL` 和 `OPENVMA_NPM_REGISTRY` 覆盖。Backend 和 Gateway Dockerfile 使用 BuildKit cache mount，生产机应保持 Docker/BuildKit 缓存，不要在普通发布后清理构建缓存。
 
 数据库迁移默认使用 `OPENVMA_MIGRATION_MODE=auto`：仅当数据库已经处于目标 head 且新旧迁移目录一致时跳过 migration 容器；任何不确定情况都会执行迁移。需要强制执行时使用 `OPENVMA_MIGRATION_MODE=always`。
 
@@ -189,15 +189,17 @@ OPENVMA_BACKUP_DIR=/srv/openvma/backups \
 OPENVMA_STATE_DIR=/srv/openvma/.deploy-state \
 OPENVMA_APT_MIRROR=mirrors.aliyun.com \
 OPENVMA_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+OPENVMA_NPM_REGISTRY=https://registry.npmmirror.com \
 OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}" \
 ./deploy/deploy.sh
 ```
 
-如果生产服务器访问 Debian 或 PyPI 官方源不稳定，可以只在构建/发布命令的进程环境中增加镜像源，不需要把它们写入包含业务密钥的环境文件：
+如果生产服务器访问 Debian、PyPI 或 npm 官方源不稳定，可以只在构建/发布命令的进程环境中增加镜像源，不需要把它们写入包含业务密钥的环境文件：
 
 ```bash
 OPENVMA_APT_MIRROR=mirrors.aliyun.com \
 OPENVMA_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+OPENVMA_NPM_REGISTRY=https://registry.npmmirror.com \
 OPENVMA_ENV_FILE=/srv/openvma/.env.production \
 OPENVMA_BACKUP_DIR=/srv/openvma/backups \
 OPENVMA_STATE_DIR=/srv/openvma/.deploy-state \
