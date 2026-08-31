@@ -4,8 +4,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from openai import AsyncOpenAI
 
 from app.services import ai_provider
+from app.tasks.async_runner import run_async
 
 
 class FakeResponse:
@@ -119,6 +121,47 @@ class LocalEmbeddingProviderTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "维度异常"):
                 await ai_provider.generate_embedding("真实素材文本")
+
+
+class OpenAIClientLifecycleTests(unittest.TestCase):
+    def test_generate_text_closes_real_client_before_celery_loop_ends(self):
+        async def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "agnes-2.5-flash",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "OK"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+            )
+
+        http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = AsyncOpenAI(
+            api_key="test-key",
+            base_url="https://agnes.example/v1",
+            http_client=http_client,
+        )
+        selected = SimpleNamespace(
+            ai_text_provider="agnes",
+            agnes_text_model="agnes-2.5-flash",
+        )
+        with patch.object(ai_provider, "settings", selected), patch.object(
+            ai_provider,
+            "_agnes_client",
+            return_value=client,
+        ):
+            result = run_async(ai_provider.generate_text("只回复 OK"))
+
+        self.assertEqual(result, "OK")
+        self.assertTrue(http_client.is_closed)
 
 
 class DashScopeGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
@@ -497,9 +540,10 @@ class AgnesGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
             choices=[SimpleNamespace(message=SimpleNamespace(content="AGNES_OK"))]
         )
         create = AsyncMock(return_value=completion)
-        client = SimpleNamespace(
-            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
-        )
+        client = AsyncMock()
+        client.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
         selected = self.settings()
         selected.ai_text_provider = "agnes"
         selected.agnes_text_model = "agnes-2.5-flash"
@@ -511,6 +555,26 @@ class AgnesGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "AGNES_OK")
         client_factory.assert_called_once_with()
         self.assertEqual(create.await_args.kwargs["model"], "agnes-2.5-flash")
+        client.__aenter__.assert_awaited_once_with()
+        client.__aexit__.assert_awaited_once()
+
+    async def test_text_closes_agnes_client_when_request_fails(self):
+        create = AsyncMock(side_effect=RuntimeError("provider failed"))
+        client = AsyncMock()
+        client.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
+        selected = self.settings()
+        selected.ai_text_provider = "agnes"
+        selected.agnes_text_model = "agnes-2.5-flash"
+        with patch.object(ai_provider, "settings", selected), patch.object(
+            ai_provider, "_agnes_client", return_value=client
+        ):
+            with self.assertRaisesRegex(RuntimeError, "provider failed"):
+                await ai_provider.generate_text("测试失败后的客户端释放")
+
+        client.__aenter__.assert_awaited_once_with()
+        client.__aexit__.assert_awaited_once()
 
     async def test_image_uses_china_endpoint_and_maps_ratio(self):
         calls = []
@@ -590,9 +654,10 @@ class AgnesGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
             choices=[SimpleNamespace(message=SimpleNamespace(content='{"items":[{"index":0,"summary":"户外画面"}]}'))]
         )
         create = AsyncMock(return_value=completion)
-        client = SimpleNamespace(
-            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
-        )
+        client = AsyncMock()
+        client.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
         selected = self.settings()
         selected.ai_vision_provider = "agnes"
         selected.agnes_vision_model = "agnes-2.5-flash"
@@ -612,6 +677,8 @@ class AgnesGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(results[0]["provider"], "agnes")
         self.assertEqual(results[0]["model"], "agnes-2.5-flash")
+        client.__aenter__.assert_awaited_once_with()
+        client.__aexit__.assert_awaited_once()
         request = create.await_args.kwargs
         self.assertEqual(request["model"], "agnes-2.5-flash")
         content = request["messages"][1]["content"]

@@ -36,11 +36,30 @@ def _source_label(url: str) -> str:
 
 def _json_object(raw: str) -> dict:
     text = raw.strip()
+    if not text:
+        raise ValueError("AI 未返回 JSON 内容")
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
-    payload = json.loads(text)
+        text = re.sub(
+            r"^```(?:json)?[ \t]*(?:\r?\n)?",
+            "",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        ).lstrip()
+
+    decoder = json.JSONDecoder()
+    payload, end = decoder.raw_decode(text)
     if not isinstance(payload, dict):
         raise ValueError("AI 未返回 JSON 对象")
+
+    trailing = text[end:].strip()
+    if trailing == "```":
+        trailing = ""
+    if trailing:
+        if trailing[0] in "{[":
+            raise ValueError("AI 返回了多个 JSON 值，只允许一个 JSON 对象")
+        preview = re.sub(r"\s+", " ", trailing)[:120]
+        raise ValueError(f"AI 在 JSON 对象后返回了额外文本：{preview}")
     return payload
 
 

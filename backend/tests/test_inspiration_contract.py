@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -11,7 +12,11 @@ from app.schemas.inspiration import InspirationRunOut, InspirationTaskCreate
 from app.services.inspiration_schedule import next_inspiration_run
 from app.services.inspiration_extraction import compare_source_states, extract_source_state
 from app.services.web_search import _bing_freshness_filter, parse_bing_rss
-from app.tasks.inspiration_tasks import _generate_normalized_result, _normalize_generated_content
+from app.tasks.inspiration_tasks import (
+    _generate_normalized_result,
+    _json_object,
+    _normalize_generated_content,
+)
 
 
 class AssetClassificationTests(unittest.TestCase):
@@ -182,6 +187,35 @@ class InspirationContractTests(unittest.TestCase):
                 task_name="每日选题",
                 topic_count=1,
             )
+
+
+class InspirationJsonObjectTests(unittest.TestCase):
+    def test_accepts_plain_json_object(self):
+        self.assertEqual(_json_object('{"title":"选题"}'), {"title": "选题"})
+
+    def test_accepts_fenced_json_object(self):
+        self.assertEqual(
+            _json_object('```JSON\n\n  {"title":"选题"}\n```'),
+            {"title": "选题"},
+        )
+
+    def test_accepts_json_followed_by_markdown_fence(self):
+        self.assertEqual(
+            _json_object('{"title":"选题"}\n```'),
+            {"title": "选题"},
+        )
+
+    def test_rejects_explanatory_text_after_json(self):
+        with self.assertRaisesRegex(ValueError, "JSON 对象后返回了额外文本"):
+            _json_object('{"title":"选题"}\n以上是推荐结果。')
+
+    def test_rejects_a_second_json_value(self):
+        with self.assertRaisesRegex(ValueError, "多个 JSON 值"):
+            _json_object('{"title":"选题一"}\n{"title":"选题二"}')
+
+    def test_rejects_malformed_json(self):
+        with self.assertRaises(json.JSONDecodeError):
+            _json_object('{"title":"选题"')
 
 
 class InspirationExtractionTests(unittest.TestCase):

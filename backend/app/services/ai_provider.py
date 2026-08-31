@@ -75,10 +75,10 @@ async def generate_text(
     """使用显式配置的 DashScope 或 Agnes AI 生成文本。"""
     provider = settings.ai_text_provider.lower()
     if provider == "dashscope":
-        client = _dashscope_client()
+        client_factory = _dashscope_client
         selected_model = model or settings.ai_text_model
     elif provider == "agnes":
-        client = _agnes_client()
+        client_factory = _agnes_client
         selected_model = model or settings.agnes_text_model
     else:
         raise RuntimeError("文本生成服务未启用")
@@ -87,12 +87,13 @@ async def generate_text(
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    response = await client.chat.completions.create(
-        model=selected_model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    async with client_factory() as client:
+        response = await client.chat.completions.create(
+            model=selected_model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
     return response.choices[0].message.content or ""
 
 
@@ -119,12 +120,12 @@ async def generate_embedding(text: str, model: Optional[str] = None) -> list[flo
             data = payload.get("data") or []
             embedding = data[0].get("embedding") if data else None
     elif provider == "dashscope":
-        client = _dashscope_client()
-        response = await client.embeddings.create(
-            model=model or settings.dashscope_embedding_model,
-            input=text,
-            dimensions=settings.ai_embedding_dimensions,
-        )
+        async with _dashscope_client() as client:
+            response = await client.embeddings.create(
+                model=model or settings.dashscope_embedding_model,
+                input=text,
+                dimensions=settings.ai_embedding_dimensions,
+            )
         embedding = response.data[0].embedding
     else:
         raise RuntimeError("语义向量服务未启用")
@@ -367,11 +368,11 @@ async def analyze_visual_segments(items: list[dict]) -> list[dict]:
     provider = settings.ai_vision_provider.lower()
     if provider == "dashscope":
         _require_dashscope("视觉理解")
-        client = _dashscope_client()
+        client_factory = _dashscope_client
         selected_model = settings.ai_vision_model
     elif provider == "agnes":
         _require_agnes("视觉理解")
-        client = _agnes_client()
+        client_factory = _agnes_client
         selected_model = settings.agnes_vision_model
     else:
         raise RuntimeError("视觉理解服务未启用")
@@ -402,15 +403,16 @@ async def analyze_visual_segments(items: list[dict]) -> list[dict]:
             else:
                 image_url = _image_data_url(local_path)
             content.append({"type": "image_url", "image_url": {"url": image_url}})
-        response = await client.chat.completions.create(
-            model=selected_model,
-            messages=[
-                {"role": "system", "content": "你是视频素材理解模型，只输出合法 JSON，不输出 Markdown。"},
-                {"role": "user", "content": content},
-            ],
-            temperature=0.1,
-            max_tokens=6000,
-        )
+        async with client_factory() as client:
+            response = await client.chat.completions.create(
+                model=selected_model,
+                messages=[
+                    {"role": "system", "content": "你是视频素材理解模型，只输出合法 JSON，不输出 Markdown。"},
+                    {"role": "user", "content": content},
+                ],
+                temperature=0.1,
+                max_tokens=6000,
+            )
     finally:
         if temporary_objects:
             from app.utils.storage import delete_file
@@ -1319,19 +1321,19 @@ async def recognize_text_ocr(image_url: str = "", local_path: str = "") -> str:
     if not image_url:
         raise RuntimeError("在线 OCR 需要公网可访问的图片 URL")
 
-    client = _dashscope_client()
-    response = await client.chat.completions.create(
-        model=settings.dashscope_ocr_model,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                    {"type": "text", "text": "请识别并提取图片中的所有文字内容，按原文输出。"},
-                ],
-            }
-        ],
-    )
+    async with _dashscope_client() as client:
+        response = await client.chat.completions.create(
+            model=settings.dashscope_ocr_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {"type": "text", "text": "请识别并提取图片中的所有文字内容，按原文输出。"},
+                    ],
+                }
+            ],
+        )
     return response.choices[0].message.content or ""
 
 
