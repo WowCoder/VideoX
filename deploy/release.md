@@ -306,7 +306,7 @@ docker compose \
   -f compose.prod.yml \
   --env-file /srv/openvma/.env.production \
   logs --since=15m \
-  backend celery-worker celery-beat gateway
+  backend celery-worker celery-beat gateway admin-gateway
 ```
 
 日志中不应持续出现数据库连接、Redis、MinIO、迁移、Celery 队列或 5xx 错误。

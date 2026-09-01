@@ -5,22 +5,25 @@
 ## 前置条件
 
 - 建议使用至少 9.3.2 版本：官方版本记录显示该版本修复了部分 WebSocket Upgrade 5xx；9.3.1 起支持路径转发和自定义 XFF 提取。
-- DNS 中将应用域名与媒体域名解析到雷池公网 IP。
-- OpenVMA `gateway` 已健康，且雷池容器或节点能访问 `GATEWAY_BIND_IP:GATEWAY_PORT`。
+- DNS 中将应用域名、后台域名与媒体域名解析到雷池公网 IP。
+- OpenVMA `gateway` 与 `admin-gateway` 已健康，且雷池容器或节点能分别访问 `GATEWAY_BIND_IP:GATEWAY_PORT` 和 `ADMIN_GATEWAY_BIND_IP:ADMIN_GATEWAY_PORT`。
 - 主机防火墙只允许雷池到该内部端口的流量。
 
-## 创建两个应用
+## 创建三个应用
 
 在雷池中分别创建：
 
 | 用途 | 域名示例 | 上游 |
 | --- | --- | --- |
 | React、REST API、WebSocket | `app.example.com` | `http://服务器可达内网IP:8080` |
+| 独立运营后台 | `admin.example.com` | `http://服务器可达内网IP:8081` |
 | MinIO 媒体与签名 URL | `media.example.com` | `http://服务器可达内网IP:8080` |
 
-两个域名都指向同一个内部 Nginx，由 Host 头分流。必须保留原始 Host 和查询字符串，否则 MinIO 预签名 URL 会验签失败。不要把媒体域名指向 MinIO Console 的 9001 端口。
+应用域名和媒体域名指向用户网关，后台域名单独指向后台网关。必须保留原始 Host 和查询字符串，否则 MinIO 预签名 URL 会验签失败。不要把媒体域名指向 MinIO Console 的 9001 端口。
 
-为两个应用配置正式证书并启用 HTTPS。HTTP 应重定向到 HTTPS。HSTS 建议在雷池这一 TLS 终止层配置，确认所有子域名均支持 HTTPS 后再考虑 `includeSubDomains`。
+当前 MVP 决策为暂时将 `admin.example.com` 开放到公网，不配置 VPN 或固定出口 IP 白名单。该模式下必须启用 HTTPS、WAF 和 CC/Bot 防护，并保持 `.env.production` 中的 `RATE_LIMIT_ENABLED=true`；后台登录还会受到按来源 IP 的认证接口限流和管理员账号失败锁定保护。不要依赖不公开的路径或域名名称，所有后台请求仍必须通过独立管理员登录与 TOTP MFA。公网开放属于过渡策略，具备条件后应升级为 VPN 或固定出口 IP 白名单。
+
+为三个应用配置正式证书并启用 HTTPS。HTTP 应重定向到 HTTPS。HSTS 建议在雷池这一 TLS 终止层配置，确认所有子域名均支持 HTTPS 后再考虑 `includeSubDomains`。
 
 ## WebSocket
 

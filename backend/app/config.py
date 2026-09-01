@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     jwt_access_expire_minutes: int = 30
     jwt_refresh_expire_days: int = 7
 
+    # ── 运营后台认证 ──
+    # 生产环境必须与普通用户 JWT 使用不同密钥；MFA 密钥使用独立材料加密后入库。
+    admin_jwt_secret: str = ""
+    admin_access_expire_minutes: int = 15
+    admin_session_expire_days: int = 7
+    admin_mfa_encryption_key: str = ""
+    admin_login_max_attempts: int = 5
+    admin_login_lock_minutes: int = 15
+    admin_refresh_cookie_name: str = "openvma_admin_refresh"
+
     # ── CORS ──
     cors_origins: str = "http://localhost:5273,http://localhost:3000"
     trusted_hosts: str = "localhost,127.0.0.1,testserver"
@@ -278,11 +288,25 @@ class Settings(BaseSettings):
             raise ValueError("SMS_DAILY_LIMIT 不能小于 SMS_HOURLY_LIMIT")
         if not 1 <= self.sms_max_verify_attempts <= 10:
             raise ValueError("SMS_MAX_VERIFY_ATTEMPTS 必须在 1 到 10 之间")
+        if not 5 <= self.admin_access_expire_minutes <= 60:
+            raise ValueError("ADMIN_ACCESS_EXPIRE_MINUTES 必须在 5 到 60 之间")
+        if not 1 <= self.admin_session_expire_days <= 30:
+            raise ValueError("ADMIN_SESSION_EXPIRE_DAYS 必须在 1 到 30 之间")
+        if not 3 <= self.admin_login_max_attempts <= 10:
+            raise ValueError("ADMIN_LOGIN_MAX_ATTEMPTS 必须在 3 到 10 之间")
+        if not 1 <= self.admin_login_lock_minutes <= 1440:
+            raise ValueError("ADMIN_LOGIN_LOCK_MINUTES 必须在 1 到 1440 之间")
 
         if self.environment.lower() != "production":
             return self
         if self.jwt_secret == "dev-secret-change-in-production" or len(self.jwt_secret) < 32:
             raise ValueError("生产环境必须配置至少 32 位的 JWT_SECRET")
+        if len(self.admin_jwt_secret) < 32:
+            raise ValueError("生产环境必须配置至少 32 位的 ADMIN_JWT_SECRET")
+        if self.admin_jwt_secret == self.jwt_secret:
+            raise ValueError("ADMIN_JWT_SECRET 不能与普通用户 JWT_SECRET 相同")
+        if len(self.admin_mfa_encryption_key) < 32:
+            raise ValueError("生产环境必须配置至少 32 位的 ADMIN_MFA_ENCRYPTION_KEY")
         if not self.cors_origin_list or any(
             origin == "*" or not origin.startswith("https://") for origin in self.cors_origin_list
         ):

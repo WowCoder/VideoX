@@ -184,7 +184,7 @@ async def reconcile_user_subscription(
         if subscription.current_period_end is not None
         else None
     )
-    if subscription.status == "active" and period_end and period_end <= now:
+    if subscription.status in {"active", "internal"} and period_end and period_end <= now:
         free_membership = (
             await db.execute(select(Membership).where(Membership.id == FREE_MEMBERSHIP_ID))
         ).scalar_one()
@@ -208,7 +208,7 @@ async def expire_due_subscriptions(db: AsyncSession, *, now: datetime | None = N
             select(User)
             .join(Subscription, Subscription.user_id == User.id)
             .where(
-                Subscription.status == "active",
+                Subscription.status.in_(["active", "internal"]),
                 Subscription.current_period_end.is_not(None),
                 Subscription.current_period_end <= now,
             )
@@ -232,7 +232,7 @@ async def expire_due_subscriptions(db: AsyncSession, *, now: datetime | None = N
             if subscription.current_period_end is not None
             else None
         )
-        if subscription.status != "active" or period_end is None or period_end > now:
+        if subscription.status not in {"active", "internal"} or period_end is None or period_end > now:
             continue
         subscription.status = "expired"
         subscription.auto_renew = False

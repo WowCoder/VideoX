@@ -28,3 +28,8 @@ class Order(Base):
     pay_url: Mapped[str] = mapped_column(String(2000), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider: Mapped[str] = mapped_column(String(50), default="alipay")
+    provider_trade_no: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    provider_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    paid_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notify_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -87,7 +87,7 @@ else
 fi
 
 echo "构建版本 ${deploy_tag}..."
-"${compose[@]}" build backend gateway
+"${compose[@]}" build backend gateway admin-gateway
 
 echo "启动数据服务并初始化 bucket..."
 "${compose[@]}" up -d db redis minio
@@ -116,7 +116,7 @@ echo "更新 API 与任务进程..."
 "${compose[@]}" up -d --no-deps --force-recreate backend celery-worker celery-beat
 
 echo "更新内部 Nginx 网关..."
-"${compose[@]}" up -d --no-deps --force-recreate gateway
+"${compose[@]}" up -d --no-deps --force-recreate gateway admin-gateway
 
 OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE}" "${SCRIPT_DIR}/healthcheck.sh"
 

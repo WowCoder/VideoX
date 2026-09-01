@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
   resolve: {
     alias: {
@@ -10,7 +10,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5273,
+    port: mode === "admin" ? 5274 : 5273,
     host: true,
     proxy: {
       "/api": {
@@ -21,7 +21,9 @@ export default defineConfig({
     },
   },
   build: {
+    outDir: mode === "admin" ? "dist-admin" : "dist",
     rollupOptions: {
+      input: mode === "admin" ? path.resolve(__dirname, "admin.html") : path.resolve(__dirname, "index.html"),
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return undefined;
@@ -34,4 +36,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

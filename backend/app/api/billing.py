@@ -229,9 +229,37 @@ async def alipay_notify(
         logger.warning("支付宝回调：订单不存在 %s", order_id)
         return AlipayNotifyResponse(result="fail")
 
-    # 只有交易成功才更新
+    order.provider = "alipay"
+    order.provider_status = str(trade_status or "")[:50] or None
+    order.notify_received_at = _utcnow()
+
+    # 非成功状态只记录通知，不激活订阅。
     if trade_status not in ("TRADE_SUCCESS", "TRADE_FINISHED"):
         return AlipayNotifyResponse(result="success")
+
+    trade_no = str(notify_data.get("trade_no") or "").strip()
+    total_amount_raw = str(notify_data.get("total_amount") or "").strip()
+    try:
+        paid_amount = float(total_amount_raw)
+    except ValueError:
+        logger.warning("支付宝回调金额无效：订单 %s", order.id)
+        return AlipayNotifyResponse(result="fail")
+    if abs(paid_amount - float(order.amount)) > 0.001:
+        logger.warning("支付宝回调金额不匹配：订单 %s", order.id)
+        return AlipayNotifyResponse(result="fail")
+    if not trade_no:
+        logger.warning("支付宝回调缺少交易号：订单 %s", order.id)
+        return AlipayNotifyResponse(result="fail")
+    trade_owner = (
+        await db.execute(
+            select(Order.id).where(Order.provider_trade_no == trade_no, Order.id != order.id)
+        )
+    ).scalar_one_or_none()
+    if trade_owner:
+        logger.error("支付宝交易号重复绑定：%s", trade_no)
+        return AlipayNotifyResponse(result="fail")
+    order.provider_trade_no = trade_no
+    order.paid_amount = paid_amount
 
     # 支付宝可能重复投递同一回调；已支付订单不得再次延长订阅。
     if order.status == "paid":

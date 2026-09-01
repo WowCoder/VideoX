@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:admin": "vite --mode admin --host 0.0.0.0 --port 5274 --open /admin.html",
     "build": "tsc -b && vite build",
+    "build:admin": "tsc -b && vite build --mode admin",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "eslint src --ext ts,tsx",
     "test": "node --experimental-strip-types --test src/**/*.test.ts"

@@ -104,6 +104,15 @@ app.add_middleware(RateLimitMiddleware)
 
 # ── 路由注册 ──
 from app.api import auth, projects, assets, jobs, generate, ws, billing, notifications, search, inspiration, voiceover  # noqa: E402
+from app.api.admin import (  # noqa: E402
+    audit_logs as admin_audit_logs,
+    auth as admin_auth,
+    billing as admin_billing,
+    dashboard as admin_dashboard,
+    jobs as admin_jobs,
+    search as admin_search,
+    users as admin_users,
+)
 
 app.include_router(auth.router, prefix="/api/auth", tags=["鉴权"])
 app.include_router(projects.router, prefix="/api/projects", tags=["项目"])
@@ -116,6 +125,13 @@ app.include_router(notifications.router, prefix="/api/notifications", tags=["站
 app.include_router(search.router, prefix="/api/search", tags=["全局搜索"])
 app.include_router(inspiration.router, prefix="/api/inspiration", tags=["灵感岛"])
 app.include_router(voiceover.router, prefix="/api/voiceover", tags=["AI 配音"])
+app.include_router(admin_auth.router, prefix="/api/admin/auth", tags=["运营后台鉴权"])
+app.include_router(admin_dashboard.router, prefix="/api/admin/dashboard", tags=["运营后台工作台"])
+app.include_router(admin_search.router, prefix="/api/admin/search", tags=["运营后台搜索"])
+app.include_router(admin_users.router, prefix="/api/admin/users", tags=["运营后台用户"])
+app.include_router(admin_jobs.router, prefix="/api/admin/jobs", tags=["运营后台任务"])
+app.include_router(admin_billing.router, prefix="/api/admin", tags=["运营后台交易"])
+app.include_router(admin_audit_logs.router, prefix="/api/admin/audit-logs", tags=["运营后台审计"])
 
 
 @app.get("/api/health")

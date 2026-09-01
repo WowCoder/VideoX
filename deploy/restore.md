@@ -19,7 +19,7 @@ sha256sum --check SHA256SUMS
 
 ```bash
 docker compose -f compose.prod.yml --env-file .env.production \
-  stop gateway backend celery-worker celery-beat
+  stop gateway admin-gateway backend celery-worker celery-beat
 ```
 
 不要在 Worker 仍处理媒体或导出任务时恢复数据库/对象存储。
@@ -59,7 +59,7 @@ docker compose -f compose.prod.yml --env-file .env.production run --rm --no-deps
 
 ```bash
 docker compose -f compose.prod.yml --env-file .env.production \
-  up -d backend celery-worker celery-beat gateway
+  up -d backend celery-worker celery-beat gateway admin-gateway
 
 OPENVMA_ENV_FILE=/srv/openvma/.env.production ./deploy/healthcheck.sh
 ```

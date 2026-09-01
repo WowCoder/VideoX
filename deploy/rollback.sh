@@ -32,11 +32,14 @@ fi
 
 backend_image="${OPENVMA_BACKEND_IMAGE:-$(read_env_value OPENVMA_BACKEND_IMAGE)}"
 gateway_image="${OPENVMA_GATEWAY_IMAGE:-$(read_env_value OPENVMA_GATEWAY_IMAGE)}"
+admin_gateway_image="${OPENVMA_ADMIN_GATEWAY_IMAGE:-$(read_env_value OPENVMA_ADMIN_GATEWAY_IMAGE)}"
 backend_image="${backend_image:-openvma-backend}"
 gateway_image="${gateway_image:-openvma-gateway}"
+admin_gateway_image="${admin_gateway_image:-openvma-admin-gateway}"
 
 docker image inspect "${backend_image}:${rollback_tag}" >/dev/null
 docker image inspect "${gateway_image}:${rollback_tag}" >/dev/null
+docker image inspect "${admin_gateway_image}:${rollback_tag}" >/dev/null
 
 export OPENVMA_ENV_FILE
 export OPENVMA_IMAGE_TAG="${rollback_tag}"
@@ -54,7 +57,7 @@ OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE}" \
     "${SCRIPT_DIR}/backup.sh"
 
 "${compose[@]}" up -d --no-deps --force-recreate backend celery-worker celery-beat
-"${compose[@]}" up -d --no-deps --force-recreate gateway
+"${compose[@]}" up -d --no-deps --force-recreate gateway admin-gateway
 OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE}" "${SCRIPT_DIR}/healthcheck.sh"
 
 mkdir -p "${STATE_DIR}"

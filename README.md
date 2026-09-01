@@ -133,6 +133,8 @@ Backend、Celery Worker 与 Celery Beat 的 Docker 进程默认使用非 root �
 
 生产部署请使用 `compose.prod.yml`，并从 `deploy/README.md` 开始；首次上线后的日常发布与回滚参见 `deploy/release.md`。推荐公网入口为雷池 SafeLine，仓库内 Nginx 只作为受保护的内部上游。
 
+运营后台使用同一前端依赖树中的独立 Vite 构建，开发入口为 `npm run dev:admin`，生产入口为独立 `admin-gateway` 和 `ADMIN_DOMAIN`。用户网关明确隐藏 `/api/admin/*` 与 `/admin.html`，后台网关只代理 `/api/admin/*`。管理员账号通过 `backend/scripts/manage_admin.py` 单独维护，并强制使用 TOTP MFA。
+
 ### 1. 创建环境配置
 
 ```bash
@@ -183,6 +185,7 @@ docker compose logs -f local-embedding local-reranker local-asr local-ocr
 | 服务 | 地址 |
 | --- | --- |
 | Desktop 前端 | http://localhost:5273 |
+| 运营后台前端 | http://localhost:5274/admin.html |
 | 后端 API | http://localhost:8000 |
 | OpenAPI | http://localhost:8000/docs |
 | MinIO Console | http://localhost:9001 |
@@ -209,6 +212,59 @@ AI_OCR_PROVIDER=disabled
 ```
 
 此时视频仍可完成 FFmpeg 元数据读取、镜头切分、缩略图和人工剪辑，但没有转写、OCR 和语义搜索。系统会展示真实降级状态，不生成占位结果。
+
+### 4. 运营后台常用命令
+
+运营后台使用独立 Vite 入口。安装过前端依赖后，在一个单独终端中启动：
+
+```bash
+cd frontend
+npm run dev:admin
+```
+
+访问 http://localhost:5274/admin.html。开发态必须使用独立的 `admin.html` 入口；生产后台网关会将根路径自动回退到该入口。生产构建输出到 `frontend/dist-admin/`：
+
+```bash
+cd frontend
+npm run build:admin
+```
+
+管理员账号由后端维护脚本单独管理，不复用普通用户账号。以下命令均在项目根目录执行。
+
+创建管理员；密码通过交互方式输入，至少 12 位，成功后会在本地终端显示 TOTP 二维码：
+
+```bash
+docker compose exec backend python scripts/manage_admin.py create \
+  --email admin@example.com \
+  --name "初始管理员" \
+  --role super_admin
+```
+
+查看管理员列表：
+
+```bash
+docker compose exec -T backend python scripts/manage_admin.py list
+```
+
+重置 MFA；会生成新的 TOTP 密钥和二维码，同时撤销该管理员现有会话：
+
+```bash
+docker compose exec backend python scripts/manage_admin.py reset-mfa \
+  --email admin@example.com
+```
+
+停用管理员；会立即撤销其现有会话并阻止再次登录：
+
+```bash
+docker compose exec -T backend python scripts/manage_admin.py disable \
+  --email admin@example.com
+```
+
+创建管理员和重置 MFA 时不要给 `docker compose exec` 添加 `-T`，交互终端用于安全读取密码和稳定显示黑白二维码。二维码、TOTP 密钥和 Authenticator URI 包含同一高敏感凭证，不要发送到聊天、邮件或在线二维码服务。管理员登录异常时可查看后端日志：
+
+```bash
+docker compose logs -f backend
+```
 
 ## 常用 Make 命令
 

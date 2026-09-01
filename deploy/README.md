@@ -24,11 +24,11 @@ chmod 600 .env.production
 
 至少替换以下值：
 
-- `APP_DOMAIN`、`MEDIA_DOMAIN`、`CORS_ORIGINS`、`TRUSTED_HOSTS`
+- `APP_DOMAIN`、`ADMIN_DOMAIN`、`MEDIA_DOMAIN`、`CORS_ORIGINS`、`TRUSTED_HOSTS`
 - `POSTGRES_PASSWORD` 和对应 `DATABASE_URL`
 - `REDIS_PASSWORD` 和对应 `REDIS_URL`
 - `MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_PUBLIC_ENDPOINT`
-- `JWT_SECRET`
+- `JWT_SECRET`、与其不同的 `ADMIN_JWT_SECRET`、`ADMIN_MFA_ENCRYPTION_KEY`
 - 实际启用的 AI、微信、短信、支付宝凭证
 
 密码建议使用 `openssl rand -hex 24` 或更长的十六进制字符串。这样写入 `DATABASE_URL`、`REDIS_URL` 时不需要额外 URL 编码。不要把真实 `.env.production` 提交到 Git。
@@ -54,8 +54,52 @@ export OPENVMA_IMAGE_TAG="$(git rev-parse --short=12 HEAD)"
 
 ```bash
 docker compose -f compose.prod.yml --env-file .env.production ps
-docker compose -f compose.prod.yml --env-file .env.production logs -f backend celery-worker gateway
+docker compose -f compose.prod.yml --env-file .env.production logs -f backend celery-worker gateway admin-gateway
 ```
+
+首次发布并完成迁移后，以交互方式创建第一个管理员。密码至少 12 位，命令会在本地终端显示仅供 Authenticator 扫描的二维码，并只展示一次 TOTP 密钥和 Authenticator URI：
+
+```bash
+docker compose -f compose.prod.yml --env-file .env.production \
+  exec backend python scripts/manage_admin.py create \
+  --email admin@example.com --name "初始管理员" --role super_admin
+```
+
+生产管理员常用维护命令如下。创建管理员和重置 MFA 时必须保留交互终端，不要添加 `-T`。
+
+查看管理员列表：
+
+```bash
+docker compose -f compose.prod.yml --env-file .env.production \
+  exec -T backend python scripts/manage_admin.py list
+```
+
+重置 MFA；会显示新的本地二维码、废止旧 TOTP 并撤销该管理员现有会话：
+
+```bash
+docker compose -f compose.prod.yml --env-file .env.production \
+  exec backend python scripts/manage_admin.py reset-mfa \
+  --email admin@example.com
+```
+
+停用管理员；会立即撤销该管理员现有会话：
+
+```bash
+docker compose -f compose.prod.yml --env-file .env.production \
+  exec -T backend python scripts/manage_admin.py disable \
+  --email admin@example.com
+```
+
+查看后台网关和管理员认证日志：
+
+```bash
+docker compose -f compose.prod.yml --env-file .env.production \
+  logs -f admin-gateway backend
+```
+
+二维码、TOTP 密钥和 Authenticator URI 包含同一高敏感凭证，不得进入工单、聊天、邮件、截图共享或在线二维码服务。管理员角色固定为 `super_admin`、`operator` 和 `finance`；新增账号应按最小权限原则选择角色。
+
+当前确认的生产后台域名为 `admin.example.com`。MVP 阶段采用公网开放策略，不配置 VPN 或固定出口 IP 白名单；雷池 HTTPS、WAF、CC/Bot 防护，以及生产环境 Redis 认证接口限流必须保持启用。管理员登录仍强制使用独立账号、TOTP MFA，连续 5 次失败锁定 15 分钟。域名与路径不可作为安全边界，后续具备条件时应升级为 VPN 或固定出口 IP 白名单。
 
 ## 4. 配置雷池
 
@@ -108,7 +152,7 @@ CONFIRM_SCHEMA_COMPATIBLE=1 \
 
 ## 8. 上线验收清单
 
-- 雷池公网只开放 80/443，内部 8080 不对公网开放。
+- 雷池公网只开放 80/443，内部 8080/8081 不对公网开放。
 - `/api/health/live` 与 `/api/health/ready` 均返回 200。
 - 未登录 API、登录、刷新 Token、退出流程正常。
 - WebSocket 连接收到 `auth_ok`，任务进度可以更新；轮询仍可作为兜底。
@@ -117,3 +161,4 @@ CONFIRM_SCHEMA_COMPATIBLE=1 \
 - Worker 并发为 1，数据库连接数、CPU、内存、磁盘和任务积压处于预期范围。
 - 备份完成，并在隔离环境至少成功演练一次恢复。
 - API 文档在生产环境不可访问，PostgreSQL、Redis、MinIO Console 无公网端口。
+- 用户域名访问 `/api/admin/*` 和 `/admin.html` 返回 404；后台域名访问普通 `/api/*` 返回 404。

@@ -1,6 +1,7 @@
 """Celery 应用配置。"""
 
 from celery import Celery
+from celery.signals import heartbeat_sent, worker_ready
 from datetime import datetime, timedelta, timezone
 
 from app.config import get_settings
@@ -60,8 +61,42 @@ celery_app.conf.update(
             "task": "app.tasks.scan_due_inspiration_tasks",
             "schedule": 60.0,
         },
+        "write-system-heartbeat-every-thirty-seconds": {
+            "task": "app.tasks.write_system_heartbeat",
+            "schedule": 30.0,
+        },
     },
 )
+
+
+def _write_worker_heartbeat(sender=None, **_kwargs) -> None:
+    """Celery Worker 自身心跳；失败不阻断任务进程。"""
+    try:
+        import redis
+
+        hostname = str(getattr(sender, "hostname", None) or getattr(sender, "consumer", None) or "worker")
+        client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        client.setex(f"openvma:heartbeat:worker:{hostname}", 90, datetime.now(timezone.utc).isoformat())
+        client.close()
+    except Exception:
+        return
+
+
+worker_ready.connect(_write_worker_heartbeat, weak=False)
+heartbeat_sent.connect(_write_worker_heartbeat, weak=False)
+
+
+@celery_app.task(name="app.tasks.write_system_heartbeat")
+def write_system_heartbeat() -> None:
+    """由 Beat 周期派发、Worker 执行；证明完整调度链路可用。"""
+    try:
+        import redis
+
+        client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        client.setex("openvma:heartbeat:beat-dispatch", 90, datetime.now(timezone.utc).isoformat())
+        client.close()
+    except Exception:
+        return
 
 
 @celery_app.task(name="app.tasks.fail_stale_jobs")
@@ -89,6 +124,9 @@ def fail_stale_jobs():
                     result=None,
                     result_detail="请确认 Worker 正常运行后重试任务",
                     result_url=None,
+                    error_code="QUEUE_TIMEOUT",
+                    error_category="WORKER_LOST",
+                    finished_at=now,
                     updated_at=now,
                 )
             )
@@ -105,6 +143,9 @@ def fail_stale_jobs():
                     result=None,
                     result_detail="请检查 Worker 日志后重试任务",
                     result_url=None,
+                    error_code="EXECUTION_TIMEOUT",
+                    error_category="WORKER_LOST",
+                    finished_at=now,
                     updated_at=now,
                 )
             )

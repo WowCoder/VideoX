@@ -57,6 +57,15 @@ server {
         try_files $uri =404;
     }
 
+    # 用户站点不暴露任何运营后台入口或 API；后台地址本身不作为安全边界。
+    location = /admin.html {
+        return 404;
+    }
+
+    location ^~ /api/admin/ {
+        return 404;
+    }
+
     location /assets/ {
         try_files $uri =404;
     }

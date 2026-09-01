@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.job import Job
+from app.models.admin import QuotaAdjustment
 from app.models.subscription import Subscription
 from app.models.user import Membership, Usage, User
 from app.services.subscriptions import as_utc, reconcile_user_subscription, utcnow
@@ -152,6 +153,27 @@ def _quota_limit(membership: Membership, quota_type: QuotaType) -> int:
     return max(0, membership.export_quota)
 
 
+async def active_quota_adjustment_amount(
+    db: AsyncSession,
+    user_id: str,
+    quota_type: QuotaType,
+    *,
+    now: datetime,
+) -> int:
+    """统计当前生效且尚未过期的正向额度补偿。"""
+    amount = (
+        await db.execute(
+            select(func.coalesce(func.sum(QuotaAdjustment.amount), 0)).where(
+                QuotaAdjustment.user_id == user_id,
+                QuotaAdjustment.quota_type == quota_type,
+                QuotaAdjustment.effective_at <= now,
+                or_(QuotaAdjustment.expires_at.is_(None), QuotaAdjustment.expires_at > now),
+            )
+        )
+    ).scalar() or 0
+    return max(0, int(amount))
+
+
 def _quota_used(usage: Usage, quota_type: QuotaType) -> int:
     if quota_type == "processing_seconds":
         return max(0, usage.processing_seconds_used)
@@ -209,9 +231,10 @@ async def admit_job_quota(
     now = as_utc(now or utcnow())
     _, membership, usage = await _locked_billing_context(db, user_id, now=now)
     reserved = await _reserved_amount(db, user_id, quota_type)
+    adjustment = await active_quota_adjustment_amount(db, user_id, quota_type, now=now)
     snapshot = QuotaSnapshot(
         quota_type=quota_type,
-        limit=_quota_limit(membership, quota_type),
+        limit=_quota_limit(membership, quota_type) + adjustment,
         used=_quota_used(usage, quota_type),
         reserved=reserved,
         requested=amount,
@@ -242,9 +265,10 @@ async def readmit_existing_job_quota(
         quota_type,
         exclude_job_id=job.id,
     )
+    adjustment = await active_quota_adjustment_amount(db, user_id, quota_type, now=now)
     snapshot = QuotaSnapshot(
         quota_type=quota_type,
-        limit=_quota_limit(membership, quota_type),
+        limit=_quota_limit(membership, quota_type) + adjustment,
         used=_quota_used(usage, quota_type),
         reserved=reserved,
         requested=job.quota_amount,
@@ -286,6 +310,9 @@ async def complete_job_success(
     for field, value in values.items():
         setattr(job, field, value)
     job.status = "SUCCEEDED"
+    job.finished_at = now
+    job.error_code = None
+    job.error_category = None
     job.updated_at = now
     await db.flush()
     return True

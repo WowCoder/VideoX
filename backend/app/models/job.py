@@ -67,6 +67,13 @@ class Job(Base):
     is_simulated: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    error_category: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    provider: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    provider_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
 
     project: Mapped["Project | None"] = relationship(  # type: ignore[name-defined]
         "Project", back_populates="jobs", foreign_keys=[project_id]

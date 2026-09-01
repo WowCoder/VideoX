@@ -20,6 +20,8 @@ def _limit_for_path(path: str) -> tuple[str, int]:
         "/api/auth/send-code",
         "/api/auth/login-phone",
         "/api/auth/wechat/callback",
+        "/api/admin/auth/login",
+        "/api/admin/auth/refresh",
     }:
         return "auth", settings.auth_rate_limit_per_minute
     if path == "/api/assets/upload":

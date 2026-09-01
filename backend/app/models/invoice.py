@@ -33,6 +33,13 @@ class Invoice(Base):
     reject_reason: Mapped[str] = mapped_column(Text, default="")
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invoice_number: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    document_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    handled_by_admin_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow

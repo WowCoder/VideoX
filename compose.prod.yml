@@ -187,6 +187,31 @@ services:
       timeout: 5s
       retries: 5
 
+  admin-gateway:
+    image: ${OPENVMA_ADMIN_GATEWAY_IMAGE:-openvma-admin-gateway}:${OPENVMA_IMAGE_TAG:-latest}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.admin
+      args:
+        OPENVMA_NPM_REGISTRY: ${OPENVMA_NPM_REGISTRY:-https://registry.npmjs.org}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:?ADMIN_DOMAIN is required}
+    ports:
+      - "${ADMIN_GATEWAY_BIND_IP:-127.0.0.1}:${ADMIN_GATEWAY_PORT:-8081}:8080"
+    networks:
+      - private
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
   local-embedding:
     profiles: ["local-ai"]
     image: ${OPENVMA_EMBEDDING_IMAGE:-openvma-local-embedding}:${OPENVMA_IMAGE_TAG:-latest}
