@@ -135,6 +135,10 @@ Backend、Celery Worker 与 Celery Beat 的 Docker 进程默认使用非 root �
 
 运营后台使用同一前端依赖树中的独立 Vite 构建，开发入口为 `npm run dev:admin`，生产入口为独立 `admin-gateway` 和 `ADMIN_DOMAIN`。用户网关明确隐藏 `/api/admin/*` 与 `/admin.html`，后台网关只代理 `/api/admin/*`。管理员账号通过 `backend/scripts/manage_admin.py` 单独维护，并强制使用 TOTP MFA。
 
+工作台的总用户数直接来自业务用户表；当天活跃和本月活跃按 `Asia/Shanghai` 自然日统计显式用户活动心跳，通知和任务轮询不会自动制造活跃数据。用户端只在已登录页面可见且发生真实进入、聚焦或交互时发送心跳，后端最多每 15 分钟更新一次当日记录。迁移会把已知的历史登录事件作为保守初始数据，但完整可比的活跃数据从该功能上线后开始形成。
+
+运营后台还保存低频服务器资源快照：Celery Beat 每小时采集一次负载、CPU 核数、内存、磁盘和运行时间，后台允许至少间隔 30 秒手动刷新。开发环境显示容器视角；生产环境通过专用空目录的只读挂载读取 OpenVMA 数据所在文件系统容量，不挂载宿主机根目录，不接入 Docker Socket，也不替代云监控或 Prometheus 等实时告警系统。
+
 ### 1. 创建环境配置
 
 ```bash

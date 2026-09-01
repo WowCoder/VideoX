@@ -75,6 +75,7 @@ async def list_orders(
     membership_id: str = Query(""),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    sort: str = Query("created_desc", pattern="^(created_desc|created_asc)$"),
     _: AdminPrincipal = Depends(require_admin_permission("billing.read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -100,9 +101,10 @@ async def list_orders(
     if membership_id:
         query = query.where(Order.membership_id == membership_id)
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+    ordering = Order.created_at.asc() if sort == "created_asc" else Order.created_at.desc()
     rows = (
         await db.execute(
-            query.order_by(Order.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            query.order_by(ordering).offset((page - 1) * page_size).limit(page_size)
         )
     ).all()
     items = []
@@ -132,7 +134,7 @@ async def list_orders(
             "requires_reconciliation": requires_reconciliation,
             "subscription_consistent": consistent,
         })
-    return {"items": items, "total": int(total), "page": page, "page_size": page_size}
+    return {"items": items, "total": int(total), "page": page, "page_size": page_size, "sort": sort}
 
 
 @router.get("/orders/{order_id}")
@@ -209,6 +211,7 @@ async def list_invoices(
     status_filter: str = Query("", alias="status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    sort: str = Query("created_desc", pattern="^(created_desc|created_asc)$"),
     _: AdminPrincipal = Depends(require_admin_permission("billing.read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -216,9 +219,10 @@ async def list_invoices(
     if status_filter:
         query = query.where(Invoice.status == status_filter)
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+    ordering = Invoice.requested_at.asc() if sort == "created_asc" else Invoice.requested_at.desc()
     rows = (
         await db.execute(
-            query.order_by(Invoice.requested_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            query.order_by(ordering).offset((page - 1) * page_size).limit(page_size)
         )
     ).all()
     return {
@@ -242,6 +246,7 @@ async def list_invoices(
         "total": int(total),
         "page": page,
         "page_size": page_size,
+        "sort": sort,
     }
 
 

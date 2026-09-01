@@ -42,6 +42,7 @@ async def list_jobs(
     is_stale: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    sort: str = Query("created_desc", pattern="^(created_desc|created_asc|updated_desc|updated_asc)$"),
     _: AdminPrincipal = Depends(require_admin_permission("jobs.read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -78,9 +79,15 @@ async def list_jobs(
             )
         )
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+    orderings = {
+        "created_desc": Job.created_at.desc(),
+        "created_asc": Job.created_at.asc(),
+        "updated_desc": Job.updated_at.desc(),
+        "updated_asc": Job.updated_at.asc(),
+    }
     rows = (
         await db.execute(
-            query.order_by(Job.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            query.order_by(orderings[sort]).offset((page - 1) * page_size).limit(page_size)
         )
     ).all()
     return {
@@ -108,6 +115,7 @@ async def list_jobs(
         "total": int(total),
         "page": page,
         "page_size": page_size,
+        "sort": sort,
     }
 
 

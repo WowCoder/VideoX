@@ -38,5 +38,19 @@ class AdminMessageResponse(BaseModel):
     message: str
 
 
+class AdminSessionOut(BaseModel):
+    id: str
+    ip_address: str | None = None
+    user_agent: str | None = None
+    last_seen_at: datetime
+    expires_at: datetime
+    created_at: datetime
+    current: bool = False
+
+
+class AdminSessionListResponse(BaseModel):
+    items: list[AdminSessionOut]
+
+
 class ReasonRequest(BaseModel):
     reason: str = Field(..., min_length=3, max_length=2000)

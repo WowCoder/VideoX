@@ -103,7 +103,7 @@ app.add_middleware(RateLimitMiddleware)
 
 
 # ── 路由注册 ──
-from app.api import auth, projects, assets, jobs, generate, ws, billing, notifications, search, inspiration, voiceover  # noqa: E402
+from app.api import activity, auth, projects, assets, jobs, generate, ws, billing, notifications, search, inspiration, voiceover  # noqa: E402
 from app.api.admin import (  # noqa: E402
     audit_logs as admin_audit_logs,
     auth as admin_auth,
@@ -115,6 +115,7 @@ from app.api.admin import (  # noqa: E402
 )
 
 app.include_router(auth.router, prefix="/api/auth", tags=["鉴权"])
+app.include_router(activity.router, prefix="/api/activity", tags=["用户活跃"])
 app.include_router(projects.router, prefix="/api/projects", tags=["项目"])
 app.include_router(assets.router, prefix="/api/assets", tags=["素材"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["任务"])

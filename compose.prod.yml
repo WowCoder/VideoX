@@ -117,6 +117,8 @@ services:
         condition: service_completed_successfully
     expose:
       - "8000"
+    volumes:
+      - ${HOST_METRICS_PATH:-./.host-metrics}:/host-metrics-disk:ro
     command:
       - uvicorn
       - app.main:app
@@ -148,6 +150,8 @@ services:
       - -c
       - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_WORKER_CONCURRENCY:-1}" --queues="$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}"
     stop_grace_period: 2m
+    volumes:
+      - ${HOST_METRICS_PATH:-./.host-metrics}:/host-metrics-disk:ro
 
   celery-beat:
     <<: *app-runtime

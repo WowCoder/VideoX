@@ -20,6 +20,7 @@ async def list_audit_logs(
     status_filter: str = Query("", alias="status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    sort: str = Query("created_desc", pattern="^(created_desc|created_asc)$"),
     _: AdminPrincipal = Depends(require_admin_permission("audit.read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -33,9 +34,10 @@ async def list_audit_logs(
     if status_filter:
         query = query.where(AdminAuditLog.status == status_filter)
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+    ordering = AdminAuditLog.created_at.asc() if sort == "created_asc" else AdminAuditLog.created_at.desc()
     rows = (
         await db.execute(
-            query.order_by(AdminAuditLog.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            query.order_by(ordering).offset((page - 1) * page_size).limit(page_size)
         )
     ).all()
     return {
@@ -60,4 +62,5 @@ async def list_audit_logs(
         "total": int(total),
         "page": page,
         "page_size": page_size,
+        "sort": sort,
     }

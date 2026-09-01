@@ -89,6 +89,7 @@ async def list_users(
     subscription_status: str = Query(""),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    sort: str = Query("created_desc", pattern="^(created_desc|created_asc)$"),
     _: AdminPrincipal = Depends(require_admin_permission("users.read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -116,9 +117,10 @@ async def list_users(
             Subscription.status == subscription_status
         )
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+    ordering = User.created_at.asc() if sort == "created_asc" else User.created_at.desc()
     users = (
         await db.execute(
-            query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            query.order_by(ordering).offset((page - 1) * page_size).limit(page_size)
         )
     ).scalars().unique().all()
     items = []
@@ -140,7 +142,7 @@ async def list_users(
             "created_at": user.created_at,
             **counts,
         })
-    return {"items": items, "total": int(total), "page": page, "page_size": page_size}
+    return {"items": items, "total": int(total), "page": page, "page_size": page_size, "sort": sort}
 
 
 @router.get("/{user_id}")

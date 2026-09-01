@@ -12,6 +12,7 @@ from app.models.inspiration import (
 from app.models.invoice import Invoice
 from app.models.job import Job
 from app.models.migration import MigrationAudit
+from app.models.monitoring import SystemMetricSnapshot, UserDailyActivity
 from app.models.notification import Notification
 from app.models.order import Order
 from app.models.project import Project, ProjectComposition, ProjectRevision, ProjectUndoToken
@@ -43,6 +44,8 @@ __all__ = [
     "ShotMediaVersion",
     "Job",
     "MigrationAudit",
+    "UserDailyActivity",
+    "SystemMetricSnapshot",
     "Order",
     "Subscription",
     "SubscriptionEvent",

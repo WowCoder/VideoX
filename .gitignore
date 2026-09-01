@@ -45,6 +45,7 @@ Thumbs.db
 # ── 构建产物 ──
 frontend/dist/
 frontend/dist-admin/
+.host-metrics/
 backend/__pycache__/
 frontend/vite.config.js
 frontend/vite.config.d.ts

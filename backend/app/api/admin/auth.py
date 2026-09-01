@@ -16,7 +16,10 @@ from app.admin.schemas import (
     AdminLoginRequest,
     AdminMessageResponse,
     AdminOut,
+    AdminSessionListResponse,
+    AdminSessionOut,
     AdminTokenResponse,
+    ReasonRequest,
 )
 from app.admin.security import (
     create_admin_access_token,
@@ -263,6 +266,103 @@ async def logout_all(
     )
     _clear_refresh_cookie(response)
     return AdminMessageResponse(message="所有管理员会话均已退出")
+
+
+@router.get("/sessions", response_model=AdminSessionListResponse)
+async def list_sessions(
+    principal: AdminPrincipal = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    now = _utcnow()
+    sessions = (
+        await db.execute(
+            select(AdminSession)
+            .where(
+                AdminSession.admin_user_id == principal.user.id,
+                AdminSession.revoked_at.is_(None),
+                AdminSession.expires_at > now,
+            )
+            .order_by(AdminSession.last_seen_at.desc())
+        )
+    ).scalars().all()
+    return AdminSessionListResponse(
+        items=[
+            AdminSessionOut(
+                id=session.id,
+                ip_address=session.ip_address,
+                user_agent=session.user_agent,
+                last_seen_at=session.last_seen_at,
+                expires_at=session.expires_at,
+                created_at=session.created_at,
+                current=session.id == principal.session.id,
+            )
+            for session in sessions
+        ]
+    )
+
+
+@router.post("/sessions/revoke-others", response_model=AdminMessageResponse)
+async def revoke_other_sessions(
+    payload: ReasonRequest,
+    request: Request,
+    principal: AdminPrincipal = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    now = _utcnow()
+    await db.execute(
+        update(AdminSession)
+        .where(
+            AdminSession.admin_user_id == principal.user.id,
+            AdminSession.id != principal.session.id,
+            AdminSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    await write_admin_audit(
+        db,
+        admin=principal.user,
+        request=request,
+        action="ADMIN_SESSION_REVOKE_OTHERS",
+        target_type="admin_user",
+        target_id=principal.user.id,
+        reason=payload.reason,
+    )
+    return AdminMessageResponse(message="其他管理员会话已全部撤销")
+
+
+@router.post("/sessions/{session_id}/revoke", response_model=AdminMessageResponse)
+async def revoke_session(
+    session_id: str,
+    payload: ReasonRequest,
+    request: Request,
+    principal: AdminPrincipal = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    if session_id == principal.session.id:
+        raise HTTPException(status_code=400, detail="当前会话请使用退出登录操作")
+    session = (
+        await db.execute(
+            select(AdminSession).where(
+                AdminSession.id == session_id,
+                AdminSession.admin_user_id == principal.user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="管理员会话不存在")
+    if session.revoked_at is None:
+        session.revoked_at = _utcnow()
+    await write_admin_audit(
+        db,
+        admin=principal.user,
+        request=request,
+        action="ADMIN_SESSION_REVOKE",
+        target_type="admin_session",
+        target_id=session.id,
+        reason=payload.reason,
+        after_data={"revoked_at": session.revoked_at.isoformat()},
+    )
+    return AdminMessageResponse(message="管理员会话已撤销")
 
 
 @router.get("/me", response_model=AdminOut)

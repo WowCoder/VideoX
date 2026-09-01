@@ -29,9 +29,28 @@ chmod 600 .env.production
 - `REDIS_PASSWORD` 和对应 `REDIS_URL`
 - `MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_PUBLIC_ENDPOINT`
 - `JWT_SECRET`、与其不同的 `ADMIN_JWT_SECRET`、`ADMIN_MFA_ENCRYPTION_KEY`
+- `HOST_METRICS_PATH`；应指向 OpenVMA 数据所在磁盘上的专用空目录
 - 实际启用的 AI、微信、短信、支付宝凭证
 
 密码建议使用 `openssl rand -hex 24` 或更长的十六进制字符串。这样写入 `DATABASE_URL`、`REDIS_URL` 时不需要额外 URL 编码。不要把真实 `.env.production` 提交到 Git。
+
+服务器资源指标每小时采集一次，并支持后台手动刷新。首次部署前创建专用空目录；后台只通过该目录读取所在文件系统的容量，不挂载宿主机根目录，也不接入 Docker Socket：
+
+```bash
+mkdir -p /srv/openvma/.host-metrics
+chmod 755 /srv/openvma/.host-metrics
+```
+
+对应生产配置为：
+
+```dotenv
+HOST_METRICS_PATH=/srv/openvma/.host-metrics
+SYSTEM_METRICS_DISK_PATH=/host-metrics-disk
+SYSTEM_METRICS_SCOPE=host
+SYSTEM_METRICS_RETENTION_DAYS=30
+```
+
+如果 MinIO 以后迁移到独立数据盘，应把 `HOST_METRICS_PATH` 改为该数据盘上的专用空目录。每小时快照用于运营概览，不替代秒级 Prometheus、云监控或故障告警。
 
 初次上线建议保持所有 AI Provider 为 `disabled`，先验证基础业务链路；随后再逐项启用并进行真实模型冒烟测试。启用本地 AI 时，将相应 Provider 改成 `local`，设置至少 24 位的 `LOCAL_AI_API_KEY`，并按“本地 AI”一节启动服务。
 

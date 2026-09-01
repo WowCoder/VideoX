@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     admin_login_lock_minutes: int = 15
     admin_refresh_cookie_name: str = "openvma_admin_refresh"
 
+    # ── 低频服务器资源采集 ──
+    system_metrics_enabled: bool = True
+    system_metrics_node_name: str = "primary"
+    system_metrics_disk_path: str = "/"
+    system_metrics_scope: str = "container"
+    system_metrics_retention_days: int = 30
+    system_metrics_manual_min_interval_seconds: int = 30
+
     # ── CORS ──
     cors_origins: str = "http://localhost:5273,http://localhost:3000"
     trusted_hosts: str = "localhost,127.0.0.1,testserver"
@@ -225,6 +233,12 @@ class Settings(BaseSettings):
             raise ValueError("DB_POOL_SIZE 必须大于等于 1")
         if self.db_max_overflow < 0:
             raise ValueError("DB_MAX_OVERFLOW 不能小于 0")
+        if self.system_metrics_scope not in {"container", "host"}:
+            raise ValueError("SYSTEM_METRICS_SCOPE 必须是 container 或 host")
+        if self.system_metrics_retention_days < 1:
+            raise ValueError("SYSTEM_METRICS_RETENTION_DAYS 必须大于等于 1")
+        if self.system_metrics_manual_min_interval_seconds < 10:
+            raise ValueError("SYSTEM_METRICS_MANUAL_MIN_INTERVAL_SECONDS 必须至少为 10 秒")
         if self.max_upload_size_gb < 1:
             raise ValueError("MAX_UPLOAD_SIZE_GB 必须大于等于 1")
         if self.ai_match_result_limit > self.ai_match_candidate_limit:

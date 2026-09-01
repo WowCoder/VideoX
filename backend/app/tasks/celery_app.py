@@ -65,6 +65,10 @@ celery_app.conf.update(
             "task": "app.tasks.write_system_heartbeat",
             "schedule": 30.0,
         },
+        "collect-system-metrics-hourly": {
+            "task": "app.tasks.collect_system_metrics",
+            "schedule": 3600.0,
+        },
     },
 )
 
@@ -97,6 +101,21 @@ def write_system_heartbeat() -> None:
         client.close()
     except Exception:
         return
+
+
+@celery_app.task(name="app.tasks.collect_system_metrics")
+def collect_system_metrics_task() -> None:
+    """每小时保存一次低频服务器资源快照。"""
+    from app.database import async_session_factory
+    from app.services.system_metrics import collect_and_store_system_metrics
+    from app.tasks.async_runner import run_async
+
+    async def _collect() -> None:
+        async with async_session_factory() as session:
+            await collect_and_store_system_metrics(session, source="scheduled")
+            await session.commit()
+
+    run_async(_collect())
 
 
 @celery_app.task(name="app.tasks.fail_stale_jobs")
