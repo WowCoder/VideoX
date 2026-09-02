@@ -111,6 +111,11 @@ Desktop 路由由 `frontend/src/router.tsx` 和 `frontend/src/routes/index.tsx`
 提供路径参数、鉴权守卫、查询参数、懒加载与浏览器前进后退支持，不依赖第三方路由运行时。
 Backend、Celery Worker 与 Celery Beat 的 Docker 进程默认使用非 root 的 `openvma` 用户运行。
 
+生产后台任务按 `control`、`short-ai`、`video`、`media`、`export` 队列隔离。
+全项目视频生成会持久化为批次和逐镜头子任务；排队数量与供应商在途并发分别由
+`VIDEO_QUEUE_*` 和 `VIDEO_INFLIGHT_*` 配置控制。视频供应商任务采用“短提交 +
+延迟查询 + 结果持久化”状态机，等待外部生成时不会长期占用 Celery 执行槽。
+
 ## 环境要求
 
 基础服务：

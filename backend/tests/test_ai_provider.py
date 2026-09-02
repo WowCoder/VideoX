@@ -183,6 +183,7 @@ class DashScopeGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
             dashscope_api_url="https://dashscope.aliyuncs.com/api/v1",
             dashscope_poll_interval_seconds=0.2,
             dashscope_generation_timeout_seconds=30,
+            video_poll_interval_seconds=10,
             has_dashscope=True,
         )
 
@@ -291,6 +292,57 @@ class DashScopeGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
             "https://dashscope.aliyuncs.com/api/v1/tasks/video-task",
         )
         agnes_prepare.assert_not_awaited()
+
+    async def test_video_submit_returns_provider_task_without_polling(self):
+        with patch.object(ai_provider, "settings", self.settings()), patch.object(
+            ai_provider,
+            "_submit_video_task",
+            new_callable=AsyncMock,
+            return_value="video-task",
+        ) as submit, patch.object(
+            ai_provider,
+            "query_video_task",
+            new_callable=AsyncMock,
+        ) as query:
+            result = await ai_provider.submit_video_generation("镜头运动")
+
+        self.assertEqual(result["provider"], "dashscope")
+        self.assertEqual(result["task_id"], "video-task")
+        submit.assert_awaited_once()
+        query.assert_not_awaited()
+
+    async def test_dashscope_single_poll_maps_pending_success_and_failure(self):
+        pending = {"output": {"task_status": "RUNNING"}}
+        succeeded = {
+            "output": {
+                "task_status": "SUCCEEDED",
+                "video_url": "https://example.aliyuncs.com/video.mp4",
+            }
+        }
+        failed = {
+            "output": {
+                "task_status": "FAILED",
+                "code": "QuotaExhausted",
+                "message": "No quota left",
+            }
+        }
+        with patch.object(ai_provider, "settings", self.settings()), patch.object(
+            ai_provider,
+            "query_video_task",
+            new_callable=AsyncMock,
+            side_effect=[pending, succeeded, failed],
+        ):
+            self.assertEqual(
+                (await ai_provider.poll_video_generation("dashscope", "task"))["state"],
+                "pending",
+            )
+            success = await ai_provider.poll_video_generation("dashscope", "task")
+            failure = await ai_provider.poll_video_generation("dashscope", "task")
+
+        self.assertEqual(success["state"], "succeeded")
+        self.assertEqual(success["result_url"], "https://example.aliyuncs.com/video.mp4")
+        self.assertEqual(failure["state"], "failed")
+        self.assertIn("QuotaExhausted", failure["error"])
 
     async def test_video_content_review_failure_is_actionable_chinese(self):
         calls = []
@@ -417,6 +469,61 @@ class AgnesGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
             "video_id": "flash-text",
             "model_name": "agnes-video-2.5-flash",
         })
+
+    async def test_flash_submit_returns_task_id_without_polling(self):
+        calls = []
+        responses = [FakeResponse({"video_id": "flash-submit"})]
+        with patch.object(ai_provider, "settings", self.flash_settings()), patch.object(
+            ai_provider.httpx,
+            "AsyncClient",
+            side_effect=lambda *args, **kwargs: RecordingAsyncClient(
+                responses, calls, *args, **kwargs
+            ),
+        ):
+            result = await ai_provider.submit_video_generation(
+                "雨夜中的城市街道",
+                duration=6,
+                mode="text",
+            )
+
+        self.assertEqual(result["provider"], "agnes")
+        self.assertEqual(result["task_id"], "flash-submit")
+        self.assertTrue(result["uses_agnesapi_poll"])
+        self.assertEqual([call[0] for call in calls], ["POST"])
+
+    async def test_agnes_single_poll_maps_busy_success_and_failure(self):
+        selected = self.flash_settings()
+        selected.video_poll_interval_seconds = 10
+        responses = [
+            FakeResponse({}, status_code=429, headers={"Retry-After": "7"}),
+            FakeResponse({
+                "status": "completed",
+                "metadata": {"url": "https://output.agnes-ai.cn/video.mp4"},
+            }),
+            FakeResponse({"status": "failed", "error": "generation rejected"}),
+        ]
+        calls = []
+        with patch.object(ai_provider, "settings", selected), patch.object(
+            ai_provider.httpx,
+            "AsyncClient",
+            side_effect=lambda *args, **kwargs: RecordingAsyncClient(
+                responses, calls, *args, **kwargs
+            ),
+        ):
+            busy = await ai_provider.poll_video_generation(
+                "agnes", "task", model="agnes-video-2.5-flash", uses_agnesapi_poll=True
+            )
+            success = await ai_provider.poll_video_generation(
+                "agnes", "task", model="agnes-video-2.5-flash", uses_agnesapi_poll=True
+            )
+            failure = await ai_provider.poll_video_generation(
+                "agnes", "task", model="agnes-video-2.5-flash", uses_agnesapi_poll=True
+            )
+
+        self.assertEqual(busy, {"state": "pending", "retry_after": 10})
+        self.assertEqual(success["state"], "succeeded")
+        self.assertEqual(success["result_url"], "https://output.agnes-ai.cn/video.mp4")
+        self.assertEqual(failure, {"state": "failed", "error": "generation rejected"})
 
     async def test_flash_keyframe_payload_supports_first_and_last_frame(self):
         calls = []

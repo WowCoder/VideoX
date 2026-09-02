@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import CheckConstraint, Index, String, Integer, Boolean, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import CheckConstraint, Index, String, Integer, Boolean, DateTime, ForeignKey, Text, JSON, text as sql_text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -29,6 +29,16 @@ class Job(Base):
         ),
         Index("ix_jobs_quota_status", "quota_type", "status"),
         Index("ix_jobs_status_updated_at", "status", "updated_at"),
+        Index("ix_jobs_video_dispatch", "type", "execution_state", "queued_at"),
+        Index("ix_jobs_video_inflight_owner", "owner_id", "execution_state"),
+        Index("ix_jobs_video_inflight_project", "project_id", "execution_state"),
+        Index(
+            "uq_jobs_active_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=sql_text("status IN ('QUEUED', 'RUNNING', 'PAUSED')"),
+            sqlite_where=sql_text("status IN ('QUEUED', 'RUNNING', 'PAUSED')"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"job-{uuid.uuid4().hex[:12]}")
@@ -74,7 +84,56 @@ class Job(Base):
     provider: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     provider_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    batch_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("video_generation_batches.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    execution_state: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    provider_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    submit_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    poll_attempts: Mapped[int] = mapped_column(Integer, default=0)
 
     project: Mapped["Project | None"] = relationship(  # type: ignore[name-defined]
         "Project", back_populates="jobs", foreign_keys=[project_id]
     )
+    video_batch: Mapped["VideoGenerationBatch | None"] = relationship(  # type: ignore[name-defined]
+        "VideoGenerationBatch", back_populates="jobs"
+    )
+
+
+class VideoGenerationBatch(Base):
+    """一次项目/场景/镜头范围视频生成操作及其镜头子任务。"""
+
+    __tablename__ = "video_generation_batches"
+    __table_args__ = (
+        Index("ix_video_batches_owner_created", "owner_id", "created_at"),
+        Index("ix_video_batches_project_created", "project_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"video-batch-{uuid.uuid4().hex[:16]}"
+    )
+    owner_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="QUEUED", index=True)
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    succeeded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cancelled_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    jobs: Mapped[list["Job"]] = relationship("Job", back_populates="video_batch")

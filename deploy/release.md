@@ -50,6 +50,18 @@ docker compose \
   --env-file .env.production \
   exec -T backend \
   celery -A app.tasks.celery_app inspect active
+
+docker compose \
+  -f compose.prod.yml \
+  --env-file .env.production \
+  exec -T backend \
+  celery -A app.tasks.celery_app inspect reserved
+
+docker compose \
+  -f compose.prod.yml \
+  --env-file .env.production \
+  exec -T backend \
+  celery -A app.tasks.celery_app inspect scheduled
 ```
 
 如有视频处理、导出、AI 生成等长任务，优先等待任务结束或选择维护窗口。Worker 被强制重建时，长任务可能中断、重新排队或失败。
@@ -306,7 +318,8 @@ docker compose \
   -f compose.prod.yml \
   --env-file /srv/openvma/.env.production \
   logs --since=15m \
-  backend celery-worker celery-beat gateway admin-gateway
+  backend celery-worker celery-control celery-video celery-media celery-export \
+  celery-beat gateway admin-gateway
 ```
 
 日志中不应持续出现数据库连接、Redis、MinIO、迁移、Celery 队列或 5xx 错误。

@@ -1152,6 +1152,198 @@ async def _generate_agnes_video(
     raise RuntimeError(f"{capability}任务等待超时")
 
 
+async def submit_video_generation(
+    prompt: str,
+    image_url: str = "",
+    model: Optional[str] = None,
+    duration: Optional[int] = None,
+    aspect_ratio: str = "16:9",
+    *,
+    provider: Optional[str] = None,
+    mode: Optional[str] = None,
+    first_frame_url: str = "",
+    last_frame_url: str = "",
+    reference_image_urls: Optional[list[str]] = None,
+) -> dict:
+    """只提交视频生成并返回可持久化的供应商任务信息，不在 Worker 内长轮询。"""
+    reference_image_urls = reference_image_urls or []
+    has_image_input = bool(
+        image_url or first_frame_url or last_frame_url or reference_image_urls
+    )
+    if has_image_input:
+        selected_provider = (provider or settings.ai_image_to_video_provider).lower()
+        capability = "图生视频"
+    else:
+        selected_provider = (provider or settings.ai_text_to_video_provider).lower()
+        capability = "文生视频"
+    if selected_provider not in {"agnes", "dashscope"}:
+        raise RuntimeError(f"{capability}服务未启用")
+
+    if selected_provider == "agnes":
+        _require_agnes(capability)
+        selected_model = model or settings.agnes_video_model
+        if not selected_model:
+            raise RuntimeError(f"{capability}模型未配置")
+        first_frame_source = first_frame_url or image_url
+        first_frame = (
+            await _prepare_agnes_video_first_frame(first_frame_source, aspect_ratio)
+            if first_frame_source
+            else ""
+        )
+        last_frame = (
+            await _prepare_agnes_video_first_frame(last_frame_url, aspect_ratio)
+            if last_frame_url
+            else ""
+        )
+        reference_images = [
+            await _prepare_agnes_video_first_frame(source, aspect_ratio)
+            for source in reference_image_urls
+        ]
+        payload, uses_agnesapi_poll = _agnes_video_payload(
+            selected_model,
+            prompt,
+            first_frame,
+            duration,
+            aspect_ratio,
+            mode=mode,
+            last_frame=last_frame,
+            reference_images=reference_images,
+        )
+        headers = {
+            "Authorization": f"Bearer {settings.agnes_api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=120) as client:
+            submitted = await _submit_agnes_video(client, headers, payload)
+        task_id = str(
+            submitted.get("video_id")
+            or submitted.get("id")
+            or submitted.get("task_id")
+            or ""
+        )
+        if not task_id:
+            raise RuntimeError("Agnes AI 视频服务未返回任务 ID")
+        return {
+            "provider": "agnes",
+            "model": selected_model,
+            "task_id": task_id,
+            "capability": capability,
+            "uses_agnesapi_poll": uses_agnesapi_poll,
+        }
+
+    if mode == "reference" or last_frame_url or reference_image_urls:
+        raise RuntimeError("当前视频服务不支持多图参考或尾帧控制")
+    if first_frame_url:
+        image_url = first_frame_url
+    selected_model = model or (
+        settings.ai_image_to_video_model if image_url else settings.ai_text_to_video_model
+    )
+    _require_dashscope(capability)
+    if not selected_model:
+        raise RuntimeError(f"{capability}模型未配置")
+    payload = {"model": selected_model, "input": {"prompt": prompt}, "parameters": {}}
+    if image_url:
+        media_url, resolve_oss = await _prepare_dashscope_image_source(
+            image_url, selected_model
+        )
+        payload["input"]["media"] = [{"type": "first_frame", "url": media_url}]
+        payload["parameters"] = {
+            "resolution": settings.ai_video_resolution,
+            "duration": max(2, min(15, duration or settings.ai_video_duration_seconds)),
+            "prompt_extend": settings.ai_video_prompt_extend,
+            "watermark": settings.ai_video_watermark,
+        }
+        task_id = await _submit_video_task(
+            payload,
+            capability,
+            resolve_oss=resolve_oss,
+            image_label="首帧图片",
+        )
+    else:
+        task_id = await _submit_video_task(payload, capability)
+    return {
+        "provider": "dashscope",
+        "model": selected_model,
+        "task_id": task_id,
+        "capability": capability,
+        "uses_agnesapi_poll": False,
+    }
+
+
+async def poll_video_generation(
+    provider: str,
+    task_id: str,
+    *,
+    model: str = "",
+    capability: str = "AI 视频",
+    uses_agnesapi_poll: bool = False,
+) -> dict:
+    """查询一次供应商状态；调用方负责以延迟任务安排下一次查询。"""
+    provider = provider.lower()
+    if provider == "agnes":
+        _require_agnes(capability)
+        headers = {"Authorization": f"Bearer {settings.agnes_api_key}"}
+        async with httpx.AsyncClient(timeout=30) as client:
+            if uses_agnesapi_poll:
+                api_root = settings.agnes_base_url.rstrip("/").removesuffix("/v1")
+                response = await client.get(
+                    f"{api_root}/agnesapi",
+                    headers=headers,
+                    params={
+                        "video_id": task_id,
+                        **({"model_name": model} if model and model != "agnes-video-v2.0" else {}),
+                    },
+                )
+            else:
+                response = await client.get(
+                    f"{settings.agnes_base_url.rstrip('/')}/videos/{task_id}",
+                    headers=headers,
+                )
+        if response.status_code in {429, 503}:
+            return {
+                "state": "pending",
+                "retry_after": _agnes_retry_after_seconds(
+                    response, settings.video_poll_interval_seconds
+                ),
+            }
+        if response.status_code >= 400:
+            detail = _agnes_error_detail(response)
+            raise RuntimeError(
+                f"Agnes AI {capability}任务查询失败（HTTP {response.status_code}）"
+                + (f"：{detail}" if detail else "")
+            )
+        payload = response.json()
+        status = str(payload.get("status") or "").lower()
+        if status == "completed":
+            result_url = _agnes_video_result_url(payload)
+            if not result_url:
+                raise RuntimeError(f"{capability}任务完成但未返回视频地址")
+            return {"state": "succeeded", "result_url": result_url}
+        if status == "failed":
+            return {
+                "state": "failed",
+                "error": str(payload.get("error") or payload.get("message") or "未知错误"),
+            }
+        return {"state": "pending", "retry_after": settings.video_poll_interval_seconds}
+
+    if provider == "dashscope":
+        payload = await query_video_task(task_id)
+        output = payload.get("output") or {}
+        status = str(output.get("task_status") or "").upper()
+        if status == "SUCCEEDED":
+            result_url = _dashscope_video_url(payload)
+            if not result_url:
+                raise RuntimeError(f"{capability}任务完成但未返回视频地址")
+            return {"state": "succeeded", "result_url": result_url}
+        if status in {"FAILED", "CANCELED", "UNKNOWN"}:
+            return {
+                "state": "failed",
+                "error": video_task_failure_message(payload, f"{capability}任务失败"),
+            }
+        return {"state": "pending", "retry_after": settings.video_poll_interval_seconds}
+    raise RuntimeError("视频任务供应商无效")
+
+
 async def generate_video(
     prompt: str,
     image_url: str = "",

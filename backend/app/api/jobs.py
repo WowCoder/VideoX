@@ -16,7 +16,7 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.project import Project
-from app.models.job import Job
+from app.models.job import Job, VideoGenerationBatch
 from app.models.notification import Notification
 from app.models.script import ShotMediaVersion
 from app.models.inspiration import InspirationRun
@@ -224,6 +224,15 @@ async def delete_job(
         raise HTTPException(status_code=404, detail="任务不存在")
     if not _job_can_delete(job.status):
         raise HTTPException(status_code=409, detail="进行中的任务不能删除，请先暂停任务")
+    if (
+        job.type == "分镜图 AI 生视频"
+        and job.status == "PAUSED"
+        and job.provider_task_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="供应商任务仍有关联，请先取消任务再删除记录",
+        )
 
     # 显式解除或清理引用，保证不同数据库的外键行为一致；生成产物本身不删除。
     await db.execute(
@@ -237,7 +246,27 @@ async def delete_job(
         .values(job_id=None)
     )
     await db.execute(delete(Notification).where(Notification.job_id == job.id))
+    batch_id = job.batch_id
     await db.delete(job)
+    await db.flush()
+    if batch_id:
+        remaining = int(
+            (
+                await db.execute(
+                    select(func.count(Job.id)).where(Job.batch_id == batch_id)
+                )
+            ).scalar()
+            or 0
+        )
+        batch = await db.get(VideoGenerationBatch, batch_id)
+        if batch:
+            if remaining == 0:
+                await db.delete(batch)
+            else:
+                from app.services.video_queue import refresh_video_batch
+
+                batch.total_count = remaining
+                await refresh_video_batch(db, batch_id)
     await db.commit()
 
 
@@ -295,6 +324,25 @@ async def pause_job(
         raise HTTPException(status_code=400, detail="只有排队中或执行中的任务可以暂停")
     if not job.payload:
         raise HTTPException(status_code=400, detail="任务缺少恢复参数，无法安全暂停")
+    if job.type == "分镜图 AI 生视频":
+        if job.execution_state in {"SUBMITTING", "PERSISTING"}:
+            raise HTTPException(status_code=409, detail="任务正在提交或保存结果，请稍后再暂停")
+        job.status = "PAUSED"
+        job.execution_state = "PAUSED_PROVIDER" if job.provider_task_id else "PAUSED"
+        job.stage = "已暂停"
+        job.detail = (
+            "已暂停状态查询；供应商可能仍在生成，继续后会查询原任务，不会重复提交"
+            if job.provider_task_id
+            else "任务已从等待队列暂停"
+        )
+        job.celery_task_id = None
+        job.updated_at = datetime.now(timezone.utc)
+        from app.services.video_queue import refresh_video_batch, wake_video_scheduler
+
+        await refresh_video_batch(db, job.batch_id)
+        await db.commit()
+        wake_video_scheduler()
+        return JobOut.model_validate(job)
     if not job.celery_task_id:
         raise HTTPException(status_code=400, detail="任务缺少 Worker 标识，无法安全暂停")
 
@@ -343,6 +391,25 @@ async def resume_job(
     except QuotaExceededError as exc:
         raise HTTPException(status_code=403, detail="当前会员额度不足，暂时无法继续该任务") from exc
 
+    if job.type == "分镜图 AI 生视频" and job.provider_task_id:
+        job.status = "RUNNING"
+        job.execution_state = "PROVIDER_RUNNING"
+        job.stage = "等待供应商生成"
+        job.detail = "已恢复查询原供应商任务，不会重复提交"
+        job.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        from app.config import get_settings
+        from app.services.video_queue import refresh_video_batch
+        from app.tasks.video_tasks import poll_video_job
+
+        await refresh_video_batch(db, job.batch_id)
+        await db.commit()
+        poll_video_job.apply_async(
+            args=(job.id,),
+            queue=get_settings().video_queue_name,
+        )
+        return JobOut.model_validate(job)
+
     job.status = "QUEUED"
     job.progress = 0
     job.stage_index = 0
@@ -353,10 +420,14 @@ async def resume_job(
     job.result_url = None
     job.result_path = None
     job.updated_at = datetime.now(timezone.utc)
+    if job.type == "分镜图 AI 生视频":
+        job.execution_state = "QUEUED"
+        job.queued_at = job.updated_at
+        job.heartbeat_at = None
     await db.commit()
     try:
         task = await _dispatch_replay(db, job)
-        job.celery_task_id = task.id
+        job.celery_task_id = task.id if task is not None else None
         await db.commit()
     except HTTPException:
         job.status = "PAUSED"

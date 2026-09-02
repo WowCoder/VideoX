@@ -113,7 +113,8 @@ else
 fi
 
 echo "更新 API 与任务进程..."
-"${compose[@]}" up -d --no-deps --force-recreate backend celery-worker celery-beat
+"${compose[@]}" up -d --no-deps --force-recreate \
+    backend celery-worker celery-control celery-video celery-media celery-export celery-beat
 
 echo "更新内部 Nginx 网关..."
 "${compose[@]}" up -d --no-deps --force-recreate gateway admin-gateway

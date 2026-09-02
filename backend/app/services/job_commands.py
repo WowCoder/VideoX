@@ -71,8 +71,10 @@ async def dispatch_replay(
         from app.tasks.voice_tasks import generate_project_voiceover
         return await dispatch(generate_project_voiceover, job.id, job.payload["project_id"])
     if job.type == "分镜图 AI 生视频":
-        from app.tasks.generate_tasks import generate_video_shot
-        return await dispatch(generate_video_shot, job.payload["shot_id"], job.id, job.payload.get("prompt", ""))
+        from app.services.video_queue import wake_video_scheduler
+
+        wake_video_scheduler()
+        return None
     if job.type == "示意图特效视频":
         from app.tasks.generate_tasks import generate_effect_shot
         return await dispatch(
@@ -128,6 +130,16 @@ async def retry_job_command(db: AsyncSession, job: Job) -> Job:
     job.error_code = None
     job.error_category = None
     job.provider_request_id = None
+    job.provider_task_id = None
+    job.execution_state = "QUEUED" if job.type == "分镜图 AI 生视频" else None
+    job.queued_at = now
+    job.heartbeat_at = None
+    job.submitted_at = None
+    job.last_polled_at = None
+    job.provider_finished_at = None
+    job.next_poll_at = None
+    job.submit_attempts = 0
+    job.poll_attempts = 0
     if job.stages:
         job.stage = job.stages[0]
     job.updated_at = now
@@ -137,7 +149,7 @@ async def retry_job_command(db: AsyncSession, job: Job) -> Job:
 
     try:
         task = await dispatch_replay(db, job)
-        job.celery_task_id = task.id
+        job.celery_task_id = task.id if task is not None else None
         await db.commit()
     except HTTPException:
         job.status = "FAILED"
@@ -166,30 +178,46 @@ async def retry_job_command(db: AsyncSession, job: Job) -> Job:
 
 async def cancel_job_command(db: AsyncSession, job: Job, *, actor_label: str) -> Job:
     """真实撤销排队任务或终止正在执行的 Celery 子进程。"""
-    if job.status not in {"QUEUED", "RUNNING"}:
+    pausable_provider_job = (
+        job.type == "分镜图 AI 生视频"
+        and job.status == "PAUSED"
+        and bool(job.provider_task_id)
+    )
+    if job.status not in {"QUEUED", "RUNNING"} and not pausable_provider_job:
         raise HTTPException(status_code=400, detail="只有排队中或执行中的任务可以取消")
-    if not job.celery_task_id:
+    if job.type == "分镜图 AI 生视频" and job.execution_state in {"SUBMITTING", "PERSISTING"}:
+        raise HTTPException(status_code=409, detail="任务正在提交或保存结果，请稍后再取消")
+    if job.celery_task_id:
+        from app.tasks.celery_app import celery_app
+        try:
+            celery_app.control.revoke(
+                job.celery_task_id,
+                # 视频状态机的短任务可能已退出；供应商任务无法通过 SIGTERM
+                # 可靠取消，因此只阻止后续轮询/持久化，不强杀 Worker。
+                terminate=job.status == "RUNNING" and job.type != "分镜图 AI 生视频",
+                signal="SIGTERM",
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"任务取消指令发送失败：{str(exc)[:160]}") from exc
+    elif job.type != "分镜图 AI 生视频":
         raise HTTPException(status_code=400, detail="任务缺少 Worker 标识，无法安全取消")
-    from app.tasks.celery_app import celery_app
-    try:
-        celery_app.control.revoke(
-            job.celery_task_id,
-            terminate=job.status == "RUNNING",
-            signal="SIGTERM",
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"任务取消指令发送失败：{str(exc)[:160]}") from exc
 
     now = datetime.now(timezone.utc)
     job.status = "CANCELLED"
     job.stage = "已取消"
-    job.detail = f"任务已由{actor_label}取消"
+    job.detail = (
+        f"任务已由{actor_label}取消；供应商任务可能仍会完成，但系统将不再查询或写入结果"
+        if job.type == "分镜图 AI 生视频" and job.provider_task_id
+        else f"任务已由{actor_label}取消"
+    )
     job.result = None
     job.result_detail = ""
     job.result_url = None
     job.result_path = None
     job.finished_at = now
     job.updated_at = now
+    if job.type == "分镜图 AI 生视频":
+        job.execution_state = "CANCELLED"
     run = (
         await db.execute(select(InspirationRun).where(InspirationRun.job_id == job.id))
     ).scalar_one_or_none()
@@ -199,4 +227,10 @@ async def cancel_job_command(db: AsyncSession, job: Job, *, actor_label: str) ->
         run.error = f"关联任务已由{actor_label}取消"
         run.finished_at = now
     await db.commit()
+    if job.type == "分镜图 AI 生视频":
+        from app.services.video_queue import refresh_video_batch, wake_video_scheduler
+
+        await refresh_video_batch(db, job.batch_id)
+        await db.commit()
+        wake_video_scheduler()
     return job

@@ -56,7 +56,8 @@ OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE}" \
     OPENVMA_IMAGE_TAG="${current_tag:-unknown}" \
     "${SCRIPT_DIR}/backup.sh"
 
-"${compose[@]}" up -d --no-deps --force-recreate backend celery-worker celery-beat
+"${compose[@]}" up -d --no-deps --force-recreate \
+    backend celery-worker celery-control celery-video celery-media celery-export celery-beat
 "${compose[@]}" up -d --no-deps --force-recreate gateway admin-gateway
 OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE}" "${SCRIPT_DIR}/healthcheck.sh"
 

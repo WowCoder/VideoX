@@ -20,6 +20,29 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     # 本地开发与 Docker 使用不同队列，防止遗留宿主机 Worker 截走容器任务。
     celery_task_default_queue: str = "openvma-local"
+    celery_control_queue: str = ""
+    celery_short_ai_queue: str = ""
+    celery_video_queue: str = ""
+    celery_media_queue: str = ""
+    celery_export_queue: str = ""
+
+    # ── 后台任务背压 ──
+    # 排队容量与真实执行并发分离：一个项目可以创建完整镜头批次，但只有少量
+    # 视频任务会进入供应商侧执行，避免大项目瞬间打满 API Key 和 Worker。
+    # 项目文档本身最多 2000 个镜头，因此默认批次允许完整项目一次入队。
+    video_batch_max_shots: int = 2000
+    video_queue_max_per_user: int = 4000
+    video_queue_max_per_project: int = 2000
+    video_queue_max_global: int = 10000
+    video_inflight_max_per_user: int = 2
+    video_inflight_max_per_project: int = 2
+    video_inflight_max_global: int = 4
+    video_dispatch_interval_seconds: float = 5.0
+    video_poll_interval_seconds: float = 10.0
+    video_provider_timeout_seconds: int = 3600
+    job_queue_warning_seconds: int = 1800
+    job_queue_max_age_seconds: int = 86400
+    job_heartbeat_timeout_seconds: int = 300
 
     # ── MinIO ──
     minio_endpoint: str = "localhost:9000"
@@ -200,6 +223,29 @@ class Settings(BaseSettings):
     def ai_media_allowed_host_list(self) -> list[str]:
         return [host.strip().lower() for host in self.ai_media_allowed_hosts.split(",") if host.strip()]
 
+    def celery_queue_name(self, configured: str, suffix: str) -> str:
+        return configured.strip() or f"{self.celery_task_default_queue}.{suffix}"
+
+    @property
+    def control_queue_name(self) -> str:
+        return self.celery_queue_name(self.celery_control_queue, "control")
+
+    @property
+    def short_ai_queue_name(self) -> str:
+        return self.celery_queue_name(self.celery_short_ai_queue, "short-ai")
+
+    @property
+    def video_queue_name(self) -> str:
+        return self.celery_queue_name(self.celery_video_queue, "video")
+
+    @property
+    def media_queue_name(self) -> str:
+        return self.celery_queue_name(self.celery_media_queue, "media")
+
+    @property
+    def export_queue_name(self) -> str:
+        return self.celery_queue_name(self.celery_export_queue, "export")
+
     @model_validator(mode="after")
     def validate_production_security(self):
         provider_groups = {
@@ -233,6 +279,38 @@ class Settings(BaseSettings):
             raise ValueError("DB_POOL_SIZE 必须大于等于 1")
         if self.db_max_overflow < 0:
             raise ValueError("DB_MAX_OVERFLOW 不能小于 0")
+        positive_task_limits = {
+            "VIDEO_BATCH_MAX_SHOTS": self.video_batch_max_shots,
+            "VIDEO_QUEUE_MAX_PER_USER": self.video_queue_max_per_user,
+            "VIDEO_QUEUE_MAX_PER_PROJECT": self.video_queue_max_per_project,
+            "VIDEO_QUEUE_MAX_GLOBAL": self.video_queue_max_global,
+            "VIDEO_INFLIGHT_MAX_PER_USER": self.video_inflight_max_per_user,
+            "VIDEO_INFLIGHT_MAX_PER_PROJECT": self.video_inflight_max_per_project,
+            "VIDEO_INFLIGHT_MAX_GLOBAL": self.video_inflight_max_global,
+            "JOB_QUEUE_WARNING_SECONDS": self.job_queue_warning_seconds,
+            "JOB_QUEUE_MAX_AGE_SECONDS": self.job_queue_max_age_seconds,
+            "JOB_HEARTBEAT_TIMEOUT_SECONDS": self.job_heartbeat_timeout_seconds,
+            "VIDEO_PROVIDER_TIMEOUT_SECONDS": self.video_provider_timeout_seconds,
+        }
+        for name, value in positive_task_limits.items():
+            if value < 1:
+                raise ValueError(f"{name} 必须大于等于 1")
+        if self.video_batch_max_shots > self.video_queue_max_per_project:
+            raise ValueError("VIDEO_BATCH_MAX_SHOTS 不能大于 VIDEO_QUEUE_MAX_PER_PROJECT")
+        if self.video_queue_max_per_project > self.video_queue_max_per_user:
+            raise ValueError("VIDEO_QUEUE_MAX_PER_PROJECT 不能大于 VIDEO_QUEUE_MAX_PER_USER")
+        if self.video_queue_max_per_user > self.video_queue_max_global:
+            raise ValueError("VIDEO_QUEUE_MAX_PER_USER 不能大于 VIDEO_QUEUE_MAX_GLOBAL")
+        if self.video_inflight_max_per_project > self.video_inflight_max_per_user:
+            raise ValueError("VIDEO_INFLIGHT_MAX_PER_PROJECT 不能大于 VIDEO_INFLIGHT_MAX_PER_USER")
+        if self.video_inflight_max_per_user > self.video_inflight_max_global:
+            raise ValueError("VIDEO_INFLIGHT_MAX_PER_USER 不能大于 VIDEO_INFLIGHT_MAX_GLOBAL")
+        if self.video_dispatch_interval_seconds < 1:
+            raise ValueError("VIDEO_DISPATCH_INTERVAL_SECONDS 不能小于 1")
+        if self.video_poll_interval_seconds < 1:
+            raise ValueError("VIDEO_POLL_INTERVAL_SECONDS 不能小于 1")
+        if self.job_queue_max_age_seconds <= self.job_queue_warning_seconds:
+            raise ValueError("JOB_QUEUE_MAX_AGE_SECONDS 必须大于 JOB_QUEUE_WARNING_SECONDS")
         if self.system_metrics_scope not in {"container", "host"}:
             raise ValueError("SYSTEM_METRICS_SCOPE 必须是 container 或 host")
         if self.system_metrics_retention_days < 1:

@@ -10,7 +10,7 @@ from app.models.inspiration import (
     InspirationTask,
 )
 from app.models.invoice import Invoice
-from app.models.job import Job
+from app.models.job import Job, VideoGenerationBatch
 from app.models.migration import MigrationAudit
 from app.models.monitoring import SystemMetricSnapshot, UserDailyActivity
 from app.models.notification import Notification
@@ -43,6 +43,7 @@ __all__ = [
     "Candidate",
     "ShotMediaVersion",
     "Job",
+    "VideoGenerationBatch",
     "MigrationAudit",
     "UserDailyActivity",
     "SystemMetricSnapshot",

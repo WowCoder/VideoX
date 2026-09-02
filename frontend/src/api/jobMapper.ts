@@ -33,6 +33,11 @@ export interface RawJob {
       proposed_description: string;
     }>;
   } | null;
+  batch_id?: string | null;
+  execution_state?: string | null;
+  queued_at?: string | null;
+  submitted_at?: string | null;
+  last_polled_at?: string | null;
   is_simulated: boolean;
   created_at: string | null;
   updated_at: string | null;

@@ -93,6 +93,10 @@ async def _job_update_subscriber() -> None:
                 user_id = _user_id_from_channel(str(event.get("channel") or ""))
                 if not user_id:
                     continue
+                # 多 Uvicorn 进程都会订阅同一 Pub/Sub；没有该用户本地连接的进程
+                # 不应重复查询数据库构造完整 Job。
+                if not manager.active_connections.get(user_id):
+                    continue
                 try:
                     payload = json.loads(event.get("data") or "{}")
                 except (TypeError, json.JSONDecodeError):

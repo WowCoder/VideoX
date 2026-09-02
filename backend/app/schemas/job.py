@@ -86,3 +86,20 @@ class JobOut(BaseModel):
 class JobListOut(BaseModel):
     items: list[JobOut]
     total: int
+
+
+class VideoGenerationBatchOut(BaseModel):
+    id: str
+    project_id: str
+    scope_type: str
+    status: str
+    total_count: int
+    succeeded_count: int
+    failed_count: int
+    cancelled_count: int
+    created_at: datetime
+    updated_at: datetime
+    finished_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

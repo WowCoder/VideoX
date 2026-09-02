@@ -22,6 +22,7 @@ celery_app = Celery(
         "app.tasks.inspiration_tasks",
         "app.tasks.subscription_tasks",
         "app.tasks.voice_tasks",
+        "app.tasks.video_tasks",
     ],
 )
 
@@ -43,6 +44,27 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
     task_default_priority=9,
     task_inherit_parent_priority=True,
+    task_routes={
+        "app.tasks.schedule_video_jobs": {"queue": settings.control_queue_name},
+        "app.tasks.write_system_heartbeat": {"queue": settings.control_queue_name},
+        "app.tasks.collect_system_metrics": {"queue": settings.control_queue_name},
+        "app.tasks.fail_stale_jobs": {"queue": settings.control_queue_name},
+        "app.tasks.expire_due_subscriptions": {"queue": settings.control_queue_name},
+        "app.tasks.scan_due_inspiration_tasks": {"queue": settings.control_queue_name},
+        "app.tasks.submit_video_job": {"queue": settings.video_queue_name},
+        "app.tasks.poll_video_job": {"queue": settings.video_queue_name},
+        "app.tasks.persist_video_job": {"queue": settings.video_queue_name},
+        "app.tasks.process_asset": {"queue": settings.media_queue_name},
+        "app.tasks.retry_asset_processing": {"queue": settings.media_queue_name},
+        "app.tasks.export_project": {"queue": settings.export_queue_name},
+        "app.tasks.generate_image_shot": {"queue": settings.short_ai_queue_name},
+        "app.tasks.generate_effect_shot": {"queue": settings.short_ai_queue_name},
+        "app.tasks.generate_project_script": {"queue": settings.short_ai_queue_name},
+        "app.tasks.complete_shot_descriptions": {"queue": settings.short_ai_queue_name},
+        "app.tasks.match_script_shots": {"queue": settings.short_ai_queue_name},
+        "app.tasks.run_inspiration_task": {"queue": settings.short_ai_queue_name},
+        "app.tasks.generate_project_voiceover": {"queue": settings.short_ai_queue_name},
+    },
     broker_transport_options={
         "priority_steps": [0, 4, 9],
         "sep": ":",
@@ -68,6 +90,10 @@ celery_app.conf.update(
         "collect-system-metrics-hourly": {
             "task": "app.tasks.collect_system_metrics",
             "schedule": 3600.0,
+        },
+        "schedule-video-jobs": {
+            "task": "app.tasks.schedule_video_jobs",
+            "schedule": settings.video_dispatch_interval_seconds,
         },
     },
 )
@@ -134,6 +160,7 @@ def fail_stale_jobs():
                 update(Job)
                 .where(
                     Job.status == "QUEUED",
+                    Job.type != "分镜图 AI 生视频",
                     Job.updated_at < now - timedelta(minutes=30),
                 )
                 .values(
@@ -153,6 +180,7 @@ def fail_stale_jobs():
                 update(Job)
                 .where(
                     Job.status == "RUNNING",
+                    Job.type != "分镜图 AI 生视频",
                     Job.updated_at < now - timedelta(minutes=75),
                 )
                 .values(

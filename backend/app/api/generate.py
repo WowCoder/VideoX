@@ -1,10 +1,15 @@
 """显式作用范围的 AI、匹配、主成片编译和导出操作。"""
 
+import hashlib
+import json
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Literal
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,11 +17,11 @@ from app.config import get_settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.asset import Asset
-from app.models.job import Job
+from app.models.job import Job, VideoGenerationBatch
 from app.models.project import Project
 from app.models.script import ScriptUnit, Shot
 from app.models.user import User
-from app.schemas.job import JobOut
+from app.schemas.job import JobOut, VideoGenerationBatchOut
 from app.schemas.project import ScopeSelection
 from app.services.project_access import require_project_access
 from app.services.quotas import QuotaExceededError, admit_job_quota
@@ -190,6 +195,7 @@ class ProjectOperationRequest(BaseModel):
 
 class OperationJobsOut(BaseModel):
     jobs: list[JobOut]
+    video_batch: VideoGenerationBatchOut | None = None
 
 
 def _resolve_shot_ids(project: Project, scope: ScopeSelection) -> list[str]:
@@ -449,6 +455,7 @@ async def execute_project_operation(
         raise HTTPException(status_code=422, detail="该操作只能作用于整个项目")
 
     jobs: list[Job] = []
+    video_batch: VideoGenerationBatch | None = None
     if request.operation == "generate_script":
         prompt = str(request.parameters.get("prompt") or "").strip()
         tone = str(request.parameters.get("tone") or "专业清晰").strip()[:50]
@@ -528,8 +535,89 @@ async def execute_project_operation(
             shot_ids,
             request.parameters,
         ) if request.operation == "generate_video" else None
+        video_job_specs: dict[str, tuple[str, str]] = {}
+        if request.operation == "generate_video":
+            from app.services.video_queue import ensure_video_queue_capacity
+
+            try:
+                await ensure_video_queue_capacity(db, user.id, project.id, len(shot_ids))
+            except ValueError as exc:
+                raise HTTPException(status_code=429, detail=str(exc)) from exc
+            for shot_id in shot_ids:
+                shot = shots_by_id[shot_id]
+                prompt = _generation_prompt(shot, request.parameters, config[2])
+                canonical = json.dumps(
+                    {
+                        "owner_id": user.id,
+                        "project_id": project.id,
+                        "shot_id": shot_id,
+                        "shot_revision": shot.revision,
+                        "prompt": prompt,
+                        "video_generation": video_generation,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                video_job_specs[shot_id] = (
+                    prompt,
+                    hashlib.sha256(canonical.encode()).hexdigest(),
+                )
+            duplicate = (
+                await db.execute(
+                    select(Job.id).where(
+                        Job.idempotency_key.in_([
+                            item[1] for item in video_job_specs.values()
+                        ]),
+                        Job.status.in_(["QUEUED", "RUNNING", "PAUSED"]),
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+            if duplicate:
+                raise HTTPException(
+                    status_code=409,
+                    detail="相同镜头版本和生成参数已有任务在排队或执行，请勿重复提交",
+                )
+            video_batch = VideoGenerationBatch(
+                owner_id=user.id,
+                project_id=project.id,
+                scope_type=request.scope.type,
+                status="QUEUED",
+                total_count=len(shot_ids),
+            )
+            db.add(video_batch)
+            await db.flush()
+        quota_probe = Job(owner_id=user.id)
+        try:
+            await admit_job_quota(
+                db,
+                quota_probe,
+                user.id,
+                config[1],
+                len(shot_ids),
+            )
+        except QuotaExceededError as exc:
+            raise HTTPException(status_code=403, detail="当前会员生成额度不足") from exc
         for shot_id in shot_ids:
             shot = shots_by_id[shot_id]
+            prompt = (
+                video_job_specs[shot_id][0]
+                if video_batch
+                else _generation_prompt(shot, request.parameters, config[2])
+            )
+            source_snapshot = {
+                "asset_id": shot.asset_id,
+                "selected_media_version_id": shot.selected_media_version_id,
+                "visual_mode": shot.visual_mode,
+                "source_start_ms": shot.source_start_ms,
+                "source_end_ms": shot.source_end_ms,
+                "transform": shot.transform or {},
+                "adjust": shot.adjust or {},
+                "motion": shot.motion or {},
+            }
+            idempotency_key = None
+            if video_batch:
+                idempotency_key = video_job_specs[shot_id][1]
             job = Job(
                 owner_id=user.id,
                 project_id=project.id,
@@ -538,20 +626,34 @@ async def execute_project_operation(
                 name=config[0],
                 type=config[0],
                 status="QUEUED",
-                stage="等待生成",
+                stage="等待调度" if video_batch else "等待生成",
                 stages=["提交生成", "等待结果", "保存素材"],
                 payload={
                     "shot_id": shot_id,
-                    config[2]: _generation_prompt(shot, request.parameters, config[2]),
+                    config[2]: prompt,
                     "base_shot_revision": shot.revision,
+                    "source_snapshot": source_snapshot,
                     **({"video_generation": video_generation} if video_generation else {}),
                 },
+                batch_id=video_batch.id if video_batch else None,
+                execution_state="QUEUED" if video_batch else None,
+                idempotency_key=idempotency_key,
+                queued_at=datetime.now(timezone.utc),
+                quota_type=config[1],
+                quota_amount=1,
             )
-            try:
-                await admit_job_quota(db, job, user.id, config[1], 1)
-            except QuotaExceededError as exc:
-                raise HTTPException(status_code=403, detail="当前会员生成额度不足") from exc
             jobs.append(job)
+            db.add(job)
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            await db.rollback()
+            if video_batch:
+                raise HTTPException(
+                    status_code=409,
+                    detail="相同镜头版本和生成参数已有任务在排队或执行，请勿重复提交",
+                ) from exc
+            raise
     elif request.operation == "compose":
         jobs.append(
             Job(
@@ -667,6 +769,8 @@ async def execute_project_operation(
     await db.commit()
 
     for job in jobs:
+        if job.type == "分镜图 AI 生视频":
+            continue
         try:
             task = await _dispatch_job(db, project, job)
             job.celery_task_id = task.id
@@ -675,4 +779,11 @@ async def execute_project_operation(
             job.stage = "派发失败"
             job.detail = f"任务派发失败：{str(exc)[:200]}"
     await db.commit()
-    return OperationJobsOut(jobs=[JobOut.model_validate(job) for job in jobs])
+    if any(job.type == "分镜图 AI 生视频" for job in jobs):
+        from app.services.video_queue import wake_video_scheduler
+
+        wake_video_scheduler()
+    return OperationJobsOut(
+        jobs=[JobOut.model_validate(job) for job in jobs],
+        video_batch=VideoGenerationBatchOut.model_validate(video_batch) if video_batch else None,
+    )

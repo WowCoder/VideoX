@@ -120,14 +120,9 @@ services:
     volumes:
       - ${HOST_METRICS_PATH:-./.host-metrics}:/host-metrics-disk:ro
     command:
-      - uvicorn
-      - app.main:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      - --proxy-headers
-      - --forwarded-allow-ips=*
+      - /bin/sh
+      - -c
+      - exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers "$${WEB_CONCURRENCY:-3}" --proxy-headers --forwarded-allow-ips="*"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=5)"]
       interval: 15s
@@ -148,10 +143,71 @@ services:
     command:
       - /bin/sh
       - -c
-      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_WORKER_CONCURRENCY:-1}" --queues="$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}"
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_SHORT_AI_CONCURRENCY:-2}" --queues="$${CELERY_SHORT_AI_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.short-ai},$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}"
     stop_grace_period: 2m
     volumes:
       - ${HOST_METRICS_PATH:-./.host-metrics}:/host-metrics-disk:ro
+
+  celery-control:
+    <<: *app-runtime
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -c
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --queues="$${CELERY_CONTROL_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.control}"
+
+  celery-video:
+    <<: *app-runtime
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    command:
+      - /bin/sh
+      - -c
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_VIDEO_CONCURRENCY:-2}" --queues="$${CELERY_VIDEO_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.video}"
+    stop_grace_period: 2m
+
+  celery-media:
+    <<: *app-runtime
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    command:
+      - /bin/sh
+      - -c
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_MEDIA_CONCURRENCY:-1}" --queues="$${CELERY_MEDIA_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.media}"
+    stop_grace_period: 2m
+
+  celery-export:
+    <<: *app-runtime
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    command:
+      - /bin/sh
+      - -c
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_EXPORT_CONCURRENCY:-1}" --queues="$${CELERY_EXPORT_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.export}"
+    stop_grace_period: 2m
 
   celery-beat:
     <<: *app-runtime

@@ -133,6 +133,7 @@ async def _generate_media(
     job_id: str,
     kind: str,
     requested_prompt: str,
+    provided_remote_url: str = "",
 ) -> None:
     from app.config import get_settings
     from app.database import async_session_factory
@@ -167,7 +168,7 @@ async def _generate_media(
             raise RuntimeError("镜头不存在")
         base_revision = int((job.payload or {}).get("base_revision", project.script.revision))
         base_shot_revision = int((job.payload or {}).get("base_shot_revision", shot.revision))
-        if shot.revision != base_shot_revision:
+        if shot.revision != base_shot_revision and not provided_remote_url:
             raise RuntimeError("当前镜头已继续编辑，本次生成结果已过期")
         job.status = "RUNNING"
         job.stage = "提交生成"
@@ -179,7 +180,7 @@ async def _generate_media(
         prompt = requested_prompt.strip() or shot.description.strip() or (scene.intent.strip() if scene else "")
         if not prompt:
             raise RuntimeError("镜头缺少可用于生成的画面描述")
-        source_snapshot = {
+        source_snapshot = dict((job.payload or {}).get("source_snapshot") or {}) or {
             "asset_id": shot.asset_id,
             "selected_media_version_id": shot.selected_media_version_id,
             "visual_mode": shot.visual_mode,
@@ -248,7 +249,7 @@ async def _generate_media(
                 or max(4, min(12, round(shot.duration_ms / 1000)))
             )
             requested_provider = str(video_generation.get("provider") or "").strip()
-            remote_url = await generate_video(
+            remote_url = provided_remote_url or await generate_video(
                 prompt=prompt,
                 image_url=image_source,
                 model=str(video_generation.get("model") or "") or None,
@@ -431,6 +432,139 @@ async def _generate_media(
                 "result": "打开项目",
                 "result_detail": "已自动采用首个生成版本；后续版本保留为候选",
                 "updated_at": datetime.now(timezone.utc),
+                "execution_state": "SUCCEEDED",
+                "heartbeat_at": datetime.now(timezone.utc),
             },
         )
         await session.commit()
+
+
+async def prepare_video_job_request(job_id: str) -> dict:
+    """读取不可变任务快照并构造一次供应商提交请求。"""
+    from app.database import async_session_factory
+    from app.models.job import Job
+    from app.services.workspace import load_project_workspace
+
+    async with async_session_factory() as session:
+        job = await session.get(Job, job_id)
+        if not job or job.type != "分镜图 AI 生视频":
+            raise RuntimeError("视频生成任务不存在")
+        if not job.project_id:
+            raise RuntimeError("视频生成任务缺少项目")
+        project = await load_project_workspace(
+            session, job.project_id, job.owner_id, for_update=False
+        )
+        shot_id = str((job.payload or {}).get("shot_id") or "")
+        shot = next(
+            (
+                item
+                for scene in project.script.units
+                for item in scene.shots
+                if item.id == shot_id
+            ),
+            None,
+        )
+        if not shot:
+            raise RuntimeError("镜头不存在")
+        base_shot_revision = int((job.payload or {}).get("base_shot_revision", shot.revision))
+        if shot.revision != base_shot_revision:
+            raise RuntimeError("当前镜头已继续编辑，本次生成任务已过期")
+        scene = next(
+            (
+                item
+                for item in project.script.units
+                if any(candidate.id == shot_id for candidate in item.shots)
+            ),
+            None,
+        )
+        prompt = str((job.payload or {}).get("prompt") or "").strip()
+        prompt = prompt or shot.description.strip() or (scene.intent.strip() if scene else "")
+        if not prompt:
+            raise RuntimeError("镜头缺少可用于生成的画面描述")
+
+        video_generation = dict((job.payload or {}).get("video_generation") or {})
+        mode = str(video_generation.get("mode") or "").strip() or None
+        reference_assets = list(video_generation.get("reference_assets") or [])
+        linked_assets = {
+            link.asset.id: link.asset
+            for link in project.asset_links
+            if link.asset is not None
+        }
+        first_frame_source = ""
+        last_frame_source = ""
+        reference_image_sources: list[str] = []
+        for reference in reference_assets:
+            asset_id = str(reference.get("asset_id") or "")
+            role = str(reference.get("role") or "")
+            source_asset = linked_assets.get(asset_id)
+            if (
+                not source_asset
+                or source_asset.owner_id != job.owner_id
+                or source_asset.media_type != "image"
+                or source_asset.processing_status != "ready"
+                or source_asset.deleted_at is not None
+                or not source_asset.file_path
+            ):
+                raise RuntimeError("参考图片已被移除、尚未处理完成或不属于当前项目")
+            if role == "first_frame":
+                first_frame_source = source_asset.file_path
+            elif role == "last_frame":
+                last_frame_source = source_asset.file_path
+            elif role == "reference":
+                reference_image_sources.append(source_asset.file_path)
+            else:
+                raise RuntimeError("视频生成任务包含无效的参考素材角色")
+
+        image_source = ""
+        if not video_generation and shot.asset_id:
+            source_asset = linked_assets.get(shot.asset_id)
+            if source_asset and source_asset.media_type == "image" and source_asset.file_path:
+                image_source = source_asset.file_path
+        duration_seconds = int(
+            video_generation.get("duration_seconds")
+            or max(4, min(12, round(shot.duration_ms / 1000)))
+        )
+        requested_provider = str(video_generation.get("provider") or "").strip()
+        requested_model = str(video_generation.get("model") or "").strip()
+        return {
+            "provider_request": {
+                "prompt": prompt,
+                "image_url": image_source,
+                "model": requested_model or None,
+                "duration": duration_seconds,
+                "aspect_ratio": project.composition.aspect_ratio,
+                "provider": requested_provider or None,
+                "mode": mode,
+                "first_frame_url": first_frame_source,
+                "last_frame_url": last_frame_source,
+                "reference_image_urls": reference_image_sources,
+            },
+            "runtime": {
+                "prompt": prompt,
+                "shot_id": shot.id,
+                "base_shot_revision": base_shot_revision,
+            },
+        }
+
+
+async def persist_submitted_video_result(job_id: str, result_url: str) -> None:
+    """把已完成供应商任务的结果转存并写回镜头；不再次调用付费生成接口。"""
+    from app.database import async_session_factory
+    from app.models.job import Job
+
+    async with async_session_factory() as session:
+        job = await session.get(Job, job_id)
+        if not job or job.status != "RUNNING" or job.execution_state != "PERSISTING":
+            return
+        payload = job.payload or {}
+        shot_id = str(payload.get("shot_id") or "")
+        prompt = str(payload.get("prompt") or "")
+    if not result_url:
+        raise RuntimeError("供应商视频结果地址缺失")
+    await _generate_media(
+        shot_id,
+        job_id,
+        "video",
+        prompt,
+        provided_remote_url=result_url,
+    )

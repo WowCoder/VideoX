@@ -73,7 +73,8 @@ export OPENVMA_IMAGE_TAG="$(git rev-parse --short=12 HEAD)"
 
 ```bash
 docker compose -f compose.prod.yml --env-file .env.production ps
-docker compose -f compose.prod.yml --env-file .env.production logs -f backend celery-worker gateway admin-gateway
+docker compose -f compose.prod.yml --env-file .env.production logs -f \
+  backend celery-worker celery-control celery-video celery-media celery-export gateway admin-gateway
 ```
 
 首次发布并完成迁移后，以交互方式创建第一个管理员。密码至少 12 位，命令会在本地终端显示仅供 Authenticator 扫描的二维码，并只展示一次 TOTP 密钥和 Authenticator URI：
