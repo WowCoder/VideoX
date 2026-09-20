@@ -1,6 +1,21 @@
 """ORM 模型包。"""
 
 from app.models.admin import AdminAuditLog, AdminSession, AdminUser, QuotaAdjustment
+from app.models.billing import (
+    BillableSku,
+    BillingAccount,
+    BillingCatalogVersion,
+    BillingPlanVersion,
+    BillingQuote,
+    BillingQuoteLine,
+    CreditHold,
+    CreditHoldItem,
+    CreditLedger,
+    CreditLot,
+    CreditPackage,
+    PassProduct,
+    RateCardEntry,
+)
 from app.models.asset import Asset, AssetSegment, ProjectAssetLink
 from app.models.inspiration import (
     InspirationResult,
@@ -26,6 +41,19 @@ __all__ = [
     "AdminSession",
     "AdminAuditLog",
     "QuotaAdjustment",
+    "BillingCatalogVersion",
+    "BillingPlanVersion",
+    "CreditPackage",
+    "BillableSku",
+    "RateCardEntry",
+    "PassProduct",
+    "BillingAccount",
+    "CreditLot",
+    "CreditLedger",
+    "CreditHold",
+    "CreditHoldItem",
+    "BillingQuote",
+    "BillingQuoteLine",
     "User",
     "UserIdentity",
     "Membership",

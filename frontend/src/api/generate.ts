@@ -25,6 +25,24 @@ export interface ProjectOperationRequest {
   operation: ProjectOperation;
   parameters?: Record<string, unknown>;
   expectedRevision: number;
+  pricingCatalogId?: string;
+}
+
+export interface OperationEstimate {
+  estimateId?: string;
+  catalogVersionId?: string;
+  estimatedCredits: number;
+  availableCredits: number;
+  remainingAfter: number;
+  sufficient: boolean;
+  expiresAt?: string;
+  lines: Array<{
+    sku: string;
+    unit: string;
+    quantity: number;
+    unitCredits: number;
+    credits: number;
+  }>;
 }
 
 export interface CreationPreviewShot {
@@ -94,11 +112,13 @@ export async function createScriptPreview(input: {
   prompt: string;
   durationSeconds: number;
   tone: string;
+  pricingCatalogId?: string;
 }): Promise<CreationPreview> {
   const raw = await http.post<RawCreationPreview>("/generate/creation-previews/script", {
     prompt: input.prompt,
     duration_seconds: input.durationSeconds,
     tone: input.tone,
+    pricing_catalog_id: input.pricingCatalogId ?? null,
   });
   return mapCreationPreview(raw);
 }
@@ -106,12 +126,32 @@ export async function createScriptPreview(input: {
 export async function createAssetPreview(input: {
   assetIds: string[];
   brief?: string;
+  pricingCatalogId?: string;
 }): Promise<CreationPreview> {
   const raw = await http.post<RawCreationPreview>("/generate/creation-previews/assets", {
     asset_ids: input.assetIds,
     brief: input.brief ?? "",
+    pricing_catalog_id: input.pricingCatalogId ?? null,
   });
   return mapCreationPreview(raw);
+}
+
+export async function estimateCreationPreview(source: "ai-script" | "upload-assets"): Promise<OperationEstimate> {
+  const raw = await http.post<{
+    estimate_id?: string | null; catalog_version_id?: string | null; estimated_credits: number;
+    available_credits: number; remaining_after: number; sufficient: boolean; expires_at?: string | null;
+    lines: Array<{ sku: string; unit: string; quantity: number; unit_credits: number; credits: number }>;
+  }>("/generate/creation-previews/estimate", { source });
+  return {
+    estimateId: raw.estimate_id ?? undefined,
+    catalogVersionId: raw.catalog_version_id ?? undefined,
+    estimatedCredits: raw.estimated_credits,
+    availableCredits: raw.available_credits,
+    remainingAfter: raw.remaining_after,
+    sufficient: raw.sufficient,
+    expiresAt: raw.expires_at ?? undefined,
+    lines: raw.lines.map((line) => ({ sku: line.sku, unit: line.unit, quantity: line.quantity, unitCredits: line.unit_credits, credits: line.credits })),
+  };
 }
 
 export async function executeProjectOperation(
@@ -128,6 +168,49 @@ export async function executeProjectOperation(
     operation: request.operation,
     parameters: request.parameters ?? {},
     expected_revision: request.expectedRevision,
+    pricing_catalog_id: request.pricingCatalogId ?? null,
   });
   return raw.jobs.map(mapJob);
+}
+
+export async function estimateProjectOperation(
+  projectId: string,
+  request: ProjectOperationRequest,
+): Promise<OperationEstimate> {
+  const raw = await http.post<{
+    estimate_id?: string | null;
+    catalog_version_id?: string | null;
+    estimated_credits: number;
+    available_credits: number;
+    remaining_after: number;
+    sufficient: boolean;
+    expires_at?: string | null;
+    lines: Array<{ sku: string; unit: string; quantity: number; unit_credits: number; credits: number }>;
+  }>(`/generate/projects/${projectId}/operations/estimate`, {
+    scope: {
+      type: request.scope.type,
+      scene_ids: request.scope.sceneIds ?? [],
+      shot_ids: request.scope.shotIds ?? [],
+      asset_ids: request.scope.assetIds ?? [],
+    },
+    operation: request.operation,
+    parameters: request.parameters ?? {},
+    expected_revision: request.expectedRevision,
+  });
+  return {
+    estimateId: raw.estimate_id ?? undefined,
+    catalogVersionId: raw.catalog_version_id ?? undefined,
+    estimatedCredits: raw.estimated_credits,
+    availableCredits: raw.available_credits,
+    remainingAfter: raw.remaining_after,
+    sufficient: raw.sufficient,
+    expiresAt: raw.expires_at ?? undefined,
+    lines: raw.lines.map((line) => ({
+      sku: line.sku,
+      unit: line.unit,
+      quantity: line.quantity,
+      unitCredits: line.unit_credits,
+      credits: line.credits,
+    })),
+  };
 }

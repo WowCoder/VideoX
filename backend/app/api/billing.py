@@ -25,8 +25,16 @@ from app.dependencies import get_current_user
 from app.models.user import User, Membership
 from app.models.order import Order
 from app.models.invoice import Invoice
+from app.models.billing import BillingPlanVersion, CreditPackage
 from app.schemas.auth import MembershipOut, SubscriptionOut, UsageOut
 from app.services.subscriptions import activate_paid_subscription, ensure_user_subscription
+from app.services.billing_v2 import (
+    active_catalog,
+    calculate_topup_credits,
+    ensure_user_billing_account,
+    grant_credits,
+    grant_subscription_credits,
+)
 from app.services.quotas import synchronize_user_usage
 
 router = APIRouter()
@@ -55,6 +63,10 @@ class UpgradeResponse(BaseModel):
     pay_url: str = ""
 
 
+class TopupRequest(BaseModel):
+    package_code: str = Field(..., min_length=2, max_length=50)
+
+
 class OrderOut(BaseModel):
     """订单信息。"""
     order_id: str
@@ -62,6 +74,9 @@ class OrderOut(BaseModel):
     membership_id: str
     membership_name: str
     billing_cycle: str
+    product_type: str = "membership"
+    product_code: str | None = None
+    credit_amount: int | None = None
     amount: float
     status: str  # pending / paid / cancelled
     pay_url: str
@@ -124,6 +139,70 @@ async def get_subscription(
     return SubscriptionOut.model_validate(subscription)
 
 
+@router.post("/topup", response_model=UpgradeResponse)
+async def create_topup_order(
+    req: TopupRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """创建 V-Credits 充值包订单；支付回调会按订单快照发放积分。"""
+    if not settings.billing_v2_enabled:
+        raise HTTPException(status_code=503, detail="V-Credits 计费尚未启用")
+    if not settings.has_alipay:
+        raise HTTPException(status_code=503, detail="支付功能未配置，请联系管理员")
+    catalog = await active_catalog(db)
+    if catalog is None:
+        raise HTTPException(status_code=503, detail="当前没有已发布的计费目录")
+    package = (
+        await db.execute(
+            select(CreditPackage).where(
+                CreditPackage.catalog_version_id == catalog.id,
+                CreditPackage.package_code == req.package_code,
+                CreditPackage.active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if package is None:
+        raise HTTPException(status_code=404, detail="充值包不存在或已下架")
+    plan = (
+        await db.execute(
+            select(BillingPlanVersion).where(
+                BillingPlanVersion.catalog_version_id == catalog.id,
+                BillingPlanVersion.membership_id == user.membership_id,
+            )
+        )
+    ).scalar_one_or_none()
+    membership_bonus_bps = int(plan.recharge_bonus_bps) if plan else 0
+    credit_amount = calculate_topup_credits(
+        package.base_credits,
+        package.package_bonus_bps,
+        membership_bonus_bps,
+    )
+    amount = int(package.price_fen) / 100
+    order = Order(
+        user_id=user.id,
+        membership_id=user.membership_id,
+        membership_name="V-Credits 充值",
+        billing_cycle="one_time",
+        amount=amount,
+        catalog_version_id=catalog.id,
+        product_type="credit_package",
+        product_code=package.package_code,
+        price_fen=package.price_fen,
+        credit_amount=credit_amount,
+        status="pending",
+    )
+    db.add(order)
+    await db.flush()
+    try:
+        order.pay_url = _generate_alipay_pay_url(order.id, amount, package.display_name)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    if not order.pay_url:
+        raise HTTPException(status_code=503, detail="支付链接生成失败，请检查支付宝配置")
+    return UpgradeResponse(order_id=order.id, message="充值订单已创建，请前往支付宝完成支付", pay_url=order.pay_url)
+
+
 @router.post("/upgrade", response_model=UpgradeResponse)
 async def create_upgrade_order(
     req: UpgradeRequest,
@@ -155,10 +234,31 @@ async def create_upgrade_order(
     if current_membership and current_membership.rank > target_membership.rank:
         raise HTTPException(status_code=400, detail="暂不支持在线降级会员方案")
 
-    # 计算金额
+    # 计算金额：V2 目录保存月付/年付的不可变价格快照，不能再用“月价 × 10”。
     amount = target_membership.price
-    if req.billing_cycle == "yearly" and target_membership.billing_cycle == "monthly":
-        # 年付按 10 个月计算（2 个月优惠）
+    catalog_plan = None
+    if settings.billing_v2_enabled:
+        catalog = await active_catalog(db)
+        if catalog is not None:
+            catalog_plan = (
+                await db.execute(
+                    select(BillingPlanVersion).where(
+                        BillingPlanVersion.catalog_version_id == catalog.id,
+                        BillingPlanVersion.membership_id == target_membership.id,
+                    )
+                )
+            ).scalar_one_or_none()
+    if catalog_plan is not None:
+        amount_fen = (
+            catalog_plan.annual_price_fen
+            if req.billing_cycle == "yearly"
+            else catalog_plan.monthly_price_fen
+        )
+        if amount_fen is None:
+            raise HTTPException(status_code=422, detail="该套餐暂未配置所选计费周期")
+        amount = int(amount_fen) / 100
+    elif req.billing_cycle == "yearly" and target_membership.billing_cycle == "monthly":
+        # 迁移前兼容：目录不可用时仍沿用旧接口行为。
         amount = target_membership.price * 10
 
     # 创建订单
@@ -168,6 +268,10 @@ async def create_upgrade_order(
         membership_name=target_membership.name,
         billing_cycle=req.billing_cycle,
         amount=amount,
+        catalog_version_id=catalog.id if catalog_plan is not None else None,
+        product_type="membership",
+        product_code=catalog_plan.plan_code if catalog_plan is not None else req.membership_id,
+        price_fen=int(round(amount * 100)),
         status="pending",
     )
     db.add(order)
@@ -277,9 +381,55 @@ async def alipay_notify(
         logger.error("支付宝回调：订单用户不存在 %s", order.user_id)
         return AlipayNotifyResponse(result="fail")
 
-    await activate_paid_subscription(db, user, order)
-    await synchronize_user_usage(db, user, for_update=True)
-    logger.info("用户 %s 会员订阅已更新至 %s", user.id, order.membership_id)
+    if order.product_type == "credit_package":
+        if not order.credit_amount or not order.catalog_version_id:
+            logger.error("充值订单缺少积分快照：%s", order.id)
+            return AlipayNotifyResponse(result="fail")
+        account = await ensure_user_billing_account(db, user, for_update=True)
+        await grant_credits(
+            db,
+            account,
+            int(order.credit_amount),
+            source_type="topup_purchase",
+            source_id=order.id,
+            catalog_version_id=order.catalog_version_id,
+            # 充值积分按 Excel 06 的建议永久有效；只有订阅周期积分受滚存
+            # 规则约束。批次的 expires_at 为空也会被 FIFO 正确处理。
+            expires_at=None,
+            reason="充值包到账",
+            idempotency_key=f"topup:{order.id}",
+            metadata={"product_code": order.product_code, "price_fen": order.price_fen},
+        )
+        logger.info("用户 %s V-Credits 充值到账：%s", user.id, order.credit_amount)
+    else:
+        previous_subscription = user.subscription
+        previous_end = (
+            previous_subscription.current_period_end
+            if previous_subscription and previous_subscription.current_period_end
+            else None
+        )
+        continuing_same_subscription = bool(
+            previous_subscription
+            and previous_subscription.status == "active"
+            and previous_subscription.membership_id == order.membership_id
+            and previous_end
+            and previous_end > _utcnow()
+        )
+        await activate_paid_subscription(db, user, order)
+        if settings.billing_v2_enabled:
+            await grant_subscription_credits(
+                db,
+                user,
+                membership_id=order.membership_id,
+                order_id=order.id,
+                period_end=user.subscription.current_period_end if user.subscription else None,
+                period_start=previous_end if continuing_same_subscription else (
+                    user.subscription.current_period_start if user.subscription else None
+                ),
+                catalog_version_id=order.catalog_version_id,
+            )
+        await synchronize_user_usage(db, user, for_update=True)
+        logger.info("用户 %s 会员订阅已更新至 %s", user.id, order.membership_id)
 
     # 更新订单状态
     order.status = "paid"
@@ -304,6 +454,9 @@ async def list_orders(
             membership_id=order.membership_id,
             membership_name=order.membership_name,
             billing_cycle=order.billing_cycle,
+            product_type=order.product_type,
+            product_code=order.product_code,
+            credit_amount=order.credit_amount,
             amount=order.amount,
             status=order.status,
             pay_url=order.pay_url,

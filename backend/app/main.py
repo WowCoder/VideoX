@@ -103,7 +103,7 @@ app.add_middleware(RateLimitMiddleware)
 
 
 # ── 路由注册 ──
-from app.api import activity, auth, projects, assets, jobs, generate, ws, billing, notifications, search, inspiration, voiceover  # noqa: E402
+from app.api import activity, auth, projects, assets, jobs, generate, ws, billing, billing_v2, notifications, search, inspiration, voiceover  # noqa: E402
 from app.api.admin import (  # noqa: E402
     audit_logs as admin_audit_logs,
     auth as admin_auth,
@@ -122,6 +122,7 @@ app.include_router(jobs.router, prefix="/api/jobs", tags=["任务"])
 app.include_router(generate.router, prefix="/api/generate", tags=["AI 生成"])
 app.include_router(ws.router, prefix="/api/ws", tags=["WebSocket"])
 app.include_router(billing.router, prefix="/api/billing", tags=["会员与支付"])
+app.include_router(billing_v2.router, prefix="/api/billing", tags=["V-Credits 计费"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["站内通知"])
 app.include_router(search.router, prefix="/api/search", tags=["全局搜索"])
 app.include_router(inspiration.router, prefix="/api/inspiration", tags=["灵感岛"])

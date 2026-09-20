@@ -470,7 +470,7 @@ export function SiteHome({
             <p>从免费体验开始。需要更多生成额度、更高画质或团队空间时再升级。</p>
             <div className="ltx-billing-toggle" role="group" aria-label="会员付费周期">
               <button className={billingCycle === "monthly" ? "is-active" : ""} onClick={() => setBillingCycle("monthly")} type="button">月付</button>
-              <button className={billingCycle === "annual" ? "is-active" : ""} onClick={() => setBillingCycle("annual")} type="button">年付 <span>省 20%</span></button>
+              <button className={billingCycle === "annual" ? "is-active" : ""} onClick={() => setBillingCycle("annual")} type="button">年付 <span>年付优惠</span></button>
             </div>
           </div>
         </div>

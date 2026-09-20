@@ -1,6 +1,6 @@
 // ──────────────────────────────────────────────
 // OpenVMA - 个人中心
-// 页签：账户概览 / 会员方案 / 用量中心 / 账单与发票 / 账户设置
+// 页签：账户概览 / 会员方案 / V-Credits / 账单与发票 / 账户设置
 // ──────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
@@ -30,6 +30,13 @@ import {
   createInvoiceApplication,
   downloadInvoiceApplication,
   upgradeMembership,
+  topupCredits,
+  getBillingCatalog,
+  getBillingWallet,
+  getCreditLedger,
+  type BillingCatalog,
+  type BillingWallet,
+  type CreditLedgerEntry,
   type BillingInvoice,
   type BillingOrder,
   type MembershipPlan,
@@ -37,9 +44,9 @@ import {
   type UsageData,
 } from "@/api/billing";
 
-type Section = "overview" | "membership" | "usage" | "billing" | "settings";
+type Section = "overview" | "membership" | "credits" | "billing" | "settings";
 
-const validSections = new Set<Section>(["overview", "membership", "usage", "billing", "settings"]);
+const validSections = new Set<Section>(["overview", "membership", "credits", "billing", "settings"]);
 
 function isSection(value: string | null): value is Section {
   return value !== null && validSections.has(value as Section);
@@ -109,7 +116,7 @@ function subscriptionPresentation(subscription?: SubscriptionData) {
 const sections: { id: Section; label: string; icon: typeof CircleUserRound }[] = [
   { id: "overview", label: "概览", icon: CircleUserRound },
   { id: "membership", label: "会员方案", icon: Crown },
-  { id: "usage", label: "用量", icon: Gauge },
+  { id: "credits", label: "V-Credits", icon: Gauge },
   { id: "billing", label: "账单", icon: ReceiptText },
   { id: "settings", label: "设置", icon: Settings },
 ];
@@ -121,7 +128,9 @@ export function AccountCenter() {
   const updateSettings = useAuthStore((s) => s.updateSettings);
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedSection = searchParams.get("section");
-  const section: Section = isSection(requestedSection) ? requestedSection : "overview";
+  const section: Section = requestedSection === "usage"
+    ? "credits"
+    : isSection(requestedSection) ? requestedSection : "overview";
 
   useEffect(() => {
     void refreshUser();
@@ -162,12 +171,30 @@ export function AccountCenter() {
     queryFn: listInvoices,
     retry: false,
   });
+  const catalogQuery = useQuery({
+    queryKey: ["billing-catalog-v2"],
+    queryFn: getBillingCatalog,
+    retry: false,
+  });
+  const walletQuery = useQuery({
+    queryKey: ["billing-wallet-v2"],
+    queryFn: getBillingWallet,
+    retry: false,
+  });
+  const ledgerQuery = useQuery({
+    queryKey: ["billing-ledger-v2"],
+    queryFn: getCreditLedger,
+    retry: false,
+  });
 
   const memberships = membershipsQuery.data;
   const usage = usageQuery.data;
   const subscription = subscriptionQuery.data;
   const orders = ordersQuery.data ?? [];
   const invoices = invoicesQuery.data ?? [];
+  const catalog = catalogQuery.data;
+  const wallet = walletQuery.data;
+  const ledger = ledgerQuery.data ?? [];
   const loadingMemberships = membershipsQuery.isLoading;
 
   // 当前用户的会员方案
@@ -182,6 +209,9 @@ export function AccountCenter() {
     ?? subscriptionQuery.error
     ?? ordersQuery.error
     ?? invoicesQuery.error
+    ?? catalogQuery.error
+    ?? walletQuery.error
+    ?? ledgerQuery.error
     ?? (membershipMismatch ? new Error("当前会员方案与方案列表不一致，请刷新后重试") : null);
 
   // 升级会员
@@ -231,6 +261,9 @@ export function AccountCenter() {
                   void subscriptionQuery.refetch();
                   void ordersQuery.refetch();
                   void invoicesQuery.refetch();
+                  void catalogQuery.refetch();
+                  void walletQuery.refetch();
+                  void ledgerQuery.refetch();
                 }}
                 className="mt-4 rounded-lg bg-blue px-3 py-2 text-sm text-white"
               >
@@ -243,8 +276,11 @@ export function AccountCenter() {
               usage={usage}
               membership={currentMembership}
               subscription={subscription}
+              wallet={wallet}
+              catalog={catalog}
               orderCount={orders.length}
               onOpenMembership={() => openSection("membership")}
+              onOpenCredits={() => openSection("credits")}
             />
           ) : section === "membership" ? (
             <MembershipSection
@@ -255,7 +291,7 @@ export function AccountCenter() {
               subscription={subscription}
               onUpgrade={handleUpgrade}
             />
-          ) : section === "usage" ? <UsageSection usage={usage} membership={currentMembership} />
+          ) : section === "credits" ? <CreditsSection usage={usage} membership={currentMembership} catalog={catalog} wallet={wallet} ledger={ledger} onChanged={() => { void ordersQuery.refetch(); void walletQuery.refetch(); void ledgerQuery.refetch(); }} notify={notify} />
           : section === "billing" ? (
             <BillingSection
               orders={orders}
@@ -289,23 +325,31 @@ function OverviewSection({
   usage,
   membership,
   subscription,
+  wallet,
+  catalog,
   orderCount,
   onOpenMembership,
+  onOpenCredits,
 }: {
   user: ReturnType<typeof useAuthStore.getState>["user"];
   usage?: UsageData;
   membership?: MembershipPlan;
   subscription?: SubscriptionData;
+  wallet?: BillingWallet;
+  catalog?: BillingCatalog;
   orderCount: number;
   onOpenMembership: () => void;
+  onOpenCredits: () => void;
 }) {
   const name = user?.name || "用户";
   const email = user?.email || "";
   const initial = user?.initial || "U";
   const memName = membership?.name ?? user?.membership?.name ?? "会员信息加载中";
   const membershipRank = membership?.rank ?? user?.membership?.rank;
-  const totalMinutes = membership?.processingMinutes;
+  const catalogPlan = catalog?.plans.find((plan) => plan.membershipId === membership?.id);
   const storageUsedGb = usage ? usage.storageUsedMb / 1024 : undefined;
+  const storageLimitGb = catalogPlan ? catalogPlan.storageBytes / 1024 ** 3 : membership?.storageGb;
+  const expiringLot = wallet?.lots.find((lot) => lot.expiresAt);
   const subscriptionInfo = subscriptionPresentation(subscription);
   const previousSubscriptionExpired = Boolean(
     subscription?.status === "expired"
@@ -331,9 +375,9 @@ function OverviewSection({
         <div className="rounded-xl border border-line bg-white p-4">
           <Gauge size={18} className="text-blue" />
           <strong className="mt-2 block text-lg font-semibold text-text">
-            {totalMinutes === undefined ? "—" : `${totalMinutes} 分钟`}
+            {wallet ? wallet.availableCredits.toLocaleString("zh-CN") : "—"}
           </strong>
-          <small className="text-xs text-muted">方案处理时长额度</small>
+          <small className="text-xs text-muted">V-Credits 可用余额</small>
         </div>
         <div className="rounded-xl border border-line bg-white p-4">
           <CreditCard size={18} className="text-teal" />
@@ -347,9 +391,9 @@ function OverviewSection({
         <div className="rounded-xl border border-line bg-white p-4">
           <HardDrive size={18} className="text-blue" />
           <strong className="mt-2 block text-lg font-semibold text-text">
-            {storageUsedGb === undefined || membership?.storageGb === undefined
+            {storageUsedGb === undefined || storageLimitGb === undefined
               ? "—"
-              : `${storageUsedGb.toFixed(1)} / ${membership.storageGb} GB`}
+              : `${storageUsedGb.toFixed(1)} / ${storageLimitGb.toFixed(0)} GB`}
           </strong>
           <small className="text-xs text-muted">素材存储空间</small>
         </div>
@@ -359,6 +403,16 @@ function OverviewSection({
           <small className="text-xs text-muted">历史账单数</small>
         </div>
       </div>
+      {(Boolean(wallet?.reservedCredits) || expiringLot) && <div className="mt-5 rounded-xl border border-teal/20 bg-teal/5 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold text-text">V-Credits 状态</p>
+            {Boolean(wallet?.reservedCredits) && <p className="mt-1 text-xs text-muted">{wallet?.reservedCredits.toLocaleString("zh-CN")} V-Credits 正用于进行中的任务</p>}
+            {expiringLot && <p className="mt-1 text-xs text-muted">{expiringLot.remainingAmount.toLocaleString("zh-CN")} V-Credits 将于 {formatMembershipDate(expiringLot.expiresAt)} 到期</p>}
+          </div>
+          <button type="button" onClick={onOpenCredits} className="rounded-lg border border-teal/30 bg-white px-3 py-2 text-xs font-semibold text-teal">查看明细</button>
+        </div>
+      </div>}
       {membershipRank === 0 && (
         <div className="mt-5 rounded-xl border border-blue/20 bg-blue-soft/30 p-4">
           <div className="flex items-center gap-2">
@@ -366,7 +420,7 @@ function OverviewSection({
             <strong className="text-sm text-text">查看 OpenVMA 会员方案</strong>
           </div>
           <p className="mt-1.5 text-xs text-muted">
-            Pro 和 Team 提供更高的 AI 额度、存储空间与导出次数。
+            Creator、Pro、Studio 和 Team 提供更多 V-Credits、存储空间与协作权益。
           </p>
           <button
             type="button"
@@ -377,29 +431,13 @@ function OverviewSection({
           </button>
         </div>
       )}
-      {membershipRank === 1 && (
-        <div className="mt-5 rounded-xl border border-blue/20 bg-blue-soft/30 p-4">
-          <div className="flex items-center gap-2">
-            <Crown size={16} className="text-amber" />
-            <strong className="text-sm text-text">当前为 Pro 会员</strong>
-          </div>
-          <p className="mt-1.5 text-xs text-muted">可查看当前权益，或比较 Team 方案的更高额度。</p>
-          <button
-            type="button"
-            onClick={onOpenMembership}
-            className="mt-3 rounded-lg border border-blue/30 px-3 py-2 text-xs font-semibold text-blue transition hover:bg-blue-soft"
-          >
-            管理会员方案
-          </button>
-        </div>
-      )}
-      {membershipRank !== undefined && membershipRank >= 2 && (
+      {membershipRank !== undefined && membershipRank > 0 && (
         <div className="mt-5 rounded-xl border border-teal/20 bg-teal/5 p-4">
           <div className="flex items-center gap-2">
             <Crown size={16} className="text-amber" />
-            <strong className="text-sm text-text">当前为最高等级 Team 会员</strong>
+            <strong className="text-sm text-text">当前为 {memName} 会员</strong>
           </div>
-          <p className="mt-1.5 text-xs text-muted">可在会员方案与用量中心查看当前权益和使用情况。</p>
+          <p className="mt-1.5 text-xs text-muted">可在会员方案与 V-Credits 中查看当前权益、积分和消费明细。</p>
           <button
             type="button"
             onClick={onOpenMembership}
@@ -429,6 +467,7 @@ function MembershipSection({
   subscription?: SubscriptionData;
   onUpgrade: (id: string, cycle?: string) => void;
 }) {
+  const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("monthly");
   if (loading) {
     return (
       <div className="flex justify-center py-12">
@@ -497,6 +536,10 @@ function MembershipSection({
       <p className="mb-5 text-sm text-muted">
         可升级到更高等级，也可续费当前付费方案；主动降级暂未开放，到期后会自动回退至 Free。
       </p>
+      <div className="mb-5 inline-flex rounded-lg border border-line bg-canvas p-1 text-xs">
+        <button type="button" onClick={() => setBillingCycle("monthly")} className={`rounded-md px-3 py-1.5 ${billingCycle === "monthly" ? "bg-surface font-semibold text-text shadow-sm" : "text-muted"}`}>月付</button>
+        <button type="button" onClick={() => setBillingCycle("yearly")} className={`rounded-md px-3 py-1.5 ${billingCycle === "yearly" ? "bg-surface font-semibold text-text shadow-sm" : "text-muted"}`}>年付</button>
+      </div>
       <div className="grid gap-4 sm:grid-cols-3">
         {memberships.map((plan) => {
           const isCurrent = plan.id === currentId;
@@ -538,8 +581,8 @@ function MembershipSection({
               <div className="mt-2">
                 {plan.price > 0 ? (
                   <>
-                    <span className="text-2xl font-bold text-text">¥{plan.price}</span>
-                    <span className="text-sm text-muted">/ 月</span>
+                    <span className="text-2xl font-bold text-text">¥{billingCycle === "yearly" && plan.annualPrice !== undefined ? plan.annualPrice : plan.price}</span>
+                    <span className="text-sm text-muted">/ {billingCycle === "yearly" && plan.annualPrice !== undefined ? "年" : "月"}</span>
                   </>
                 ) : (
                   <span className="text-2xl font-bold text-text">永久免费</span>
@@ -548,27 +591,20 @@ function MembershipSection({
               <ul className="mt-4 space-y-2 text-xs text-muted">
                 <li className="flex items-center gap-1.5">
                   <Check size={13} className="text-teal" />
-                  {plan.processingMinutes} 分钟处理时长
+                  {(plan.monthlyCredits ?? 0).toLocaleString("zh-CN")} V-Credits / 月
                 </li>
-                <li className="flex items-center gap-1.5">
-                  <Check size={13} className="text-teal" />
-                  {plan.aiImageQuota} 张 AI 生图额度
-                </li>
-                <li className="flex items-center gap-1.5">
-                  <Check size={13} className="text-teal" />
-                  {plan.aiVideoQuota} 段 AI 生视频额度
-                </li>
+                <li className="flex items-center gap-1.5"><Check size={13} className="text-teal" />{plan.generationConcurrency ?? 1} 个并发生成任务</li>
                 <li className="flex items-center gap-1.5">
                   <Check size={13} className="text-teal" />
                   {plan.storageGb} GB 素材存储空间
                 </li>
                 <li className="flex items-center gap-1.5">
                   <Check size={13} className="text-teal" />
-                  {plan.exportQuota} 次导出
+                  {plan.maxImageResolution ?? "1k"} 图片 · {plan.maxVideoResolution ?? "720p"} 视频
                 </li>
                 <li className="flex items-center gap-1.5">
                   <Check size={13} className="text-teal" />
-                  {plan.rank === 0 ? "导出含 OpenVMA 水印" : "无水印导出"}
+                  {plan.watermarkRequired ? "导出含 OpenVMA 水印" : "无水印导出"}
                 </li>
                 <li className="flex items-center gap-1.5">
                   <Check size={13} className="text-teal" />
@@ -578,7 +614,7 @@ function MembershipSection({
               <button
                 onClick={() => canPurchase && onUpgrade(
                   plan.id,
-                  canRenew || isExpiredSubscription ? renewalCycle : "monthly",
+                  canRenew || isExpiredSubscription ? renewalCycle : billingCycle,
                 )}
                 disabled={!canPurchase}
                 className={`mt-5 w-full rounded-lg py-2 text-sm font-semibold transition ${
@@ -616,116 +652,60 @@ function MembershipSection({
   );
 }
 
-/* ── 用量中心 ── */
-function UsageSection({
-  usage,
-  membership,
-}: {
+/* ── V-Credits ── */
+function CreditsSection({ usage, membership, catalog, wallet, ledger, onChanged, notify }: {
   usage?: UsageData;
   membership?: MembershipPlan;
+  catalog?: BillingCatalog;
+  wallet?: BillingWallet;
+  ledger: CreditLedgerEntry[];
+  onChanged: () => void;
+  notify: (text: string, tone?: "success" | "info" | "error") => void;
 }) {
-  const storageLimitMb = membership ? membership.storageGb * 1024 : undefined;
-  const processingDisplay = usage
-    ? usage.processingSecondsUsed < 60
-      ? `${usage.processingSecondsUsed} 秒`
-      : `${(usage.processingSecondsUsed / 60).toFixed(1)} 分钟`
-    : "—";
-  const usages = [
-    {
-      label: "处理时长",
-      used: usage?.processingMinutesUsed ?? 0,
-      total: membership?.processingMinutes,
-      unit: "分钟",
-      tracked: true,
-      displayUsed: processingDisplay,
-    },
-    {
-      label: "AI 生图",
-      used: usage?.aiImageUsed ?? 0,
-      total: membership?.aiImageQuota,
-      unit: "张",
-      tracked: true,
-    },
-    {
-      label: "AI 生视频",
-      used: usage?.aiVideoUsed ?? 0,
-      total: membership?.aiVideoQuota,
-      unit: "段",
-      tracked: true,
-    },
-    {
-      label: "导出次数",
-      used: usage?.exportUsed ?? 0,
-      total: membership?.exportQuota,
-      unit: "次",
-      tracked: true,
-    },
-    {
-      label: "素材存储",
-      used: usage?.storageUsedMb ?? 0,
-      total: storageLimitMb,
-      unit: "MB",
-      tracked: true,
-      displayUsed: usage ? `${(usage.storageUsedMb / 1024).toFixed(2)} GB` : "—",
-      displayTotal: membership ? `${membership.storageGb} GB` : "—",
-    },
-  ];
+  const [topupCode, setTopupCode] = useState<string | null>(null);
+  const plan = catalog?.plans.find((item) => item.membershipId === membership?.id);
+  const storageLimitGb = plan ? plan.storageBytes / 1024 ** 3 : membership?.storageGb;
+  const storageUsedGb = (usage?.storageUsedMb ?? 0) / 1024;
+  const storagePercent = storageLimitGb ? Math.min(100, Math.round(storageUsedGb / storageLimitGb * 100)) : 0;
+  const visibleLedger = ledger.filter((entry) => entry.amount !== 0);
+  const monthStart = new Date();
+  monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+  const monthly = visibleLedger.filter((entry) => new Date(entry.createdAt) >= monthStart);
+  const monthGranted = monthly.filter((entry) => entry.amount > 0).reduce((sum, entry) => sum + entry.amount, 0);
+  const monthUsed = monthly
+    .filter((entry) => entry.amount < 0 && entry.entryType !== "expire")
+    .reduce((sum, entry) => sum - entry.amount, 0);
+  const expiring = wallet?.lots.filter((lot) => lot.expiresAt).sort((a, b) => String(a.expiresAt).localeCompare(String(b.expiresAt)))[0];
 
-  return (
-    <div>
-      <h2 className="mb-4 text-lg font-bold text-text">用量中心</h2>
-      <div className="mb-5 rounded-xl border border-line bg-canvas/40 px-4 py-3 text-xs text-muted">
-        <strong className="text-text">本期额度：</strong>{" "}
-        {usage
-          ? `${formatMembershipDate(usage.billingCycleStart)} 至 ${formatMembershipDate(usage.billingCycleEnd)}`
-          : "加载中"}
-        <span className="ml-2">处理、AI 与导出额度按月自动重置，素材存储空间不重置。</span>
-      </div>
-      <div className="space-y-4">
-        {usages.map((u) => {
-          const percent = u.total && u.total > 0 ? Math.round((u.used / u.total) * 100) : 0;
-          return (
-            <div key={u.label} className="rounded-xl border border-line bg-canvas/40 p-4">
-              <div className="flex items-center justify-between">
-                <strong className="text-sm text-text">{u.label}</strong>
-                <span className="text-sm text-muted">
-                  {u.tracked ? (
-                    <>
-                      <strong className="text-text">{u.displayUsed ?? u.used}</strong>
-                      {" / "}{u.displayTotal ?? (u.total === undefined ? "—" : `${u.total} ${u.unit}`)}
-                    </>
-                  ) : (
-                    <strong className="text-text">
-                      本方案 {u.total === undefined ? "—" : `${u.total} ${u.unit}`}
-                    </strong>
-                  )}
-                </span>
-              </div>
-              {u.tracked ? (
-                <>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        percent > 80
-                          ? "bg-red"
-                          : percent > 50
-                            ? "bg-amber"
-                            : "bg-ink"
-                      }`}
-                      style={{ width: `${Math.min(100, percent)}%` }}
-                    />
-                  </div>
-                  <small className="mt-1.5 block text-xs text-muted">
-                    {u.total === undefined ? "额度暂时无法获取" : `已使用 ${percent}%`}
-                  </small>
-                </>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
+  async function startTopup(packageCode: string) {
+    setTopupCode(packageCode);
+    try {
+      const result = await topupCredits(packageCode);
+      if (result.payUrl) window.open(result.payUrl, "_blank");
+      notify(result.message || "充值订单已创建");
+      onChanged();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "充值订单创建失败", "error");
+    } finally {
+      setTopupCode(null);
+    }
+  }
+
+  return <div>
+    <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-bold text-text">V-Credits</h2><p className="mt-1 text-xs text-muted">AI 图片、视频、脚本和配音统一按实际任务消耗。</p></div></div>
+    <div className="mt-5 grid gap-3 sm:grid-cols-3">
+      <div className="rounded-xl border border-teal/25 bg-teal/5 p-4"><span className="text-xs text-muted">可用余额</span><strong className="mt-2 block text-2xl text-text">{wallet?.availableCredits.toLocaleString("zh-CN") ?? "—"}</strong><small className="text-xs text-muted">V-Credits</small></div>
+      <div className="rounded-xl border border-line bg-white p-4"><span className="text-xs text-muted">本月实际消耗</span><strong className="mt-2 block text-2xl text-text">{monthUsed.toLocaleString("zh-CN")}</strong><small className="text-xs text-muted">只统计已完成任务</small></div>
+      <div className="rounded-xl border border-line bg-white p-4"><span className="text-xs text-muted">本月获得</span><strong className="mt-2 block text-2xl text-text">{monthGranted.toLocaleString("zh-CN")}</strong><small className="text-xs text-muted">会员、充值和补偿</small></div>
     </div>
-  );
+    {(Boolean(wallet?.reservedCredits) || expiring) && <div className="mt-3 rounded-lg border border-line bg-canvas/50 px-4 py-3 text-xs text-muted">{Boolean(wallet?.reservedCredits) && <span>{wallet?.reservedCredits.toLocaleString("zh-CN")} V-Credits 正用于进行中的任务</span>}{Boolean(wallet?.reservedCredits) && expiring && <span> · </span>}{expiring && <span>{expiring.remainingAmount.toLocaleString("zh-CN")} 将于 {formatMembershipDate(expiring.expiresAt)} 到期</span>}</div>}
+
+    {catalog?.creditPackages.length ? <section className="mt-6"><h3 className="text-sm font-semibold text-text">充值 V-Credits</h3><p className="mt-1 text-xs text-muted">充值积分永久有效，到账数量包含积分包赠送和当前会员加成。</p><div className="mt-3 grid gap-2 sm:grid-cols-3">{catalog.creditPackages.map((item) => <button type="button" key={item.packageCode} disabled={topupCode === item.packageCode} onClick={() => void startTopup(item.packageCode)} className="rounded-lg border border-line bg-white px-3 py-3 text-left transition hover:border-teal disabled:opacity-50"><span className="block text-sm font-semibold text-text">¥{(item.priceFen / 100).toFixed(2)}</span><span className="mt-1 block text-xs text-muted">{item.baseCredits.toLocaleString("zh-CN")} 基础积分{item.packageBonusBps ? ` · 包赠 ${item.packageBonusBps / 100}%` : ""}</span></button>)}</div></section> : null}
+
+    <section className="mt-6"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-text">资源使用</h3><span className="text-xs text-muted">{storageUsedGb.toFixed(2)} / {storageLimitGb?.toFixed(0) ?? "—"} GB</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-canvas"><div className="h-full rounded-full bg-ink" style={{ width: `${storagePercent}%` }} /></div><p className="mt-2 text-xs text-muted">素材存储是套餐资源上限，不消耗 V-Credits。</p></section>
+
+    <section className="mt-6"><h3 className="text-sm font-semibold text-text">积分明细</h3>{visibleLedger.length ? <div className="mt-3 overflow-hidden rounded-xl border border-line">{visibleLedger.map((entry) => <div key={entry.id} className="flex items-center justify-between border-b border-line px-4 py-3 last:border-0"><div><p className="text-sm font-medium text-text">{entry.reason || (entry.amount > 0 ? "积分到账" : "任务消费")}</p><p className="mt-0.5 text-xs text-muted">{new Date(entry.createdAt).toLocaleString("zh-CN")} · 余额 {entry.balanceAfter.toLocaleString("zh-CN")}</p></div><strong className={`text-sm ${entry.amount > 0 ? "text-teal" : "text-text"}`}>{entry.amount > 0 ? "+" : ""}{entry.amount.toLocaleString("zh-CN")}</strong></div>)}</div> : <div className="mt-3 rounded-xl border border-dashed border-line py-10 text-center text-sm text-muted">暂无积分变动</div>}</section>
+  </div>;
 }
 
 /* ── 账单与发票 ── */
@@ -839,7 +819,8 @@ function BillingSection({
           {orders.map((order) => (
             <div key={order.orderId} className="flex items-center justify-between border-b border-line px-4 py-3 last:border-b-0">
               <div>
-                <p className="text-sm font-medium text-text">{order.membershipName} · {order.billingCycle === "yearly" ? "年付" : "月付"}</p>
+                <p className="text-sm font-medium text-text">{order.membershipName} · {order.billingCycle === "yearly" ? "年付" : order.billingCycle === "one_time" ? "一次性" : "月付"}</p>
+                {order.productType === "credit_package" && order.creditAmount !== undefined && <p className="mt-0.5 text-xs text-teal">到账 {order.creditAmount.toLocaleString("zh-CN")} V-Credits</p>}
                 <p className="mt-0.5 text-xs text-muted">{new Date(order.createdAt).toLocaleString("zh-CN")}</p>
               </div>
               <div className="text-right">

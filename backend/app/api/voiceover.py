@@ -16,6 +16,8 @@ from app.models.voice import VoiceLine, VoiceProfile, VoiceTake
 from app.services.project_access import require_project_access
 from app.services.tts.normalization import dashscope_billable_characters, text_hash
 from app.services.workspace import load_project_workspace, record_revision
+from app.services.billing_v2 import create_usage_quote, ensure_user_billing_account, reserve_credits
+from app.services.quotas import fail_job
 from app.utils.storage import get_file_url
 
 
@@ -338,6 +340,31 @@ async def regenerate_voice_line(
     job.payload = {**job.payload, "base_revision": project.script.revision}
     db.add(job)
     await db.flush()
+    if settings.billing_v2_enabled:
+        billing_account = await ensure_user_billing_account(db, user, for_update=True)
+        quantity = max(1, (max(1, int(line.target_duration_ms)) + 59999) // 60000)
+        sku = "tts.pro" if request.model.startswith("qwen-audio-") or "pro" in request.model.lower() else "tts.standard"
+        try:
+            quote = await create_usage_quote(
+                db,
+                billing_account,
+                [{"sku": sku, "quantity": quantity, "metadata": {"operation": "regenerate_voice_line", "job_id": job.id}}],
+                request_snapshot={"project_id": project_id, "voice_line_id": line.id, "model": request.model},
+            )
+            hold = await reserve_credits(
+                db,
+                billing_account,
+                quote.total_credits,
+                idempotency_key=f"job:{job.id}:quote:{quote.id}",
+                job_id=job.id,
+                quote_id=quote.id,
+                reason="重新生成单句配音积分预占",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        job.billing_quote_id = quote.id
+        job.billing_hold_id = hold.id
+        job.quoted_credits = quote.total_credits
     await record_revision(db, project, user.id, "before_ai_operation", {"operation": "regenerate_voice_line", "voice_line_id": line.id, "job_ids": [job.id]})
     await db.commit()
     from app.services.task_dispatch import dispatch_project_task
@@ -346,9 +373,14 @@ async def regenerate_voice_line(
         task = await dispatch_project_task(db, project_id, generate_project_voiceover, job.id, project_id)
         job.celery_task_id = task.id
     except Exception as exc:
-        job.status = "FAILED"
-        job.stage = "派发失败"
-        job.detail = f"任务派发失败：{str(exc)[:200]}"
+        await fail_job(
+            db,
+            job.id,
+            detail=f"任务派发失败：{str(exc)[:200]}",
+            stage="派发失败",
+            error_code="TASK_DISPATCH_FAILED",
+            error_category="INFRASTRUCTURE",
+        )
     await db.commit()
     from app.schemas.job import JobOut
     return JobOut.model_validate(job)

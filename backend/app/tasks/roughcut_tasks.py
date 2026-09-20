@@ -2,8 +2,6 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import update
-
 from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
@@ -121,19 +119,16 @@ async def _run_rough_cut_async(job_id: str, project_id: str) -> None:
 async def _mark_failed(job_id: str, error: Exception) -> None:
     from app.database import async_session_factory
     from app.models.job import Job
+    from app.services.quotas import fail_job
 
     async with async_session_factory() as session:
-        await session.execute(
-            update(Job)
-            .where(Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"]))
-            .values(
-                status="FAILED",
-                stage="主成片编排失败",
-                detail=str(error)[:500],
-                result=None,
-                result_detail=str(error)[:500],
-                updated_at=datetime.now(timezone.utc),
-            )
+        await fail_job(
+            session,
+            job_id,
+            stage="主成片编排失败",
+            detail=str(error)[:500],
+            error_code="ROUGH_CUT_FAILED",
+            error_category="INTERNAL_ERROR",
         )
         await session.commit()
 

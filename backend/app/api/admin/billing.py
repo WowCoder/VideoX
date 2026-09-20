@@ -4,9 +4,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.orm.attributes import NO_VALUE
+from sqlalchemy import inspect as sa_inspect
 
 from app.admin.dependencies import AdminPrincipal, require_admin_permission
 from app.admin.audit import validate_idempotent_target, write_admin_audit
@@ -14,11 +16,21 @@ from app.admin.redaction import mask_email
 from app.database import get_db
 from app.models.invoice import Invoice
 from app.models.admin import AdminAuditLog
+from app.models.billing import (
+    BillableSku,
+    BillingCatalogVersion,
+    BillingPlanVersion,
+    CreditPackage,
+    PassProduct,
+    RateCardEntry,
+)
 from app.models.order import Order
 from app.models.subscription import Subscription, SubscriptionEvent
 from app.models.user import User
+from app.config import get_settings
 from app.services.quotas import synchronize_user_usage
 from app.services.subscriptions import activate_paid_subscription
+from app.services.billing_v2 import grant_subscription_credits
 
 
 router = APIRouter()
@@ -35,6 +47,49 @@ class InvoiceRejectRequest(BillingReasonRequest):
 class InvoiceIssueRequest(BillingReasonRequest):
     invoice_number: str = Field(..., min_length=3, max_length=100)
     document_path: str | None = Field(None, max_length=1000)
+
+
+class CatalogDraftRequest(BaseModel):
+    version_key: str = Field(..., min_length=3, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
+    source_catalog_id: str | None = None
+    notes: str = Field("", max_length=2000)
+
+
+class PlanPatchRequest(BaseModel):
+    monthly_price_fen: int | None = Field(None, ge=0)
+    annual_price_fen: int | None = Field(None, ge=0)
+    monthly_credits: int | None = Field(None, ge=0)
+    signup_credits: int | None = Field(None, ge=0)
+    rollover_cycles: int | None = Field(None, ge=0, le=120)
+    recharge_bonus_bps: int | None = Field(None, ge=0, le=10000)
+    generation_concurrency: int | None = Field(None, ge=1)
+    storage_bytes: int | None = Field(None, ge=0)
+    seat_limit: int | None = Field(None, ge=1)
+    queue_priority: int | None = Field(None, ge=0, le=100)
+    model_access_level: str | None = Field(None, min_length=2, max_length=50)
+    max_video_resolution: str | None = Field(None, min_length=2, max_length=20)
+    max_image_resolution: str | None = Field(None, min_length=2, max_length=20)
+    watermark_required: bool | None = None
+    commercial_use: bool | None = None
+    api_access: bool | None = None
+    batch_access: bool | None = None
+    notes: str | None = Field(None, max_length=2000)
+
+
+class RatePatchRequest(BaseModel):
+    credits_per_unit: int | None = Field(None, ge=1)
+    minimum_credits: int | None = Field(None, ge=0)
+    allowed_plan_codes: list[str] | None = None
+    included_in_pass: bool | None = None
+    active: bool | None = None
+
+
+class PackagePatchRequest(BaseModel):
+    price_fen: int | None = Field(None, ge=1)
+    base_credits: int | None = Field(None, ge=1)
+    package_bonus_bps: int | None = Field(None, ge=0, le=10000)
+    sort_order: int | None = Field(None, ge=0)
+    active: bool | None = None
 
 
 def _subscription_snapshot(subscription: Subscription | None) -> dict:
@@ -67,6 +122,503 @@ async def _existing_audit(
 
 def _mask_tax_number(value: str) -> str:
     return value[:4] + "********" + value[-4:] if len(value) > 8 else "********"
+
+
+def _catalog_summary(catalog: BillingCatalogVersion) -> dict:
+    state = sa_inspect(catalog)
+
+    def relationship_count(name: str) -> int:
+        value = state.attrs[name].loaded_value
+        return 0 if value is NO_VALUE else len(value)
+
+    return {
+        "id": catalog.id,
+        "version_key": catalog.version_key,
+        "status": catalog.status,
+        "effective_at": catalog.effective_at,
+        "published_at": catalog.published_at,
+        "notes": catalog.notes,
+        "created_at": catalog.created_at,
+        "updated_at": catalog.updated_at,
+        "plan_count": relationship_count("plans"),
+        "package_count": relationship_count("credit_packages"),
+        "sku_count": relationship_count("skus"),
+    }
+
+
+@router.get("/billing/catalogs")
+async def list_catalogs(
+    _: AdminPrincipal = Depends(require_admin_permission("pricing.read")),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.execute(
+            select(BillingCatalogVersion)
+            .options(
+                selectinload(BillingCatalogVersion.plans),
+                selectinload(BillingCatalogVersion.credit_packages),
+                selectinload(BillingCatalogVersion.skus),
+            )
+            .order_by(BillingCatalogVersion.created_at.desc())
+        )
+    ).scalars().all()
+    return {"items": [_catalog_summary(row) for row in rows]}
+
+
+@router.get("/billing/catalogs/{catalog_id}")
+async def get_catalog_detail(
+    catalog_id: str,
+    _: AdminPrincipal = Depends(require_admin_permission("pricing.read")),
+    db: AsyncSession = Depends(get_db),
+):
+    catalog = (
+        await db.execute(
+            select(BillingCatalogVersion)
+            .where(BillingCatalogVersion.id == catalog_id)
+            .options(
+                selectinload(BillingCatalogVersion.plans),
+                selectinload(BillingCatalogVersion.credit_packages),
+                selectinload(BillingCatalogVersion.skus),
+                selectinload(BillingCatalogVersion.rate_entries).selectinload(RateCardEntry.sku),
+                selectinload(BillingCatalogVersion.passes),
+            )
+        )
+    ).scalar_one_or_none()
+    if catalog is None:
+        raise HTTPException(status_code=404, detail="计费目录不存在")
+    return {
+        **_catalog_summary(catalog),
+        "plans": [
+            {
+                "id": plan.id,
+                "plan_code": plan.plan_code,
+                "display_name": plan.display_name,
+                "rank": plan.rank,
+                "monthly_price_fen": plan.monthly_price_fen,
+                "annual_price_fen": plan.annual_price_fen,
+                "monthly_credits": plan.monthly_credits,
+                "signup_credits": plan.signup_credits,
+                "rollover_cycles": plan.rollover_cycles,
+                "recharge_bonus_bps": plan.recharge_bonus_bps,
+                "generation_concurrency": plan.generation_concurrency,
+                "storage_bytes": plan.storage_bytes,
+                "seat_limit": plan.seat_limit,
+                "queue_priority": plan.queue_priority,
+                "model_access_level": plan.model_access_level,
+                "max_video_resolution": plan.max_video_resolution,
+                "max_image_resolution": plan.max_image_resolution,
+                "watermark_required": plan.watermark_required,
+                "commercial_use": plan.commercial_use,
+                "api_access": plan.api_access,
+                "batch_access": plan.batch_access,
+                "rollover_policy": plan.rollover_policy,
+                "metadata": plan.metadata_json or {},
+            }
+            for plan in catalog.plans
+        ],
+        "credit_packages": [
+            {
+                "id": package.id,
+                "package_code": package.package_code,
+                "display_name": package.display_name,
+                "price_fen": package.price_fen,
+                "base_credits": package.base_credits,
+                "package_bonus_bps": package.package_bonus_bps,
+                "sort_order": package.sort_order,
+                "active": package.active,
+            }
+            for package in catalog.credit_packages
+        ],
+        "skus": [
+            {
+                "id": sku.id,
+                "sku": sku.sku,
+                "display_name": sku.display_name,
+                "category": sku.category,
+                "unit": sku.unit,
+                "active": sku.active,
+                "rate": next(
+                    (
+                        {
+                            "credits_per_unit": rate.credits_per_unit,
+                            "minimum_credits": rate.minimum_credits,
+                            "allowed_plan_codes": rate.allowed_plan_codes or [],
+                            "included_in_pass": rate.included_in_pass,
+                        }
+                        for rate in catalog.rate_entries
+                        if rate.sku_id == sku.id
+                    ),
+                    None,
+                ),
+            }
+            for sku in catalog.skus
+        ],
+        "passes": [
+            {
+                "id": item.id,
+                "pass_code": item.pass_code,
+                "display_name": item.display_name,
+                "price_fen": item.price_fen,
+                "duration_seconds": item.duration_seconds,
+                "model_patterns": item.model_patterns or [],
+                "active": item.active,
+            }
+            for item in catalog.passes
+        ],
+    }
+
+
+@router.post("/billing/catalogs", status_code=201)
+async def create_catalog_draft(
+    payload: CatalogDraftRequest,
+    request: Request,
+    principal: AdminPrincipal = Depends(require_admin_permission("pricing.write")),
+    db: AsyncSession = Depends(get_db),
+):
+    exists = (
+        await db.execute(
+            select(BillingCatalogVersion).where(BillingCatalogVersion.version_key == payload.version_key)
+        )
+    ).scalar_one_or_none()
+    if exists:
+        raise HTTPException(status_code=409, detail="目录版本号已存在")
+    source = None
+    if payload.source_catalog_id:
+        source = (
+            await db.execute(
+                select(BillingCatalogVersion)
+                .where(BillingCatalogVersion.id == payload.source_catalog_id)
+                .options(
+                    selectinload(BillingCatalogVersion.plans),
+                    selectinload(BillingCatalogVersion.credit_packages),
+                    selectinload(BillingCatalogVersion.skus),
+                    selectinload(BillingCatalogVersion.rate_entries),
+                    selectinload(BillingCatalogVersion.passes),
+                )
+            )
+        ).scalar_one_or_none()
+        if source is None:
+            raise HTTPException(status_code=404, detail="源目录不存在")
+    catalog = BillingCatalogVersion(
+        version_key=payload.version_key,
+        status="draft",
+        notes=payload.notes.strip(),
+        created_by_admin_id=principal.user.id,
+    )
+    db.add(catalog)
+    await db.flush()
+    if source:
+        sku_map: dict[str, str] = {}
+        for source_sku in source.skus:
+            copied_sku = BillableSku(
+                catalog_version_id=catalog.id,
+                sku=source_sku.sku,
+                display_name=source_sku.display_name,
+                category=source_sku.category,
+                unit=source_sku.unit,
+                minimum_quantity=source_sku.minimum_quantity,
+                rounding_mode=source_sku.rounding_mode,
+                access_level=source_sku.access_level,
+                active=source_sku.active,
+                metadata_json=source_sku.metadata_json or {},
+            )
+            db.add(copied_sku)
+            await db.flush()
+            sku_map[source_sku.id] = copied_sku.id
+        for plan in source.plans:
+            db.add(BillingPlanVersion(
+                catalog_version_id=catalog.id,
+                plan_code=plan.plan_code,
+                membership_id=plan.membership_id,
+                display_name=plan.display_name,
+                rank=plan.rank,
+                monthly_price_fen=plan.monthly_price_fen,
+                annual_price_fen=plan.annual_price_fen,
+                monthly_credits=plan.monthly_credits,
+                signup_credits=plan.signup_credits,
+                rollover_cycles=plan.rollover_cycles,
+                recharge_bonus_bps=plan.recharge_bonus_bps,
+                generation_concurrency=plan.generation_concurrency,
+                storage_bytes=plan.storage_bytes,
+                seat_limit=plan.seat_limit,
+                queue_priority=plan.queue_priority,
+                model_access_level=plan.model_access_level,
+                max_video_resolution=plan.max_video_resolution,
+                max_image_resolution=plan.max_image_resolution,
+                watermark_required=plan.watermark_required,
+                commercial_use=plan.commercial_use,
+                api_access=plan.api_access,
+                batch_access=plan.batch_access,
+                rollover_policy=plan.rollover_policy,
+                metadata_json=plan.metadata_json or {},
+            ))
+        for package in source.credit_packages:
+            db.add(CreditPackage(
+                catalog_version_id=catalog.id,
+                package_code=package.package_code,
+                display_name=package.display_name,
+                price_fen=package.price_fen,
+                base_credits=package.base_credits,
+                package_bonus_bps=package.package_bonus_bps,
+                sort_order=package.sort_order,
+                active=package.active,
+                metadata_json=package.metadata_json or {},
+            ))
+        for rate in source.rate_entries:
+            if rate.sku_id in sku_map:
+                db.add(RateCardEntry(
+                    catalog_version_id=catalog.id,
+                    sku_id=sku_map[rate.sku_id],
+                    credits_per_unit=rate.credits_per_unit,
+                    minimum_credits=rate.minimum_credits,
+                    allowed_plan_codes=rate.allowed_plan_codes or [],
+                    included_in_pass=rate.included_in_pass,
+                    metadata_json=rate.metadata_json or {},
+                ))
+        for item in source.passes:
+            db.add(PassProduct(
+                catalog_version_id=catalog.id,
+                pass_code=item.pass_code,
+                display_name=item.display_name,
+                price_fen=item.price_fen,
+                duration_seconds=item.duration_seconds,
+                model_patterns=item.model_patterns or [],
+                resolution_limit=item.resolution_limit,
+                concurrency_limit=item.concurrency_limit,
+                fair_use_limit=item.fair_use_limit,
+                active=item.active,
+                metadata_json=item.metadata_json or {},
+            ))
+    await db.flush()
+    await write_admin_audit(
+        db,
+        admin=principal.user,
+        request=request,
+        action="BILLING_CATALOG_DRAFT_CREATE",
+        target_type="billing_catalog",
+        target_id=catalog.id,
+        reason=payload.notes or "创建计费目录草稿",
+        before_data={},
+        after_data=_catalog_summary(catalog),
+        idempotency_key=f"catalog-create:{catalog.id}",
+    )
+    return _catalog_summary(catalog)
+
+
+@router.patch("/billing/catalogs/{catalog_id}/plans/{plan_code}")
+async def patch_catalog_plan(
+    catalog_id: str,
+    plan_code: str,
+    payload: PlanPatchRequest,
+    request: Request,
+    principal: AdminPrincipal = Depends(require_admin_permission("pricing.write")),
+    db: AsyncSession = Depends(get_db),
+):
+    catalog = (await db.execute(select(BillingCatalogVersion).where(BillingCatalogVersion.id == catalog_id).with_for_update())).scalar_one_or_none()
+    if catalog is None:
+        raise HTTPException(status_code=404, detail="计费目录不存在")
+    if catalog.status != "draft":
+        raise HTTPException(status_code=409, detail="只有草稿目录允许编辑")
+    plan = (await db.execute(select(BillingPlanVersion).where(BillingPlanVersion.catalog_version_id == catalog_id, BillingPlanVersion.plan_code == plan_code).with_for_update())).scalar_one_or_none()
+    if plan is None:
+        raise HTTPException(status_code=404, detail="套餐不存在")
+    updates = payload.model_dump(exclude_none=True)
+    notes = updates.pop("notes", None)
+    if notes:
+        plan.metadata_json = {**(plan.metadata_json or {}), "admin_notes": notes}
+    before = {field: getattr(plan, field) for field in updates}
+    for field, value in updates.items():
+        setattr(plan, field, value)
+    await db.flush()
+    await write_admin_audit(
+        db,
+        admin=principal.user,
+        request=request,
+        action="BILLING_PLAN_PATCH",
+        target_type="billing_plan",
+        target_id=plan.id,
+        reason=payload.notes or "调整套餐价格或权益",
+        before_data={"catalog_id": catalog_id, "plan_code": plan_code, **before},
+        after_data={"catalog_id": catalog_id, "plan_code": plan_code, **updates},
+        idempotency_key=request.headers.get("Idempotency-Key"),
+    )
+    return {"catalog_id": catalog_id, "plan_code": plan_code, "updated": updates}
+
+
+@router.patch("/billing/catalogs/{catalog_id}/skus/{sku}")
+async def patch_catalog_rate(
+    catalog_id: str,
+    sku: str,
+    payload: RatePatchRequest,
+    request: Request,
+    principal: AdminPrincipal = Depends(require_admin_permission("pricing.write")),
+    db: AsyncSession = Depends(get_db),
+):
+    catalog = (await db.execute(select(BillingCatalogVersion).where(BillingCatalogVersion.id == catalog_id).with_for_update())).scalar_one_or_none()
+    if catalog is None:
+        raise HTTPException(status_code=404, detail="计费目录不存在")
+    if catalog.status != "draft":
+        raise HTTPException(status_code=409, detail="只有草稿目录允许编辑")
+    row = (await db.execute(select(BillableSku, RateCardEntry).join(RateCardEntry, RateCardEntry.sku_id == BillableSku.id).where(BillableSku.catalog_version_id == catalog_id, BillableSku.sku == sku).with_for_update())).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="SKU 费率不存在")
+    sku_row, rate = row
+    updates = payload.model_dump(exclude_none=True)
+    sku_active = updates.pop("active", None)
+    before = {field: getattr(rate, field) for field in updates}
+    if sku_active is not None:
+        before["active"] = sku_row.active
+        sku_row.active = sku_active
+    for field, value in updates.items():
+        setattr(rate, field, value)
+    await db.flush()
+    await write_admin_audit(
+        db,
+        admin=principal.user,
+        request=request,
+        action="BILLING_RATE_PATCH",
+        target_type="billing_sku",
+        target_id=rate.id,
+        reason="调整模型或功能点数费率",
+        before_data={"catalog_id": catalog_id, "sku": sku, **before},
+        after_data={
+            "catalog_id": catalog_id,
+            "sku": sku,
+            **updates,
+            **({"active": sku_active} if sku_active is not None else {}),
+        },
+        idempotency_key=request.headers.get("Idempotency-Key"),
+    )
+    return {
+        "catalog_id": catalog_id,
+        "sku": sku,
+        "updated": {**updates, **({"active": sku_active} if sku_active is not None else {})},
+    }
+
+
+@router.patch("/billing/catalogs/{catalog_id}/packages/{package_code}")
+async def patch_catalog_package(
+    catalog_id: str,
+    package_code: str,
+    payload: PackagePatchRequest,
+    request: Request,
+    principal: AdminPrincipal = Depends(require_admin_permission("pricing.write")),
+    db: AsyncSession = Depends(get_db),
+):
+    catalog = (
+        await db.execute(
+            select(BillingCatalogVersion)
+            .where(BillingCatalogVersion.id == catalog_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if catalog is None:
+        raise HTTPException(status_code=404, detail="计费目录不存在")
+    if catalog.status != "draft":
+        raise HTTPException(status_code=409, detail="只有草稿目录允许编辑")
+    package = (
+        await db.execute(
+            select(CreditPackage)
+            .where(
+                CreditPackage.catalog_version_id == catalog_id,
+                CreditPackage.package_code == package_code,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if package is None:
+        raise HTTPException(status_code=404, detail="充值包不存在")
+    updates = payload.model_dump(exclude_none=True)
+    before = {field: getattr(package, field) for field in updates}
+    for field, value in updates.items():
+        setattr(package, field, value)
+    await db.flush()
+    await write_admin_audit(
+        db,
+        admin=principal.user,
+        request=request,
+        action="BILLING_PACKAGE_PATCH",
+        target_type="credit_package",
+        target_id=package.id,
+        reason="调整充值包价格或赠送比例",
+        before_data={"catalog_id": catalog_id, "package_code": package_code, **before},
+        after_data={"catalog_id": catalog_id, "package_code": package_code, **updates},
+        idempotency_key=request.headers.get("Idempotency-Key"),
+    )
+    return {"catalog_id": catalog_id, "package_code": package_code, "updated": updates}
+
+
+@router.post("/billing/catalogs/{catalog_id}/publish")
+async def publish_catalog(
+    catalog_id: str,
+    request: Request,
+    principal: AdminPrincipal = Depends(require_admin_permission("pricing.publish")),
+    db: AsyncSession = Depends(get_db),
+):
+    catalog = (
+        await db.execute(
+            select(BillingCatalogVersion)
+            .where(BillingCatalogVersion.id == catalog_id)
+            .options(
+                selectinload(BillingCatalogVersion.plans),
+                selectinload(BillingCatalogVersion.skus),
+                selectinload(BillingCatalogVersion.rate_entries),
+                selectinload(BillingCatalogVersion.credit_packages),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if catalog is None:
+        raise HTTPException(status_code=404, detail="计费目录不存在")
+    if catalog.status != "draft":
+        raise HTTPException(status_code=409, detail="只有草稿目录可以发布")
+    plan_codes = {plan.plan_code for plan in catalog.plans}
+    if "free" not in plan_codes:
+        raise HTTPException(status_code=422, detail="目录必须包含 Free 套餐")
+    sku_ids = {sku.id for sku in catalog.skus if sku.active}
+    rate_sku_ids = {rate.sku_id for rate in catalog.rate_entries}
+    if sku_ids - rate_sku_ids:
+        raise HTTPException(status_code=422, detail="存在未配置费率的启用 SKU")
+    for rate in catalog.rate_entries:
+        if rate.sku_id in sku_ids and not rate.allowed_plan_codes:
+            raise HTTPException(status_code=422, detail="启用 SKU 必须至少配置一个可用会员方案")
+        unknown_plans = set(rate.allowed_plan_codes or []) - plan_codes
+        if unknown_plans:
+            raise HTTPException(
+                status_code=422,
+                detail=f"SKU 费率包含不存在的会员方案：{', '.join(sorted(unknown_plans))}",
+            )
+    if any(package.active and package.price_fen <= 0 for package in catalog.credit_packages):
+        raise HTTPException(status_code=422, detail="启用充值包的价格必须大于 0")
+    now = datetime.now(timezone.utc)
+    await db.execute(
+        select(BillingCatalogVersion)
+        .where(BillingCatalogVersion.status == "published", BillingCatalogVersion.id != catalog.id)
+        .with_for_update()
+    )
+    await db.execute(
+        update(BillingCatalogVersion)
+        .where(BillingCatalogVersion.status == "published", BillingCatalogVersion.id != catalog.id)
+        .values(status="retired")
+    )
+    catalog.status = "published"
+    catalog.effective_at = now
+    catalog.published_at = now
+    catalog.published_by_admin_id = principal.user.id
+    await db.flush()
+    await write_admin_audit(
+        db,
+        admin=principal.user,
+        request=request,
+        action="BILLING_CATALOG_PUBLISH",
+        target_type="billing_catalog",
+        target_id=catalog.id,
+        reason="发布计费目录",
+        before_data={"status": "draft"},
+        after_data={"status": "published", "version_key": catalog.version_key},
+        idempotency_key=f"catalog-publish:{catalog.id}",
+    )
+    return _catalog_summary(catalog)
 
 
 @router.get("/orders")
@@ -115,6 +667,8 @@ async def list_orders(
             and subscription.latest_order_id == order.id
         )
         requires_reconciliation = bool(
+            order.product_type != "credit_package"
+            and
             order.status == "paid"
             and order.id == latest_order_id
             and not current_matches
@@ -126,6 +680,11 @@ async def list_orders(
             "membership_id": order.membership_id,
             "membership_name": order.membership_name,
             "billing_cycle": order.billing_cycle,
+            "catalog_version_id": order.catalog_version_id,
+            "product_type": order.product_type,
+            "product_code": order.product_code,
+            "price_fen": order.price_fen,
+            "credit_amount": order.credit_amount,
             "amount": order.amount,
             "status": order.status,
             "created_at": order.created_at,
@@ -171,6 +730,8 @@ async def get_order(
         and subscription.latest_order_id == order.id
     )
     requires_reconciliation = bool(
+        order.product_type != "credit_package"
+        and
         order.status == "paid"
         and latest_paid_order_id == order.id
         and not current_matches
@@ -181,6 +742,11 @@ async def get_order(
         "membership_id": order.membership_id,
         "membership_name": order.membership_name,
         "billing_cycle": order.billing_cycle,
+        "catalog_version_id": order.catalog_version_id,
+        "product_type": order.product_type,
+        "product_code": order.product_code,
+        "price_fen": order.price_fen,
+        "credit_amount": order.credit_amount,
         "amount": order.amount,
         "status": order.status,
         "created_at": order.created_at,
@@ -308,6 +874,8 @@ async def reconcile_order_subscription(
     ).scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
+    if order.product_type == "credit_package":
+        raise HTTPException(status_code=409, detail="充值包订单不需要同步订阅")
     if order.status != "paid" or not order.paid_at:
         raise HTTPException(status_code=409, detail="只有已经真实支付的订单可以同步订阅")
     if order.paid_amount is not None and abs(float(order.paid_amount) - float(order.amount)) > 0.001:
@@ -323,7 +891,30 @@ async def reconcile_order_subscription(
     if not user:
         raise HTTPException(status_code=404, detail="订单关联用户不存在")
     before = _subscription_snapshot(user.subscription)
+    previous_subscription = user.subscription
+    previous_end = (
+        previous_subscription.current_period_end
+        if previous_subscription and previous_subscription.current_period_end
+        else None
+    )
+    continuing_same_subscription = bool(
+        previous_subscription
+        and previous_subscription.status == "active"
+        and previous_subscription.membership_id == order.membership_id
+        and previous_end
+        and previous_end > datetime.now(timezone.utc)
+    )
     subscription = await activate_paid_subscription(db, user, order)
+    if get_settings().billing_v2_enabled:
+        await grant_subscription_credits(
+            db,
+            user,
+            membership_id=order.membership_id,
+            order_id=order.id,
+            period_end=subscription.current_period_end,
+            period_start=previous_end if continuing_same_subscription else subscription.current_period_start,
+            catalog_version_id=order.catalog_version_id,
+        )
     await synchronize_user_usage(db, user, for_update=True)
     after = _subscription_snapshot(subscription)
     event = SubscriptionEvent(

@@ -30,6 +30,7 @@ from app.services.wechat_provider import (
 )
 from app.services.subscriptions import reconcile_user_subscription
 from app.services.quotas import synchronize_user_usage
+from app.services.billing_v2 import grant_signup_credits_for_user
 from app.services.auth_identities import (
     EMAIL_PROVIDER,
     PHONE_PROVIDER,
@@ -164,6 +165,8 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one()
     await reconcile_user_subscription(db, user)
     await synchronize_user_usage(db, user)
+    if get_settings().billing_v2_enabled:
+        await grant_signup_credits_for_user(db, user)
 
     access_token = create_access_token(user.id)
     refresh_token = create_refresh_token(user.id)
@@ -351,6 +354,8 @@ async def _find_or_create_user_by_identity(
     user = await _load_user(db, user.id)
     await reconcile_user_subscription(db, user)
     await synchronize_user_usage(db, user)
+    if get_settings().billing_v2_enabled:
+        await grant_signup_credits_for_user(db, user)
     return user
 
 

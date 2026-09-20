@@ -61,23 +61,27 @@ def persist_video_job(self, job_id: str, result_url: str = "") -> None:
 async def _mark_failed(job_id: str, detail: str, code: str, category: str) -> None:
     from app.database import async_session_factory
     from app.models.job import Job
+    from app.services.quotas import fail_job
     from app.services.video_queue import refresh_video_batch, wake_video_scheduler
 
     now = datetime.now(timezone.utc)
     async with async_session_factory() as db:
-        job = await db.get(Job, job_id, with_for_update=True)
-        if not job or job.status not in {"QUEUED", "RUNNING"}:
+        completed = await fail_job(
+            db,
+            job_id,
+            detail=detail,
+            stage="生成失败",
+            error_code=code,
+            error_category=category,
+            now=now,
+        )
+        if not completed:
             return
-        job.status = "FAILED"
-        job.execution_state = "FAILED"
-        job.stage = "生成失败"
-        job.detail = detail[:500]
-        job.result_detail = detail[:500]
-        job.error_code = code
-        job.error_category = category
-        job.finished_at = now
-        job.heartbeat_at = now
-        await refresh_video_batch(db, job.batch_id)
+        job = await db.get(Job, job_id)
+        if job:
+            job.execution_state = "FAILED"
+            job.heartbeat_at = now
+        await refresh_video_batch(db, job.batch_id if job else None)
         await db.commit()
     wake_video_scheduler()
 

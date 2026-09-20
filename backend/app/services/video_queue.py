@@ -12,6 +12,8 @@ from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.models.job import Job, VideoGenerationBatch
+from app.models.user import User
+from app.services.billing_v2 import active_plan_for_user
 
 
 settings = get_settings()
@@ -30,6 +32,21 @@ def round_robin_video_candidates(candidates: list[Job]) -> list[Job]:
         for index in range(max((len(bucket) for bucket in jobs_by_batch.values()), default=0))
         for bucket in jobs_by_batch.values()
         if index < len(bucket)
+    ]
+
+
+def prioritized_video_candidates(
+    candidates: list[Job],
+    priority_by_owner: dict[str, int],
+) -> list[Job]:
+    """Apply plan priority while preserving round-robin fairness per tier."""
+    tiers: dict[int, list[Job]] = defaultdict(list)
+    for candidate in candidates:
+        tiers[int(priority_by_owner.get(candidate.owner_id, 9))].append(candidate)
+    return [
+        job
+        for priority in sorted(tiers)
+        for job in round_robin_video_candidates(tiers[priority])
     ]
 
 
@@ -169,13 +186,18 @@ async def _recover_abandoned_dispatches(db: AsyncSession, now: datetime) -> None
         if job.execution_state == "SUBMITTING":
             # 供应商可能已收到请求但 Worker 来不及保存 task_id。自动重提可能重复付费，
             # 因此转人工可重试失败，而不是静默再次提交。
-            job.status = "FAILED"
+            from app.services.quotas import fail_job
+
+            await fail_job(
+                db,
+                job.id,
+                detail="Worker 在保存供应商任务编号前中断；为避免重复扣费，未自动重试",
+                stage="提交结果未知",
+                error_code="PROVIDER_SUBMIT_OUTCOME_UNKNOWN",
+                error_category="WORKER_LOST",
+                now=now,
+            )
             job.execution_state = "FAILED"
-            job.stage = "提交结果未知"
-            job.detail = "Worker 在保存供应商任务编号前中断；为避免重复扣费，未自动重试"
-            job.error_code = "PROVIDER_SUBMIT_OUTCOME_UNKNOWN"
-            job.error_category = "WORKER_LOST"
-            job.finished_at = now
             await refresh_video_batch(db, job.batch_id)
         else:
             job.status = "QUEUED"
@@ -285,9 +307,19 @@ async def schedule_video_jobs_once() -> int:
             )
         ).scalars().all()
 
-        # SQL 排序先确定最久未派发的批次；再把各批次内部任务交错展开，避免
-        # 单个大项目一次拿走全部全局名额。若只有一个批次，它仍可用满名额。
-        round_robin_candidates = round_robin_video_candidates(candidates)
+        plan_by_owner = {}
+        for owner_id in dict.fromkeys(job.owner_id for job in candidates):
+            user = (
+                await db.execute(select(User).where(User.id == owner_id).options(selectinload(User.subscription)))
+            ).scalar_one_or_none()
+            plan_by_owner[owner_id] = await active_plan_for_user(db, user) if user else None
+        priority_by_owner = {
+            owner_id: int(plan.queue_priority) if plan else 9
+            for owner_id, plan in plan_by_owner.items()
+        }
+        # 低数值套餐优先级先派发；同一优先级内继续按批次公平轮询，避免
+        # 同档位的大项目一次拿走全部全局名额。
+        round_robin_candidates = prioritized_video_candidates(candidates, priority_by_owner)
 
         for job in round_robin_candidates:
             if dispatched >= available:
@@ -304,7 +336,12 @@ async def schedule_video_jobs_once() -> int:
             if queue_age >= settings.job_queue_warning_seconds:
                 job.stage = "排队时间较长"
                 job.detail = "任务仍在公平队列中等待，不会因为排队超时而自动失败"
-            if by_user[job.owner_id] >= settings.video_inflight_max_per_user:
+            plan = plan_by_owner.get(job.owner_id)
+            per_user_limit = min(
+                settings.video_inflight_max_per_user,
+                int(plan.generation_concurrency) if plan else settings.video_inflight_max_per_user,
+            )
+            if by_user[job.owner_id] >= per_user_limit:
                 continue
             if job.project_id and by_project[job.project_id] >= settings.video_inflight_max_per_project:
                 continue

@@ -243,6 +243,13 @@ export function WorkspaceCreationFlow({
     enabled: !previewAssets,
     retry: false,
   });
+  const previewEstimateQuery = useQuery({
+    queryKey: ["creation-preview-estimate", draft.source],
+    queryFn: () => generateApi.estimateCreationPreview(draft.source as "ai-script" | "upload-assets"),
+    enabled: draft.stage === "input" && draft.source !== "write-script",
+    retry: false,
+    staleTime: 30_000,
+  });
   const assets = useMemo(() => previewAssets ?? assetsQuery.data?.items ?? [], [assetsQuery.data?.items, previewAssets]);
   const selectedAssets = useMemo(() => assets.filter((asset) => draft.selectedAssetIds.includes(asset.id)), [assets, draft.selectedAssetIds]);
   const totalDurationMs = useMemo(() => draft.units.reduce((sum, unit) => sum + unit.durationMs, 0), [draft.units]);
@@ -312,6 +319,10 @@ export function WorkspaceCreationFlow({
     setSubmitted(true);
     const validation = inputError();
     if (validation) { setError(validation); return; }
+    if (draft.source !== "write-script" && !previewEstimateQuery.data?.sufficient) {
+      setError(previewEstimateQuery.data ? "V-Credits 余额不足，请先充值后再生成。" : "暂时无法计算 V-Credits 费用，请稍后重试。");
+      return;
+    }
     if (replacing && draft.manuallyEdited && !window.confirm("重新生成会覆盖你对脚本草稿的手工修改。确认继续？")) return;
     setProcessing(true);
     setError("");
@@ -325,8 +336,8 @@ export function WorkspaceCreationFlow({
         summary = `从粘贴脚本识别出 ${units.length} 个场景和分镜。`;
       } else {
         const preview = draft.source === "ai-script"
-          ? await generateApi.createScriptPreview({ prompt: draft.prompt.trim(), durationSeconds: draft.durationSeconds, tone: draft.tone })
-          : await generateApi.createAssetPreview({ assetIds: selectedAssets.map((asset) => asset.id), brief: draft.prompt.trim() || undefined });
+          ? await generateApi.createScriptPreview({ prompt: draft.prompt.trim(), durationSeconds: draft.durationSeconds, tone: draft.tone, pricingCatalogId: previewEstimateQuery.data?.catalogVersionId })
+          : await generateApi.createAssetPreview({ assetIds: selectedAssets.map((asset) => asset.id), brief: draft.prompt.trim() || undefined, pricingCatalogId: previewEstimateQuery.data?.catalogVersionId });
         units = creationPreviewToUnits(preview);
         title = preview.title.trim() || deriveWorkspaceCreationTitle(units);
         summary = preview.summary;
@@ -548,9 +559,11 @@ export function WorkspaceCreationFlow({
 
             {(error || validationMessage) && <p className="mt-4 rounded-xl border border-red/15 bg-red/5 px-4 py-3 text-xs text-red">{error || validationMessage}</p>}
 
+            {draft.source !== "write-script" && <div className={`mt-4 rounded-xl border px-4 py-3 ${previewEstimateQuery.data && !previewEstimateQuery.data.sufficient ? "border-red/20 bg-red/5" : "border-line bg-canvas/50"}`}><div className="flex items-center justify-between gap-3"><span className="text-xs font-semibold text-text">V-Credits 费用预估</span><strong className="text-sm text-text">{previewEstimateQuery.isLoading ? "计算中…" : previewEstimateQuery.data ? `${previewEstimateQuery.data.estimatedCredits.toLocaleString("zh-CN")} V-Credits` : "暂不可用"}</strong></div>{previewEstimateQuery.data && <p className="mt-1 text-[11px] text-muted">当前可用 {previewEstimateQuery.data.availableCredits.toLocaleString("zh-CN")} · 完成后预计剩余 {previewEstimateQuery.data.remainingAfter.toLocaleString("zh-CN")}</p>}{previewEstimateQuery.data && !previewEstimateQuery.data.sufficient && <p className="mt-1 text-xs font-medium text-red">余额不足，请先前往个人中心充值。</p>}</div>}
+
             <footer className="mt-6 flex flex-col gap-3 border-t border-line pt-5 sm:flex-row sm:items-center sm:justify-between">
               <button type="button" onClick={discardDraft} className="self-start text-xs font-medium text-muted underline decoration-line underline-offset-4 hover:text-red">清除草稿</button>
-              <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center"><span className="text-[11px] text-muted">先生成并编辑脚本，确认后才会创建项目</span><button type="button" disabled={processing || assetsQuery.isLoading && draft.source === "upload-assets"} onClick={() => void generatePreview()} className="workspace-primary-button !min-h-10 px-4 text-xs">{processing ? <Loader2 size={15} className="animate-spin" /> : <WandSparkles size={15} />}{processing ? "正在整理内容…" : draft.source === "write-script" ? "识别脚本结构" : draft.source === "upload-assets" ? "分析素材并生成结构" : "生成脚本草案"}</button></div>
+              <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center"><span className="text-[11px] text-muted">先生成并编辑脚本，确认后才会创建项目</span><button type="button" disabled={processing || assetsQuery.isLoading && draft.source === "upload-assets" || draft.source !== "write-script" && (!previewEstimateQuery.data?.sufficient || previewEstimateQuery.isLoading)} onClick={() => void generatePreview()} className="workspace-primary-button !min-h-10 px-4 text-xs">{processing ? <Loader2 size={15} className="animate-spin" /> : <WandSparkles size={15} />}{processing ? "正在整理内容…" : draft.source === "write-script" ? "识别脚本结构" : draft.source === "upload-assets" ? "分析素材并生成结构" : "生成脚本草案"}</button></div>
             </footer>
           </div>
         </div>

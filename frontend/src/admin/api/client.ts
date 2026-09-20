@@ -105,3 +105,11 @@ export function mutationOptions(body: object): RequestInit {
     body: JSON.stringify(body),
   };
 }
+
+export function patchOptions(body: object): RequestInit {
+  return {
+    method: "PATCH",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(body),
+  };
+}

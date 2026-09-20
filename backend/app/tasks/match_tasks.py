@@ -264,17 +264,15 @@ async def _match_script_shots_async(
     except Exception as exc:
         logger.exception("镜头素材匹配任务失败 job_id=%s script_id=%s", job_id, script_id)
         async with async_session_factory() as session:
-            await session.execute(
-                update(Job)
-                .where(Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"]))
-                .values(
-                    status="FAILED",
-                    stage="匹配失败",
-                    detail=str(exc)[:500],
-                    result=None,
-                    result_detail=str(exc)[:500],
-                    updated_at=datetime.now(timezone.utc),
-                )
+            from app.services.quotas import fail_job
+
+            await fail_job(
+                session,
+                job_id,
+                stage="匹配失败",
+                detail=str(exc)[:500],
+                error_code="ASSET_MATCHING_FAILED",
+                error_category="PROVIDER_ERROR",
             )
             await session.commit()
 

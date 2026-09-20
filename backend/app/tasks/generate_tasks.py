@@ -80,21 +80,16 @@ def _persist_remote_media(
 
 async def _mark_failure(job_id: str, label: str, error: Exception) -> None:
     from app.database import async_session_factory
-    from app.models.job import Job
-    from sqlalchemy import update
+    from app.services.quotas import fail_job
 
     async with async_session_factory() as session:
-        await session.execute(
-            update(Job)
-            .where(Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"]))
-            .values(
-                status="FAILED",
-                stage="生成失败",
-                detail=f"{label}失败：{str(error)[:300]}",
-                result=None,
-                result_detail=str(error)[:500],
-                updated_at=datetime.now(timezone.utc),
-            )
+        await fail_job(
+            session,
+            job_id,
+            stage="生成失败",
+            detail=f"{label}失败：{str(error)[:300]}",
+            error_code="GENERATION_FAILED",
+            error_category="PROVIDER_ERROR",
         )
         await session.commit()
 

@@ -36,7 +36,7 @@ const AUTH_VALUE_POINTS = [
 
 const AUTH_BENEFITS = [
   "保存单支视频项目、分镜和主时间线",
-  "同步 AI 任务结果与处理额度",
+  "同步 AI 任务结果与 V-Credits",
   "登录后可从工作台继续视频项目",
 ];
 

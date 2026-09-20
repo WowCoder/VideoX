@@ -1,11 +1,12 @@
 export interface MembershipPlan {
-  id: "free" | "creator" | "studio";
+  id: "free" | "creator" | "pro" | "studio" | "team";
   name: string;
   description: string;
   monthlyPrice: number;
   annualMonthlyPrice: number;
   annualTotal: number;
   processingMinutes: number;
+  monthlyCredits: number;
   projectLimit: string;
   aiScripts: string;
   storage: string;
@@ -46,52 +47,88 @@ export const membershipPlans: MembershipPlan[] = [
     annualMonthlyPrice: 0,
     annualTotal: 0,
     processingMinutes: 600,
+    monthlyCredits: 300,
     projectLimit: "3 个项目",
-    aiScripts: "10 次 AI 脚本 / 月",
-    storage: "10 GB 素材空间",
-    export: "720p 导出 · 带水印",
+    aiScripts: "注册赠送 300 V-Credits",
+    storage: "2 GB 素材空间",
+    export: "720p 预览 · 带水印",
     collaboration: "仅限本人使用",
   },
   {
     id: "creator",
     name: "Creator",
     description: "为稳定产出短视频的专业创作者设计",
-    monthlyPrice: 99,
-    annualMonthlyPrice: 79,
-    annualTotal: 948,
-    processingMinutes: 3000,
-    projectLimit: "20 个项目",
-    aiScripts: "100 次 AI 脚本 / 月",
-    storage: "100 GB 素材空间",
+    monthlyPrice: 39,
+    annualMonthlyPrice: 33.25,
+    annualTotal: 399,
+    processingMinutes: 0,
+    monthlyCredits: 6000,
+    projectLimit: "2 个并发任务",
+    aiScripts: "6,000 V-Credits / 月",
+    storage: "50 GB 素材空间",
     export: "1080p 无水印导出",
-    collaboration: "优先处理队列",
+    collaboration: "标准模型与优先队列",
     recommended: true,
+  },
+  {
+    id: "pro",
+    name: "Pro",
+    description: "为高频产出与更高画质的专业创作者设计",
+    monthlyPrice: 99,
+    annualMonthlyPrice: 83.25,
+    annualTotal: 999,
+    processingMinutes: 0,
+    monthlyCredits: 18000,
+    projectLimit: "4 个并发任务",
+    aiScripts: "18,000 V-Credits / 月",
+    storage: "200 GB 素材空间",
+    export: "1080p / 4K 图片与商业授权",
+    collaboration: "高级模型与 7% 充值加成",
   },
   {
     id: "studio",
     name: "Studio",
     description: "面向小型内容团队和商业视频工作室",
     monthlyPrice: 299,
-    annualMonthlyPrice: 239,
-    annualTotal: 2868,
-    processingMinutes: 10000,
-    projectLimit: "不限项目数量",
-    aiScripts: "500 次 AI 脚本 / 月",
+    annualMonthlyPrice: 266.58,
+    annualTotal: 3199,
+    processingMinutes: 0,
+    monthlyCredits: 55000,
+    projectLimit: "8 个并发任务",
+    aiScripts: "55,000 V-Credits / 月",
     storage: "1 TB 素材空间",
-    export: "4K 导出与商业授权",
-    collaboration: "5 个团队席位",
+    export: "1080p / 4K 图片与商业授权",
+    collaboration: "高级模型与 15% 充值加成 · 3 席位",
+  },
+  {
+    id: "team",
+    name: "Team",
+    description: "面向多人协作与规模化内容生产团队",
+    monthlyPrice: 699,
+    annualMonthlyPrice: 624.92,
+    annualTotal: 7499,
+    processingMinutes: 0,
+    monthlyCredits: 130000,
+    projectLimit: "16 个并发任务",
+    aiScripts: "130,000 V-Credits / 月",
+    storage: "2 TB 素材空间",
+    export: "高级模型、API 与批量生成",
+    collaboration: "25% 充值加成 · 5 席位",
   },
 ];
 
 export function membershipPlanFeatures(plan: MembershipPlan): string[] {
-  return [
-    `${plan.processingMinutes.toLocaleString()} 分钟处理时长 / 月`,
+  const features = [
+    `${plan.monthlyCredits.toLocaleString()} V-Credits / 月`,
     plan.projectLimit,
-    plan.aiScripts,
     plan.storage,
     plan.export,
     plan.collaboration,
   ];
+  if (!plan.aiScripts.startsWith(`${plan.monthlyCredits.toLocaleString()} V-Credits`)) {
+    features.splice(2, 0, plan.aiScripts);
+  }
+  return features;
 }
 
 export const helpCenterCopy = {

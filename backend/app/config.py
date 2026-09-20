@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     auth_rate_limit_per_minute: int = 20
     upload_rate_limit_per_minute: int = 30
 
+    # V-Credits 计费 V2。迁移完成后默认启用；设置为 false 可在灰度期间回退到旧 quota_* 逻辑。
+    billing_v2_enabled: bool = True
+
     # 只允许从已配置的供应商结果域名回收生成媒体，防止服务端请求伪造。
     ai_media_allowed_hosts: str = (
         ".aliyuncs.com,.aliyun.com,.agnes-ai.cn,.agnes-ai.space"

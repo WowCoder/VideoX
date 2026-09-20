@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Check, Loader2, Sparkles, WandSparkles, X } from "lucide-react";
+import { estimateProjectOperation, type OperationEstimate } from "@/api/generate";
 
 export interface AIScriptRequest extends Record<string, unknown> {
   prompt: string;
@@ -11,11 +12,13 @@ export interface AIScriptRequest extends Record<string, unknown> {
 interface Props {
   open: boolean;
   projectName: string;
+  projectId: string;
+  expectedRevision: number;
   existingSceneCount: number;
   pending: boolean;
   error?: string | null;
   onClose: () => void;
-  onGenerate: (request: AIScriptRequest) => void;
+  onGenerate: (request: AIScriptRequest, pricingCatalogId?: string) => void;
 }
 
 const tones = ["专业清晰", "科技未来", "温暖叙事", "轻快有力"];
@@ -24,6 +27,8 @@ const durations = [30, 60, 90, 120];
 export function AIScriptGeneratorModal({
   open,
   projectName,
+  projectId,
+  expectedRevision,
   existingSceneCount,
   pending,
   error,
@@ -36,6 +41,8 @@ export function AIScriptGeneratorModal({
   const [includeAssetContext, setIncludeAssetContext] = useState(true);
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [estimate, setEstimate] = useState<OperationEstimate | null>(null);
+  const [estimateLoading, setEstimateLoading] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -56,6 +63,23 @@ export function AIScriptGeneratorModal({
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [onClose, open, pending]);
 
+  useEffect(() => {
+    if (!open || prompt.trim().length < 10 || projectId === "__preview__") {
+      setEstimate(null);
+      setEstimateLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setEstimateLoading(true);
+    const timer = window.setTimeout(() => {
+      void estimateProjectOperation(projectId, {
+        operation: "generate_script", scope: { type: "project" }, expectedRevision,
+        parameters: { prompt: prompt.trim(), tone, duration_seconds: duration, include_asset_context: includeAssetContext },
+      }).then((value) => { if (!cancelled) setEstimate(value); }).catch(() => { if (!cancelled) setEstimate(null); }).finally(() => { if (!cancelled) setEstimateLoading(false); });
+    }, 350);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [duration, expectedRevision, includeAssetContext, open, projectId, prompt, tone]);
+
   if (!open) return null;
   const replacing = existingSceneCount > 0;
   const promptValid = prompt.trim().length >= 10;
@@ -64,13 +88,13 @@ export function AIScriptGeneratorModal({
   function submit(event: React.FormEvent) {
     event.preventDefault();
     setSubmitted(true);
-    if (!valid || pending) return;
+    if (!valid || pending || !estimate?.sufficient) return;
     onGenerate({
       prompt: prompt.trim(),
       tone,
       duration_seconds: duration,
       include_asset_context: includeAssetContext,
-    });
+    }, estimate.catalogVersionId);
   }
 
   return (
@@ -93,10 +117,11 @@ export function AIScriptGeneratorModal({
           <label className="flex items-start gap-3 rounded-xl border border-line bg-canvas/60 p-4"><input type="checkbox" checked={includeAssetContext} onChange={(event) => setIncludeAssetContext(event.target.checked)} className="mt-0.5 accent-blue" /><span><strong className="block text-xs text-text">参考项目素材分析结果</strong><small className="mt-1 block text-[11px] leading-5 text-muted">使用已完成的对白、OCR 和标签摘要，让生成内容更容易匹配当前素材。</small></span></label>
           {replacing && <label className={`flex gap-3 rounded-xl border p-3 text-[11px] leading-5 ${submitted && !replaceConfirmed ? "border-red/30 bg-red/5 text-red" : "border-amber/20 bg-amber/5 text-amber"}`}><input type="checkbox" checked={replaceConfirmed} onChange={(event) => setReplaceConfirmed(event.target.checked)} className="mt-1 accent-amber" /><span><strong className="flex items-center gap-1.5"><AlertTriangle size={14} />我确认重写当前全片</strong><small className="mt-1 block text-[10px] leading-5 text-muted">新脚本将替换当前 {existingSceneCount} 个场景、现有镜头、场景级图层和当前成片时间线；项目素材本身不会删除。</small></span></label>}
           {submitted && replacing && !replaceConfirmed && <p className="text-xs text-red">请先确认会替换现有全片结构。</p>}
+          <div className={`rounded-xl border p-3 ${estimate && !estimate.sufficient ? "border-red/25 bg-red/5" : "border-line bg-canvas/50"}`}><div className="flex items-center justify-between"><span className="text-xs font-semibold text-text">V-Credits 费用预估</span><strong className="text-sm text-text">{estimateLoading ? "计算中…" : estimate ? `${estimate.estimatedCredits.toLocaleString("zh-CN")} V-Credits` : "—"}</strong></div>{estimate && <p className="mt-1 text-[11px] text-muted">当前可用 {estimate.availableCredits.toLocaleString("zh-CN")} · 完成后预计剩余 {estimate.remainingAfter.toLocaleString("zh-CN")}</p>}{estimate && !estimate.sufficient && <p className="mt-1 text-xs font-medium text-red">余额不足，请先充值。</p>}</div>
           {error && <div className="rounded-xl bg-red/5 p-3 text-xs text-red">{error}</div>}
         </div>
 
-          <footer className="flex items-center justify-between gap-3 border-t border-line bg-canvas/50 px-5 py-4 sm:px-6"><p className="hidden text-[11px] text-muted sm:block"><Sparkles size={13} className="mr-1 inline" />任务将在后台真实调用文本模型</p><div className="ml-auto flex gap-2"><button type="button" disabled={pending} onClick={onClose} className="rounded-lg border border-line bg-white px-4 py-2 text-xs font-medium text-text disabled:opacity-40">取消</button><button type="submit" disabled={pending} className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold text-white disabled:opacity-50 ${replacing ? "bg-amber" : "bg-blue"}`}>{pending ? <Loader2 size={14} className="animate-spin" /> : <WandSparkles size={14} />}{pending ? "正在创建任务…" : replacing ? "确认重写并替换" : "生成并应用"}</button></div></footer>
+          <footer className="flex items-center justify-between gap-3 border-t border-line bg-canvas/50 px-5 py-4 sm:px-6"><p className="hidden text-[11px] text-muted sm:block"><Sparkles size={13} className="mr-1 inline" />失败任务会自动释放 V-Credits</p><div className="ml-auto flex gap-2"><button type="button" disabled={pending} onClick={onClose} className="rounded-lg border border-line bg-white px-4 py-2 text-xs font-medium text-text disabled:opacity-40">取消</button><button type="submit" disabled={pending || estimateLoading || !estimate?.sufficient} className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold text-white disabled:opacity-50 ${replacing ? "bg-amber" : "bg-blue"}`}>{pending ? <Loader2 size={14} className="animate-spin" /> : <WandSparkles size={14} />}{pending ? "正在创建任务…" : replacing ? "确认重写并替换" : "生成并应用"}</button></div></footer>
       </form>
     </div>
   );

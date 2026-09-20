@@ -50,6 +50,7 @@ celery_app.conf.update(
         "app.tasks.collect_system_metrics": {"queue": settings.control_queue_name},
         "app.tasks.fail_stale_jobs": {"queue": settings.control_queue_name},
         "app.tasks.expire_due_subscriptions": {"queue": settings.control_queue_name},
+        "app.tasks.grant_due_subscription_credits": {"queue": settings.control_queue_name},
         "app.tasks.scan_due_inspiration_tasks": {"queue": settings.control_queue_name},
         "app.tasks.submit_video_job": {"queue": settings.video_queue_name},
         "app.tasks.poll_video_job": {"queue": settings.video_queue_name},
@@ -77,6 +78,10 @@ celery_app.conf.update(
         },
         "expire-memberships-hourly": {
             "task": "app.tasks.expire_due_subscriptions",
+            "schedule": 3600.0,
+        },
+        "grant-due-subscription-credits-hourly": {
+            "task": "app.tasks.grant_due_subscription_credits",
             "schedule": 3600.0,
         },
         "scan-due-inspiration-tasks-every-minute": {
@@ -150,52 +155,51 @@ def fail_stale_jobs():
     from app.database import async_session_factory
     from app.models.inspiration import InspirationRun
     from app.models.job import Job
+    from app.services.quotas import fail_job
     from app.tasks.async_runner import run_async
     from sqlalchemy import select, update
 
     async def _fail_stale():
         now = datetime.now(timezone.utc)
         async with async_session_factory() as session:
-            await session.execute(
-                update(Job)
-                .where(
-                    Job.status == "QUEUED",
-                    Job.type != "分镜图 AI 生视频",
-                    Job.updated_at < now - timedelta(minutes=30),
+            queued_ids = (
+                await session.execute(
+                    select(Job.id).where(
+                        Job.status == "QUEUED",
+                        Job.type != "分镜图 AI 生视频",
+                        Job.updated_at < now - timedelta(minutes=30),
+                    )
                 )
-                .values(
-                    status="FAILED",
+            ).scalars().all()
+            for job_id in queued_ids:
+                await fail_job(
+                    session,
+                    job_id,
                     stage="排队超时",
                     detail="任务长时间未被 Worker 接收",
-                    result=None,
-                    result_detail="请确认 Worker 正常运行后重试任务",
-                    result_url=None,
                     error_code="QUEUE_TIMEOUT",
                     error_category="WORKER_LOST",
-                    finished_at=now,
-                    updated_at=now,
+                    now=now,
                 )
-            )
-            await session.execute(
-                update(Job)
-                .where(
-                    Job.status == "RUNNING",
-                    Job.type != "分镜图 AI 生视频",
-                    Job.updated_at < now - timedelta(minutes=75),
+            running_ids = (
+                await session.execute(
+                    select(Job.id).where(
+                        Job.status == "RUNNING",
+                        Job.type != "分镜图 AI 生视频",
+                        Job.updated_at < now - timedelta(minutes=75),
+                    )
                 )
-                .values(
-                    status="FAILED",
+            ).scalars().all()
+            for job_id in running_ids:
+                await fail_job(
+                    session,
+                    job_id,
                     stage="执行超时",
                     detail="任务长时间没有心跳，Worker 可能已退出",
-                    result=None,
-                    result_detail="请检查 Worker 日志后重试任务",
-                    result_url=None,
                     error_code="EXECUTION_TIMEOUT",
                     error_category="WORKER_LOST",
-                    finished_at=now,
-                    updated_at=now,
+                    now=now,
                 )
-            )
             # Job 与领域 Run 必须进入同一终态，避免灵感任务被永久视为正在执行。
             await session.execute(
                 update(InspirationRun)

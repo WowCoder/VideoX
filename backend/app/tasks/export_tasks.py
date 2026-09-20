@@ -747,6 +747,7 @@ async def _export_project_async(
     from app.models.asset import ProjectAssetLink
     from app.models.user import User
     from app.services.subscriptions import reconcile_user_subscription
+    from app.services.billing_v2 import active_plan_for_user
     from app.services.workspace import load_project_workspace, record_revision
     from app.services.storage_usage import recalculate_storage_usage
     from app.utils.storage import download_file, get_file_url, upload_stream
@@ -781,9 +782,16 @@ async def _export_project_async(
                 )
             ).scalar_one()
             await reconcile_user_subscription(session, owner)
-            watermark_required = requires_export_watermark(
+            plan = await active_plan_for_user(session, owner)
+            watermark_required = bool(plan.watermark_required) if plan else requires_export_watermark(
                 owner.membership.rank if owner.membership else 0
             )
+            if plan:
+                allowed = {"480p": 1, "720p": 2, "1080p": 3, "2k": 4, "4k": 5}
+                requested_rank = allowed.get(str(resolution).lower(), 0)
+                allowed_rank = allowed.get(str(plan.max_video_resolution).lower(), 0)
+                if requested_rank and allowed_rank and requested_rank > allowed_rank:
+                    raise RuntimeError(f"当前套餐最高支持 {plan.max_video_resolution} 导出分辨率")
 
             render_plan = compile_composition_render_plan(project)
             video_clips = render_plan.video_clips

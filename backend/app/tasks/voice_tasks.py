@@ -26,17 +26,19 @@ async def _mark_failed(job_id: str, error: Exception) -> None:
     from app.database import async_session_factory
     from app.models.job import Job
     from app.models.project import Project
+    from app.services.quotas import fail_job
 
     async with async_session_factory() as session:
+        completed = await fail_job(
+            session,
+            job_id,
+            stage="配音失败",
+            detail=f"AI 配音失败：{str(error)[:300]}",
+            error_code="TTS_GENERATION_FAILED",
+            error_category="PROVIDER_ERROR",
+        )
         job = await session.get(Job, job_id)
-        if job and job.status in {"QUEUED", "RUNNING"}:
-            job.status = "FAILED"
-            job.stage = "配音失败"
-            job.detail = f"AI 配音失败：{str(error)[:300]}"
-            job.result = None
-            job.result_detail = str(error)[:500]
-            job.updated_at = datetime.now(timezone.utc)
-            await session.flush()
+        if completed and job:
             other_active_job = (
                 await session.execute(
                     select(Job.id)
@@ -113,6 +115,7 @@ async def _generate_project_voiceover(job_id: str, project_id: str) -> None:
     from app.services.tts.mastering import build_master, normalize_take
     from app.services.tts.normalization import make_request_hash, validate_tts_selection
     from app.services.tts.planning import build_voice_plans
+    from app.services.quotas import complete_job_success
     from app.services.storage_usage import recalculate_storage_usage
     from app.services.workspace import load_project_workspace, record_revision
     from app.utils.storage import download_file, upload_file
@@ -402,13 +405,27 @@ async def _generate_project_voiceover(job_id: str, project_id: str) -> None:
         project.composition.revision = project.script.revision
         project.status = "ready"
         await record_revision(session, project, job.owner_id, "before_ai_operation", {"operation": "apply_voiceover", "job_id": job.id, "master_asset_id": master_asset.id, "generated": generated, "cached": cached})
-        job.status = "SUCCEEDED"
-        job.stage = "配音已完成"
-        job.stage_index = 3
-        job.progress = 100
-        job.detail = f"配音完成：新生成 {generated} 条，缓存复用 {cached} 条"
-        job.result = "打开项目工作台"
-        job.result_detail = f"已生成旁白母带；本次供应商计费字符约 {billed}"
-        job.result_path = master_object
-        job.payload = {**payload, "master_asset_id": master_asset.id, "generated_count": generated, "cache_hit_count": cached, "billed_characters": billed}
+        completed = await complete_job_success(
+            session,
+            job.id,
+            values={
+                "stage": "配音已完成",
+                "stage_index": 3,
+                "progress": 100,
+                "detail": f"配音完成：新生成 {generated} 条，缓存复用 {cached} 条",
+                "result": "打开项目工作台",
+                "result_detail": f"已生成旁白母带；本次供应商计费字符约 {billed}",
+                "result_path": master_object,
+                "payload": {
+                    **payload,
+                    "master_asset_id": master_asset.id,
+                    "generated_count": generated,
+                    "cache_hit_count": cached,
+                    "billed_characters": billed,
+                },
+            },
+        )
+        if not completed:
+            await session.rollback()
+            return
         await session.commit()

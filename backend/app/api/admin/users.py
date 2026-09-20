@@ -22,6 +22,7 @@ from app.models.project import Project
 from app.models.user import User, UserIdentity
 from app.models.subscription import SubscriptionEvent
 from app.models.user import Membership
+from app.models.billing import CreditLedger
 from app.services.quotas import (
     ACTIVE_RESERVATION_STATUSES,
     QuotaType,
@@ -29,6 +30,7 @@ from app.services.quotas import (
     synchronize_user_usage,
 )
 from app.services.subscriptions import ensure_user_subscription
+from app.services.billing_v2 import ensure_user_billing_account, grant_credits, wallet_balance
 
 
 router = APIRouter()
@@ -45,6 +47,12 @@ class QuotaAdjustmentRequest(BaseModel):
 class InternalSubscriptionRequest(BaseModel):
     membership_id: str = Field(..., min_length=1, max_length=50)
     ends_at: datetime
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class CreditAdjustmentRequest(BaseModel):
+    amount: int = Field(..., gt=0, le=10_000_000)
+    expires_at: datetime | None = None
     reason: str = Field(..., min_length=3, max_length=2000)
 
 
@@ -205,6 +213,8 @@ async def get_user(
             select(Order).where(Order.user_id == user.id).order_by(Order.created_at.desc()).limit(10)
         )
     ).scalars().all()
+    wallet = await ensure_user_billing_account(db, user)
+    wallet_snapshot = await wallet_balance(db, wallet)
     return {
         "id": user.id,
         "name": user.name,
@@ -249,6 +259,10 @@ async def get_user(
         } if user.usage else None,
         "reserved": {str(quota_type): int(amount) for quota_type, amount in reservations},
         "quota_adjustments": adjustment_totals,
+        "wallet": {
+            "account_id": wallet.id,
+            **wallet_snapshot,
+        },
         "quota_adjustment_history": [
             {
                 "id": item.id,
@@ -405,6 +419,85 @@ async def create_quota_adjustment(
         "amount": adjustment.amount,
         "expires_at": adjustment.expires_at,
         "created_at": adjustment.created_at,
+        "idempotent_replay": False,
+    }
+
+
+@router.post("/{user_id}/credits", status_code=201)
+async def grant_credit_compensation(
+    user_id: str,
+    payload: CreditAdjustmentRequest,
+    request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=8, max_length=100),
+    principal: AdminPrincipal = Depends(require_admin_permission("wallet.adjust")),
+    db: AsyncSession = Depends(get_db),
+):
+    """向 V-Credits 钱包发放运营补偿积分，流水和审计均可追溯。"""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    account = await ensure_user_billing_account(db, user, for_update=True)
+    existing = (
+        await db.execute(
+            select(CreditLedger).where(
+                CreditLedger.billing_account_id == account.id,
+                CreditLedger.idempotency_key == f"admin:{idempotency_key}",
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return {
+            "ledger_id": existing.id,
+            "user_id": user_id,
+            "amount": existing.amount,
+            "idempotent_replay": True,
+        }
+    expires_at = payload.expires_at
+    if expires_at is None:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=90)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=422, detail="积分到期时间必须晚于当前时间")
+    lot = await grant_credits(
+        db,
+        account,
+        payload.amount,
+        source_type="admin_compensation",
+        source_id=principal.user.id,
+        expires_at=expires_at,
+        reason=payload.reason.strip(),
+        idempotency_key=f"admin:{idempotency_key}",
+        metadata={"admin_user_id": principal.user.id, "target_user_id": user_id},
+    )
+    ledger = (
+        await db.execute(
+            select(CreditLedger).where(
+                CreditLedger.billing_account_id == account.id,
+                CreditLedger.idempotency_key == f"admin:{idempotency_key}",
+            )
+        )
+    ).scalar_one()
+    balance = await wallet_balance(db, account)
+    await write_admin_audit(
+        db,
+        admin=principal.user,
+        request=request,
+        action="CREDIT_COMPENSATION_GRANT",
+        target_type="user",
+        target_id=user_id,
+        reason=payload.reason,
+        before_data={},
+        after_data={"lot_id": lot.id, "amount": payload.amount, "expires_at": expires_at.isoformat(), **balance},
+        idempotency_key=idempotency_key,
+    )
+    return {
+        "ledger_id": ledger.id,
+        "lot_id": lot.id,
+        "user_id": user_id,
+        "amount": payload.amount,
+        "expires_at": expires_at,
+        "available_credits": balance["available_credits"],
         "idempotent_replay": False,
     }
 

@@ -199,8 +199,8 @@ function AccountMenu({ placement }: { placement: "sidebar" | "topbar" }) {
   const membershipName = user?.membership?.name || "Free";
   const menuItems = [
     { id: "overview", label: "个人中心", copy: "账户信息与会员概览", icon: CircleUserRound },
-    { id: "membership", label: "会员方案", copy: "查看真实方案与可用额度", icon: CreditCard },
-    { id: "usage", label: "用量中心", copy: "处理时长与 AI 额度", icon: Gauge },
+    { id: "membership", label: "会员方案", copy: "查看积分与套餐权益", icon: CreditCard },
+    { id: "credits", label: "V-Credits", copy: "余额、充值与积分明细", icon: Gauge },
     { id: "billing", label: "账单与发票", copy: "付款记录与电子票据", icon: ReceiptText },
     { id: "settings", label: "账户设置", copy: "资料、通知与安全", icon: Settings },
   ];
@@ -227,7 +227,7 @@ function AccountMenu({ placement }: { placement: "sidebar" | "topbar" }) {
         </header>
         <button className="flex w-full items-center gap-3 border-b border-line px-4 py-3 text-left transition hover:bg-canvas" onClick={() => openSection("membership")} type="button">
           <span className="grid h-9 w-9 place-items-center rounded-lg bg-[#f0edfb] text-[#7657d9]"><Crown size={16} /></span>
-          <span className="min-w-0 flex-1"><strong className="block text-sm text-text">管理会员方案</strong><small className="block text-xs text-muted">查看额度、续费周期和账单</small></span>
+          <span className="min-w-0 flex-1"><strong className="block text-sm text-text">管理会员方案</strong><small className="block text-xs text-muted">查看积分、续费周期和账单</small></span>
           <ChevronRight size={14} className="text-muted" />
         </button>
         <nav className="py-1.5">

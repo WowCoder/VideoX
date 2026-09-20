@@ -9,7 +9,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import type { OperationScope, ProjectOperation } from "@/api/generate";
+import { estimateProjectOperation, type OperationEstimate, type OperationScope, type ProjectOperation } from "@/api/generate";
 import type { Asset } from "@/api/assets";
 import type { Scene, Shot } from "@/api/projects";
 import { Select } from "@/components/ui/Select";
@@ -22,6 +22,8 @@ type VideoGenerationMode = "text" | "keyframe" | "reference";
 interface Props {
   open: boolean;
   projectName: string;
+  projectId: string;
+  expectedRevision: number;
   scenes: Scene[];
   assets: Asset[];
   selectedScene?: Scene;
@@ -31,7 +33,7 @@ interface Props {
   pending: boolean;
   error?: string | null;
   onClose: () => void;
-  onGenerate: (operation: ProjectOperation, scope: OperationScope, parameters: Record<string, unknown>) => void;
+  onGenerate: (operation: ProjectOperation, scope: OperationScope, parameters: Record<string, unknown>, pricingCatalogId?: string) => void;
 }
 
 const generationTypes = [
@@ -55,6 +57,8 @@ function userFacingGenerationError(message: string) {
 export function QuickAIGenerateModal({
   open,
   projectName,
+  projectId,
+  expectedRevision,
   scenes,
   assets,
   selectedScene,
@@ -76,6 +80,9 @@ export function QuickAIGenerateModal({
   const [lastFrameAssetId, setLastFrameAssetId] = useState("");
   const [referenceImageAssetIds, setReferenceImageAssetIds] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
+  const [estimate, setEstimate] = useState<OperationEstimate | null>(null);
+  const [estimateLoading, setEstimateLoading] = useState(false);
+  const [estimateError, setEstimateError] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -118,13 +125,7 @@ export function QuickAIGenerateModal({
     () => scopeDescription(scope, selectedScene, selectedShot),
     [scope, selectedScene, selectedShot],
   );
-
-  if (!open) return null;
-
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setSubmitted(true);
-    if (!valid || pending) return;
+  const operationInput = useMemo(() => {
     const operation: ProjectOperation = kind === "image" ? "generate_image" : "generate_video";
     const operationScope: OperationScope = scope === "project"
       ? { type: "project" }
@@ -134,11 +135,7 @@ export function QuickAIGenerateModal({
           ? { type: "shot", shotIds: [selectedShot.id] }
           : { type: "project" };
     const parameters: Record<string, unknown> = bulkGeneration
-      ? {
-          use_shot_descriptions: true,
-          additional_instruction: prompt.trim(),
-          style,
-        }
+      ? { use_shot_descriptions: true, additional_instruction: prompt.trim(), style }
       : { prompt: prompt.trim(), style };
     if (kind === "video") {
       parameters.generation_mode = videoMode;
@@ -146,11 +143,37 @@ export function QuickAIGenerateModal({
       if (videoMode === "keyframe") {
         parameters.first_frame_asset_id = firstFrameAssetId || null;
         parameters.last_frame_asset_id = lastFrameAssetId || null;
-      } else if (videoMode === "reference") {
-        parameters.reference_image_asset_ids = referenceImageAssetIds;
-      }
+      } else if (videoMode === "reference") parameters.reference_image_asset_ids = referenceImageAssetIds;
     }
-    onGenerate(operation, operationScope, parameters);
+    return { operation, scope: operationScope, parameters };
+  }, [bulkGeneration, durationSeconds, firstFrameAssetId, kind, lastFrameAssetId, prompt, referenceImageAssetIds, scope, selectedScene, selectedShot, style, videoMode]);
+
+  useEffect(() => {
+    if (!open || !valid || !projectId || projectId === "__preview__") {
+      setEstimate(null);
+      setEstimateLoading(false);
+      setEstimateError("");
+      return;
+    }
+    let cancelled = false;
+    setEstimateLoading(true); setEstimateError("");
+    const timer = window.setTimeout(() => {
+      void estimateProjectOperation(projectId, { ...operationInput, expectedRevision })
+        .then((value) => { if (!cancelled) setEstimate(value); })
+        .catch((reason) => { if (!cancelled) { setEstimate(null); setEstimateError(reason instanceof Error ? reason.message : "暂时无法计算费用"); } })
+        .finally(() => { if (!cancelled) setEstimateLoading(false); });
+    }, 350);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [expectedRevision, open, operationInput, projectId, valid]);
+
+  if (!open) return null;
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setSubmitted(true);
+    if (!valid || pending) return;
+    if (!estimate || !estimate.sufficient) return;
+    onGenerate(operationInput.operation, operationInput.scope, operationInput.parameters, estimate.catalogVersionId);
   }
 
   function selectVideoMode(nextMode: VideoGenerationMode) {
@@ -244,11 +267,18 @@ export function QuickAIGenerateModal({
 
           {(submitted && !valid) && <p className="mt-4 flex items-center gap-2 rounded-lg bg-red/5 px-3 py-2 text-xs text-red"><AlertTriangle size={14} />{targetCount === 0 ? "当前范围内没有可生成的镜头" : !videoInputsValid ? videoMode === "keyframe" ? "关键帧模式至少选择首帧或尾帧" : "图片参考模式至少选择一张参考图片" : "请补充至少 6 个字符的当前镜头画面描述"}</p>}
           {error && <p className="mt-4 flex items-center gap-2 rounded-lg bg-red/5 px-3 py-2 text-xs text-red"><AlertTriangle size={14} />{userFacingGenerationError(error)}</p>}
+          <div className={`mt-4 rounded-xl border p-4 ${estimate && !estimate.sufficient ? "border-red/25 bg-red/5" : "border-line bg-canvas/50"}`}>
+            <div className="flex items-center justify-between gap-3"><strong className="text-xs text-text">V-Credits 费用预估</strong><strong className="text-sm text-text">{estimateLoading ? "计算中…" : estimate ? `${estimate.estimatedCredits.toLocaleString("zh-CN")} V-Credits` : "—"}</strong></div>
+            {estimate && <><p className="mt-1 text-[10px] text-muted">当前可用 {estimate.availableCredits.toLocaleString("zh-CN")} · 完成后预计剩余 {estimate.remainingAfter.toLocaleString("zh-CN")}</p>{estimate.lines.map((line) => <p key={line.sku} className="mt-1 text-[10px] text-muted">{line.quantity} {line.unit} × {line.unitCredits.toLocaleString("zh-CN")} = {line.credits.toLocaleString("zh-CN")}</p>)}</>}
+            {estimate && !estimate.sufficient && <p className="mt-2 text-xs font-medium text-red">余额不足，请先前往个人中心充值 V-Credits。</p>}
+            {estimateError && <p className="mt-2 text-xs text-red">{estimateError}</p>}
+            <p className="mt-2 text-[10px] text-muted">这里只展示预计最多消耗；失败任务会自动释放，不会实际扣除。</p>
+          </div>
         </div>
 
         <footer className="flex flex-col gap-3 border-t border-line bg-canvas/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p className="flex items-center gap-1.5 text-[10px] text-muted"><Check size={13} className="text-teal" />生成结果将进入项目素材库，并建立可回退的镜头版本</p>
-          <div className="flex justify-end gap-2"><button type="button" disabled={pending} onClick={onClose} className="rounded-lg border border-line bg-white px-4 py-2 text-xs font-medium text-text disabled:opacity-40">取消</button><button type="submit" disabled={pending} className="flex min-w-[132px] items-center justify-center gap-1.5 rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{pending ? <Loader2 size={14} className="animate-spin" /> : <selectedType.icon size={14} />}{pending ? "正在创建任务…" : `生成${selectedType.label.replace("AI ", "")}`}</button></div>
+          <div className="flex justify-end gap-2"><button type="button" disabled={pending} onClick={onClose} className="rounded-lg border border-line bg-white px-4 py-2 text-xs font-medium text-text disabled:opacity-40">取消</button><button type="submit" disabled={pending || estimateLoading || !estimate?.sufficient} className="flex min-w-[132px] items-center justify-center gap-1.5 rounded-lg bg-blue px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{pending ? <Loader2 size={14} className="animate-spin" /> : <selectedType.icon size={14} />}{pending ? "正在创建任务…" : `生成${selectedType.label.replace("AI ", "")}`}</button></div>
         </footer>
       </form>
     </div>

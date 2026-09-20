@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.inspiration import InspirationRun
 from app.models.job import Job
 from app.models.project import Project
+from app.models.user import User
 from app.services.quotas import QuotaExceededError, readmit_existing_job_quota
+from app.services.billing_v2 import release_hold
+from app.services.billing_v2 import create_usage_quote, ensure_user_billing_account, reserve_credits
+from app.config import get_settings
 from app.services.task_dispatch import dispatch_owner_task, dispatch_project_task
 
 
@@ -109,10 +113,45 @@ async def retry_job_command(db: AsyncSession, job: Job) -> Job:
             )
         project = await db.get(Project, job.project_id)
 
-    try:
-        await readmit_existing_job_quota(db, job, job.owner_id)
-    except QuotaExceededError as exc:
-        raise HTTPException(status_code=403, detail="当前会员额度不足，暂时无法重试该任务") from exc
+    billing_v2_enabled = get_settings().billing_v2_enabled
+    if billing_v2_enabled and (job.payload or {}).get("billing_sku"):
+        owner = await db.get(User, job.owner_id)
+        if owner is None:
+            raise HTTPException(status_code=404, detail="任务所属用户不存在")
+        account = await ensure_user_billing_account(db, owner, for_update=True)
+        try:
+            if job.billing_hold_id:
+                await release_hold(db, job.billing_hold_id, reason="失败任务重试前释放旧预占")
+            quote = await create_usage_quote(
+                db,
+                account,
+                [{
+                    "sku": job.payload["billing_sku"],
+                    "quantity": job.payload.get("billing_quantity", 1),
+                    "metadata": {"job_id": job.id, "retry": job.attempts + 1},
+                }],
+                request_snapshot={"job_id": job.id, "retry": job.attempts + 1},
+            )
+            hold = await reserve_credits(
+                db,
+                account,
+                quote.total_credits,
+                idempotency_key=f"job:{job.id}:retry:{job.attempts + 1}",
+                job_id=job.id,
+                quote_id=quote.id,
+                reason="任务重试积分预占",
+            )
+            job.billing_quote_id = quote.id
+            job.billing_hold_id = hold.id
+            job.quoted_credits = quote.total_credits
+            job.billed_credits = 0
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+    else:
+        try:
+            await readmit_existing_job_quota(db, job, job.owner_id)
+        except QuotaExceededError as exc:
+            raise HTTPException(status_code=403, detail="当前会员额度不足，暂时无法重试该任务") from exc
 
     now = datetime.now(timezone.utc)
     job.status = "QUEUED"
@@ -152,6 +191,8 @@ async def retry_job_command(db: AsyncSession, job: Job) -> Job:
         job.celery_task_id = task.id if task is not None else None
         await db.commit()
     except HTTPException:
+        if job.billing_hold_id:
+            await release_hold(db, job.billing_hold_id, reason="任务重试派发失败释放")
         job.status = "FAILED"
         job.stage = "重试失败"
         job.detail = "该任务类型不支持安全重试"
@@ -163,6 +204,8 @@ async def retry_job_command(db: AsyncSession, job: Job) -> Job:
         await db.commit()
         raise
     except Exception as exc:
+        if job.billing_hold_id:
+            await release_hold(db, job.billing_hold_id, reason="任务重试派发失败释放")
         job.status = "FAILED"
         job.stage = "任务派发失败"
         job.detail = f"重试任务派发失败：{str(exc)[:200]}"
@@ -216,6 +259,8 @@ async def cancel_job_command(db: AsyncSession, job: Job, *, actor_label: str) ->
     job.result_path = None
     job.finished_at = now
     job.updated_at = now
+    if job.billing_hold_id:
+        await release_hold(db, job.billing_hold_id, reason="任务取消释放")
     if job.type == "分镜图 AI 生视频":
         job.execution_state = "CANCELLED"
     run = (

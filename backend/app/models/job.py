@@ -71,6 +71,15 @@ class Job(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     quota_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     quota_amount: Mapped[int] = mapped_column(Integer, default=0)
+    # V-Credits 计费字段。旧 quota_* 字段保留用于迁移期兼容与历史任务展示。
+    billing_quote_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("billing_quotes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    billing_hold_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("credit_holds.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    quoted_credits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    billed_credits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     celery_task_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

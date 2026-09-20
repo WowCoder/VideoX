@@ -13,7 +13,7 @@ from pathlib import Path
 from PIL import Image
 
 from app.config import get_settings
-from app.services.quotas import complete_job_success
+from app.services.quotas import complete_job_success, fail_job
 from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
@@ -32,6 +32,9 @@ async def _update_job(job_id: str, **kwargs) -> bool:
         if values.get("status") == "SUCCEEDED":
             values.pop("status")
             completed = await complete_job_success(session, job_id, values=values)
+        elif values.get("status") == "FAILED":
+            values.pop("status")
+            completed = await fail_job(session, job_id, detail=str(values.get("detail") or "任务执行失败"), stage=str(values.get("stage") or "执行失败"), error_code=values.get("error_code"), error_category=values.get("error_category"))
         else:
             statement = update(Job).where(Job.id == job_id)
             if values.get("status") in {"RUNNING", "FAILED"} or "status" not in values:

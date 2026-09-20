@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import math
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,10 +23,24 @@ from app.models.job import Job, VideoGenerationBatch
 from app.models.project import Project
 from app.models.script import ScriptUnit, Shot
 from app.models.user import User
+from app.models.voice import VoiceLine
 from app.schemas.job import JobOut, VideoGenerationBatchOut
 from app.schemas.project import ScopeSelection
 from app.services.project_access import require_project_access
 from app.services.quotas import QuotaExceededError, admit_job_quota
+from app.services.billing_v2 import (
+    active_catalog,
+    active_plan_for_user,
+    create_usage_quote,
+    capture_hold,
+    ensure_user_billing_account,
+    reserve_credits,
+    release_hold,
+    quote_lines,
+    wallet_balance,
+    validate_plan_generation_entitlements,
+)
+from app.services.quotas import fail_job
 from app.services.task_dispatch import dispatch_project_task
 from app.services.workspace import load_project_workspace, record_revision
 
@@ -56,15 +72,109 @@ class CreationPreviewOut(BaseModel):
     scenes: list[CreationPreviewScene]
 
 
+class OperationEstimateLineOut(BaseModel):
+    sku: str
+    unit: str
+    quantity: int
+    unit_credits: int
+    credits: int
+
+
+class OperationEstimateOut(BaseModel):
+    estimate_id: str | None
+    catalog_version_id: str | None
+    estimated_credits: int
+    available_credits: int
+    remaining_after: int
+    sufficient: bool
+    expires_at: datetime | None
+    lines: list[OperationEstimateLineOut]
+
+
 class ScriptCreationPreviewRequest(BaseModel):
     prompt: str = Field(..., min_length=10, max_length=2000)
     duration_seconds: int = Field(60, ge=15, le=300)
     tone: str = Field("专业克制", min_length=1, max_length=50)
+    pricing_catalog_id: str | None = Field(None, max_length=64)
 
 
 class AssetCreationPreviewRequest(BaseModel):
     asset_ids: list[str] = Field(..., min_length=1, max_length=50)
     brief: str = Field("", max_length=2000)
+    pricing_catalog_id: str | None = Field(None, max_length=64)
+
+
+async def _validate_pricing_catalog(db: AsyncSession, catalog_id: str | None) -> None:
+    if not settings.billing_v2_enabled or not catalog_id:
+        return
+    catalog = await active_catalog(db)
+    if catalog is None or catalog.id != catalog_id:
+        raise HTTPException(status_code=409, detail="V-Credits 价格已更新，请重新确认本次费用")
+
+
+class CreationPreviewEstimateRequest(BaseModel):
+    source: Literal["ai-script", "upload-assets"]
+
+
+@router.post("/creation-previews/estimate", response_model=OperationEstimateOut)
+async def estimate_creation_preview(
+    request: CreationPreviewEstimateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    account = await ensure_user_billing_account(db, user, for_update=True)
+    balance = await wallet_balance(db, account)
+    sku = "script.standard" if request.source == "ai-script" else "storyboard.standard"
+    try:
+        quote = await create_usage_quote(
+            db,
+            account,
+            [{"sku": sku, "quantity": 1, "metadata": {"operation": "creation_preview"}}],
+            request_snapshot={"source": request.source},
+        )
+        quoted_lines = await quote_lines(db, quote.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    available = balance["available_credits"]
+    return OperationEstimateOut(
+        estimate_id=quote.id,
+        catalog_version_id=quote.catalog_version_id,
+        estimated_credits=quote.total_credits,
+        available_credits=available,
+        remaining_after=max(0, available - quote.total_credits),
+        sufficient=available >= quote.total_credits,
+        expires_at=quote.expires_at,
+        lines=[OperationEstimateLineOut(sku=line.sku, unit=line.unit, quantity=line.quantity, unit_credits=line.unit_credits, credits=line.credits) for line in quoted_lines],
+    )
+
+
+async def _reserve_preview_credits(
+    db: AsyncSession,
+    user: User,
+    *,
+    sku: str,
+    operation: str,
+    request_snapshot: dict,
+) -> str | None:
+    if not settings.billing_v2_enabled:
+        return None
+    account = await ensure_user_billing_account(db, user, for_update=True)
+    quote = await create_usage_quote(
+        db,
+        account,
+        [{"sku": sku, "quantity": 1, "metadata": {"operation": operation}}],
+        request_snapshot=request_snapshot,
+    )
+    hold = await reserve_credits(
+        db,
+        account,
+        quote.total_credits,
+        idempotency_key=f"preview:{user.id}:{uuid.uuid4().hex}",
+        quote_id=quote.id,
+        reason=f"{operation}积分预占",
+    )
+    await db.commit()
+    return hold.id
 
 
 def _asset_preview_context(assets: list[Asset]) -> tuple[list[dict], dict[str, dict]]:
@@ -122,19 +232,37 @@ def _asset_preview_context(assets: list[Asset]) -> tuple[list[dict], dict[str, d
 async def create_script_preview(
     request: ScriptCreationPreviewRequest,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    del user
+    await _validate_pricing_catalog(db, request.pricing_catalog_id)
     if not settings.has_text_generation:
         raise HTTPException(status_code=503, detail="AI 脚本服务未配置，请先配置 DashScope 文本模型")
     from app.services.creation_preview import generate_script_preview
 
     try:
+        hold_id = await _reserve_preview_credits(
+            db,
+            user,
+            sku="script.standard",
+            operation="脚本创建预览",
+            request_snapshot=request.model_dump(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    try:
         result = await generate_script_preview(
             request.prompt.strip(), request.duration_seconds, request.tone.strip()
         )
+        response = CreationPreviewOut.model_validate(result)
+        if hold_id:
+            await capture_hold(db, hold_id, reason="脚本创建预览成功结算")
+            await db.commit()
     except Exception as exc:
+        if hold_id:
+            await release_hold(db, hold_id, reason="脚本创建预览失败释放")
+            await db.commit()
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return CreationPreviewOut.model_validate(result)
+    return response
 
 
 @router.post("/creation-previews/assets", response_model=CreationPreviewOut)
@@ -143,6 +271,7 @@ async def create_asset_preview(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await _validate_pricing_catalog(db, request.pricing_catalog_id)
     if not settings.has_text_generation:
         raise HTTPException(status_code=503, detail="AI 编排服务未配置，请先配置 DashScope 文本模型")
     requested_ids = list(dict.fromkeys(request.asset_ids))
@@ -168,12 +297,29 @@ async def create_asset_preview(
     from app.services.creation_preview import generate_asset_preview
 
     try:
+        hold_id = await _reserve_preview_credits(
+            db,
+            user,
+            sku="storyboard.standard",
+            operation="素材创建预览",
+            request_snapshot={"asset_ids": requested_ids, "brief": request.brief},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    try:
         result = await generate_asset_preview(
             asset_context, available_segments, request.brief.strip()
         )
+        response = CreationPreviewOut.model_validate(result)
+        if hold_id:
+            await capture_hold(db, hold_id, reason="素材创建预览成功结算")
+            await db.commit()
     except Exception as exc:
+        if hold_id:
+            await release_hold(db, hold_id, reason="素材创建预览失败释放")
+            await db.commit()
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return CreationPreviewOut.model_validate(result)
+    return response
 
 
 class ProjectOperationRequest(BaseModel):
@@ -191,6 +337,7 @@ class ProjectOperationRequest(BaseModel):
     ]
     parameters: dict = Field(default_factory=dict)
     expected_revision: int = Field(..., ge=0)
+    pricing_catalog_id: str | None = Field(None, max_length=64)
 
 
 class OperationJobsOut(BaseModel):
@@ -331,6 +478,63 @@ def _validated_video_generation(
     }
 
 
+def _media_billing_sku(operation: str, parameters: dict, video_generation: dict | None) -> tuple[str, int]:
+    """把前端媒体参数映射到可由后台调整的 SKU 和计费数量。"""
+    if operation == "generate_image":
+        resolution = str(parameters.get("resolution") or "1k").strip().lower()
+        quality = str(parameters.get("quality") or parameters.get("tier") or "").strip().lower()
+        if "pro" in quality and resolution in {"4k", "4k2", "2k"}:
+            return ("image.pro.4k" if resolution == "4k" else "image.pro.2k", 1)
+        if resolution in {"4k", "2k"}:
+            return "image.standard.2k", 1
+        return "image.fast.1k", 1
+    if operation == "generate_effect":
+        try:
+            duration = int(parameters.get("duration_seconds") or 5)
+        except (TypeError, ValueError):
+            duration = 5
+        return "video.standard.720p", max(1, duration)
+    video_generation = video_generation or {}
+    try:
+        duration = max(1, int(video_generation.get("duration_seconds") or parameters.get("duration_seconds") or 5))
+    except (TypeError, ValueError):
+        duration = 5
+    resolution = str(parameters.get("resolution") or "720p").strip().lower()
+    quality = str(parameters.get("quality") or parameters.get("tier") or parameters.get("model") or "").lower()
+    if "premium" in quality or "pro" in quality:
+        return ("video.premium.2k" if resolution in {"2k", "4k"} else "video.premium.1080p", duration)
+    return ("video.standard.1080p" if resolution in {"1080p", "fhd"} else "video.standard.720p", duration)
+
+
+def _operation_billing_sku(
+    operation: str,
+    project: Project,
+    scene_ids: list[str],
+    parameters: dict | None = None,
+) -> tuple[str, int] | None:
+    """Return the catalog SKU for non-media AI operations.
+
+    The model-point sheet prices script/storyboard as one request and TTS by
+    output minutes.  Quantity is deliberately calculated before dispatch so a
+    failed provider call can release one complete reservation atomically.
+    """
+    if operation == "generate_script":
+        return "script.standard", 1
+    if operation == "complete_shots":
+        return "storyboard.standard", 1
+    if operation == "generate_voiceover":
+        from app.services.tts.planning import build_voice_plans
+
+        plans = build_voice_plans(project, set(scene_ids), "effective_subtitles")
+        total_ms = sum(max(1, int(plan.get("target_duration_ms") or 0)) for plan in plans)
+        if total_ms <= 0:
+            return None
+        model = str((parameters or {}).get("model") or "").strip().lower()
+        sku = "tts.pro" if model.startswith("qwen-audio-") or "pro" in model else "tts.standard"
+        return sku, max(1, math.ceil(total_ms / 60000))
+    return None
+
+
 async def _dispatch_job(db: AsyncSession, project: Project, job: Job):
     if job.type == "镜头匹配":
         from app.tasks.match_tasks import match_script_shots
@@ -425,6 +629,136 @@ async def _dispatch_job(db: AsyncSession, project: Project, job: Job):
     raise HTTPException(status_code=422, detail="不支持该任务类型")
 
 
+@router.post(
+    "/projects/{project_id}/operations/estimate",
+    response_model=OperationEstimateOut,
+)
+async def estimate_project_operation(
+    project_id: str,
+    request: ProjectOperationRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Price a user operation with the same server-side SKU mapping as execution."""
+    await require_project_access(project_id, user, db, "viewer")
+    project = await load_project_workspace(db, project_id, user.id)
+    if project.script.revision != request.expected_revision:
+        raise HTTPException(status_code=409, detail="项目版本已变化，请刷新后重新确认费用")
+    if not settings.billing_v2_enabled:
+        return OperationEstimateOut(
+            estimate_id=None, catalog_version_id=None, estimated_credits=0,
+            available_credits=0, remaining_after=0, sufficient=True,
+            expires_at=None, lines=[],
+        )
+
+    shot_ids = (
+        _resolve_shot_ids(project, request.scope)
+        if request.operation not in {"compose", "export", "generate_script", "generate_voiceover"}
+        else []
+    )
+    scene_ids = (
+        _resolve_scene_ids(project, request.scope)
+        if request.operation == "generate_voiceover"
+        else []
+    )
+    spec: tuple[str, int] | None = None
+    if request.operation in {"generate_image", "generate_video", "generate_effect"}:
+        video_generation = (
+            _validated_video_generation(project, user.id, request.scope, shot_ids, request.parameters)
+            if request.operation == "generate_video"
+            else None
+        )
+        sku, quantity = _media_billing_sku(request.operation, request.parameters, video_generation)
+        plan = await active_plan_for_user(db, user)
+        try:
+            validate_plan_generation_entitlements(
+                plan,
+                operation="image" if request.operation == "generate_image" else "video",
+                resolution=str(request.parameters.get("resolution") or ""),
+                batch=len(shot_ids) > 1,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        spec = sku, quantity * len(shot_ids)
+    else:
+        spec = _operation_billing_sku(
+            request.operation,
+            project,
+            scene_ids,
+            request.parameters,
+        )
+        if request.operation == "generate_voiceover" and request.parameters.get("voice_line_ids"):
+            raw_line_ids = request.parameters["voice_line_ids"]
+            if not isinstance(raw_line_ids, list):
+                raise HTTPException(status_code=422, detail="配音段参数格式无效")
+            requested_line_ids = list(dict.fromkeys(str(item) for item in raw_line_ids))
+            durations = (
+                await db.execute(
+                    select(VoiceLine.target_duration_ms).where(
+                        VoiceLine.project_id == project_id,
+                        VoiceLine.id.in_(requested_line_ids),
+                    )
+                )
+            ).scalars().all()
+            if len(durations) != len(requested_line_ids):
+                raise HTTPException(status_code=422, detail="部分配音段不存在或不属于当前项目")
+            model = str(request.parameters.get("model") or "").lower()
+            sku = "tts.pro" if model.startswith("qwen-audio-") or "pro" in model else "tts.standard"
+            spec = sku, max(1, math.ceil(sum(max(1, int(value)) for value in durations) / 60000))
+
+    account = await ensure_user_billing_account(db, user, for_update=True)
+    balance = await wallet_balance(db, account)
+    if spec is None:
+        catalog = await active_catalog(db)
+        return OperationEstimateOut(
+            estimate_id=None,
+            catalog_version_id=catalog.id if catalog else None,
+            estimated_credits=0,
+            available_credits=balance["available_credits"],
+            remaining_after=balance["available_credits"],
+            sufficient=True,
+            expires_at=None,
+            lines=[],
+        )
+    sku, quantity = spec
+    try:
+        quote = await create_usage_quote(
+            db,
+            account,
+            [{"sku": sku, "quantity": quantity, "metadata": {"operation": request.operation}}],
+            request_snapshot={
+                "operation": request.operation,
+                "project_id": project_id,
+                "scope": request.scope.model_dump(),
+                "parameters": request.parameters,
+                "expected_revision": request.expected_revision,
+            },
+        )
+        quoted_lines = await quote_lines(db, quote.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    available = balance["available_credits"]
+    return OperationEstimateOut(
+        estimate_id=quote.id,
+        catalog_version_id=quote.catalog_version_id,
+        estimated_credits=quote.total_credits,
+        available_credits=available,
+        remaining_after=max(0, available - quote.total_credits),
+        sufficient=available >= quote.total_credits,
+        expires_at=quote.expires_at,
+        lines=[
+            OperationEstimateLineOut(
+                sku=line.sku,
+                unit=line.unit,
+                quantity=line.quantity,
+                unit_credits=line.unit_credits,
+                credits=line.credits,
+            )
+            for line in quoted_lines
+        ],
+    )
+
+
 @router.post("/projects/{project_id}/operations", response_model=OperationJobsOut, status_code=202)
 async def execute_project_operation(
     project_id: str,
@@ -434,6 +768,10 @@ async def execute_project_operation(
 ):
     await require_project_access(project_id, user, db, "editor")
     project = await load_project_workspace(db, project_id, user.id, for_update=True)
+    if settings.billing_v2_enabled and request.pricing_catalog_id:
+        catalog = await active_catalog(db)
+        if catalog is None or catalog.id != request.pricing_catalog_id:
+            raise HTTPException(status_code=409, detail="V-Credits 价格已更新，请重新确认本次费用")
     if project.script.revision != request.expected_revision:
         raise HTTPException(
             status_code=409,
@@ -456,6 +794,19 @@ async def execute_project_operation(
 
     jobs: list[Job] = []
     video_batch: VideoGenerationBatch | None = None
+    billing_account = None
+    if request.operation in {"generate_image", "generate_video", "generate_effect"}:
+        plan = await active_plan_for_user(db, user)
+        operation_kind = "image" if request.operation == "generate_image" else "video"
+        try:
+            validate_plan_generation_entitlements(
+                plan,
+                operation=operation_kind,
+                resolution=str(request.parameters.get("resolution") or ""),
+                batch=len(shot_ids) > 1,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     if request.operation == "generate_script":
         prompt = str(request.parameters.get("prompt") or "").strip()
         tone = str(request.parameters.get("tone") or "专业清晰").strip()[:50]
@@ -588,16 +939,25 @@ async def execute_project_operation(
             db.add(video_batch)
             await db.flush()
         quota_probe = Job(owner_id=user.id)
-        try:
-            await admit_job_quota(
-                db,
-                quota_probe,
-                user.id,
-                config[1],
-                len(shot_ids),
-            )
-        except QuotaExceededError as exc:
-            raise HTTPException(status_code=403, detail="当前会员生成额度不足") from exc
+        if not settings.billing_v2_enabled:
+            try:
+                await admit_job_quota(
+                    db,
+                    quota_probe,
+                    user.id,
+                    config[1],
+                    len(shot_ids),
+                )
+            except QuotaExceededError as exc:
+                raise HTTPException(status_code=403, detail="当前会员生成额度不足") from exc
+        billing_sku, billing_quantity = _media_billing_sku(
+            request.operation, request.parameters, video_generation
+        )
+        billing_account = (
+            await ensure_user_billing_account(db, user, for_update=True)
+            if settings.billing_v2_enabled
+            else None
+        )
         for shot_id in shot_ids:
             shot = shots_by_id[shot_id]
             prompt = (
@@ -633,17 +993,50 @@ async def execute_project_operation(
                     config[2]: prompt,
                     "base_shot_revision": shot.revision,
                     "source_snapshot": source_snapshot,
+                    **({"billing_sku": billing_sku, "billing_quantity": billing_quantity} if settings.billing_v2_enabled else {}),
                     **({"video_generation": video_generation} if video_generation else {}),
                 },
                 batch_id=video_batch.id if video_batch else None,
                 execution_state="QUEUED" if video_batch else None,
                 idempotency_key=idempotency_key,
                 queued_at=datetime.now(timezone.utc),
-                quota_type=config[1],
-                quota_amount=1,
+                quota_type=None if settings.billing_v2_enabled else config[1],
+                quota_amount=0 if settings.billing_v2_enabled else 1,
             )
             jobs.append(job)
             db.add(job)
+            if settings.billing_v2_enabled and billing_account is not None:
+                try:
+                    quote = await create_usage_quote(
+                        db,
+                        billing_account,
+                        [{
+                            "sku": billing_sku,
+                            "quantity": billing_quantity,
+                            "metadata": {"operation": request.operation, "shot_id": shot_id},
+                        }],
+                        request_snapshot={
+                            "operation": request.operation,
+                            "shot_id": shot_id,
+                            "project_id": project.id,
+                            "parameters": request.parameters,
+                        },
+                    )
+                    await db.flush()
+                    hold = await reserve_credits(
+                        db,
+                        billing_account,
+                        quote.total_credits,
+                        idempotency_key=f"job:{job.id}:quote:{quote.id}",
+                        job_id=job.id,
+                        quote_id=quote.id,
+                        reason=f"{config[0]}积分预占",
+                    )
+                    job.billing_quote_id = quote.id
+                    job.billing_hold_id = hold.id
+                    job.quoted_credits = quote.total_credits
+                except ValueError as exc:
+                    raise HTTPException(status_code=403, detail=str(exc)) from exc
         try:
             await db.flush()
         except IntegrityError as exc:
@@ -742,11 +1135,85 @@ async def execute_project_operation(
                 "aspect_ratio": aspect_ratio,
             },
         )
-        try:
-            await admit_job_quota(db, job, user.id, "export", 1)
-        except QuotaExceededError as exc:
-            raise HTTPException(status_code=403, detail="当前会员导出额度不足") from exc
+        if not settings.billing_v2_enabled:
+            try:
+                await admit_job_quota(db, job, user.id, "export", 1)
+            except QuotaExceededError as exc:
+                raise HTTPException(status_code=403, detail="当前会员导出额度不足") from exc
         jobs.append(job)
+
+    # 文本、分镜和配音也走同一套报价 + 预占链路。媒体任务已经在上面
+    # 按镜头逐个完成预占，这里跳过已有 billing_sku 的任务。
+    if settings.billing_v2_enabled:
+        billing_parameters = dict(request.parameters)
+        if request.operation == "generate_voiceover" and jobs:
+            billing_parameters["model"] = (jobs[0].payload or {}).get("model", "")
+        non_media_spec = _operation_billing_sku(
+            request.operation,
+            project,
+            scene_ids,
+            billing_parameters,
+        )
+        if request.operation == "generate_voiceover" and request.parameters.get("voice_line_ids"):
+            raw_line_ids = request.parameters["voice_line_ids"]
+            if not isinstance(raw_line_ids, list):
+                raise HTTPException(status_code=422, detail="配音段参数格式无效")
+            requested_line_ids = list(dict.fromkeys(str(item) for item in raw_line_ids))
+            durations = (
+                await db.execute(
+                    select(VoiceLine.target_duration_ms).where(
+                        VoiceLine.project_id == project.id,
+                        VoiceLine.id.in_(requested_line_ids),
+                    )
+                )
+            ).scalars().all()
+            if len(durations) != len(requested_line_ids):
+                raise HTTPException(status_code=422, detail="部分配音段不存在或不属于当前项目")
+            model = str(billing_parameters.get("model") or "").lower()
+            sku = "tts.pro" if model.startswith("qwen-audio-") or "pro" in model else "tts.standard"
+            non_media_spec = sku, max(1, math.ceil(sum(max(1, int(value)) for value in durations) / 60000))
+        if non_media_spec and jobs:
+            billing_account = billing_account or await ensure_user_billing_account(
+                db, user, for_update=True
+            )
+            billing_sku, billing_quantity = non_media_spec
+            for job in jobs:
+                if (job.payload or {}).get("billing_sku"):
+                    continue
+                job.payload = {
+                    **(job.payload or {}),
+                    "billing_sku": billing_sku,
+                    "billing_quantity": billing_quantity,
+                }
+                try:
+                    quote = await create_usage_quote(
+                        db,
+                        billing_account,
+                        [{
+                            "sku": billing_sku,
+                            "quantity": billing_quantity,
+                            "metadata": {"operation": request.operation, "job_id": job.id},
+                        }],
+                        request_snapshot={
+                            "operation": request.operation,
+                            "project_id": project.id,
+                            "parameters": request.parameters,
+                        },
+                    )
+                    hold = await reserve_credits(
+                        db,
+                        billing_account,
+                        quote.total_credits,
+                        idempotency_key=f"job:{job.id}:quote:{quote.id}",
+                        job_id=job.id,
+                        quote_id=quote.id,
+                        reason=f"{job.name}积分预占",
+                    )
+                    job.billing_quote_id = quote.id
+                    job.billing_hold_id = hold.id
+                    job.quoted_credits = quote.total_credits
+                except ValueError as exc:
+                    raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     project.status = "processing" if request.operation != "export" else "exporting"
     project.script.revision += 1
@@ -775,6 +1242,14 @@ async def execute_project_operation(
             task = await _dispatch_job(db, project, job)
             job.celery_task_id = task.id
         except Exception as exc:
+            await fail_job(
+                db,
+                job.id,
+                stage="派发失败",
+                detail=f"任务派发失败：{str(exc)[:200]}",
+                error_code="DISPATCH_FAILED",
+                error_category="INTERNAL_ERROR",
+            )
             job.status = "FAILED"
             job.stage = "派发失败"
             job.detail = f"任务派发失败：{str(exc)[:200]}"

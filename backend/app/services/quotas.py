@@ -10,10 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.job import Job
+from app.models.billing import CreditHold
 from app.models.admin import QuotaAdjustment
 from app.models.subscription import Subscription
 from app.models.user import Membership, Usage, User
 from app.services.subscriptions import as_utc, reconcile_user_subscription, utcnow
+from app.services.billing_v2 import capture_hold, release_hold
 
 
 QuotaType = Literal["processing_seconds", "ai_image", "ai_video", "export"]
@@ -302,7 +304,15 @@ async def complete_job_success(
     if job.status not in {"QUEUED", "RUNNING"}:
         return False
 
-    if job.quota_type and job.quota_amount > 0:
+    if job.billing_hold_id:
+        captured = await capture_hold(db, job.billing_hold_id)
+        hold = await db.get(CreditHold, job.billing_hold_id)
+        if captured or (hold is not None and hold.status == "captured"):
+            job.billed_credits = int(job.quoted_credits or 0)
+        elif hold is None or hold.status != "active":
+            # Hold 已被失败/取消路径释放，不能把任务错误地标记为成功。
+            return False
+    elif job.quota_type and job.quota_amount > 0:
         quota_type = cast(QuotaType, job.quota_type)
         _, _, usage = await _locked_billing_context(db, owner_id, now=now)
         _add_used(usage, quota_type, job.quota_amount)
@@ -314,5 +324,41 @@ async def complete_job_success(
     job.error_code = None
     job.error_category = None
     job.updated_at = now
+    await db.flush()
+    return True
+
+
+async def fail_job(
+    db: AsyncSession,
+    job_id: str,
+    *,
+    detail: str = "任务执行失败",
+    stage: str = "执行失败",
+    error_code: str | None = None,
+    error_category: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """将任务置为失败并释放 V-Credits hold；可安全重复调用。"""
+    now = as_utc(now or utcnow())
+    row = (
+        await db.execute(select(Job).where(Job.id == job_id).with_for_update())
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+    if row.status == "FAILED":
+        return False
+    if row.status in {"SUCCEEDED", "CANCELLED"}:
+        return False
+    if row.billing_hold_id:
+        await release_hold(db, row.billing_hold_id, reason="任务失败释放")
+    row.status = "FAILED"
+    row.stage = stage
+    row.detail = detail[:500]
+    row.result = None
+    row.result_detail = detail[:1000]
+    row.error_code = error_code
+    row.error_category = error_category
+    row.finished_at = now
+    row.updated_at = now
     await db.flush()
     return True

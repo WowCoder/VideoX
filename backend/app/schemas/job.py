@@ -59,6 +59,8 @@ class JobOut(BaseModel):
     payload: dict = Field(default_factory=dict, exclude=True, repr=False)
     attempts: int = 0
     max_attempts: int = 3
+    quoted_credits: int = 0
+    billed_credits: int = 0
     is_simulated: bool
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

@@ -5,7 +5,11 @@ from unittest.mock import patch
 from pydantic import ValidationError
 
 from app.config import Settings
-from app.services.video_queue import round_robin_video_candidates, wake_video_scheduler
+from app.services.video_queue import (
+    prioritized_video_candidates,
+    round_robin_video_candidates,
+    wake_video_scheduler,
+)
 
 
 class VideoQueueConfigurationTests(unittest.TestCase):
@@ -36,6 +40,18 @@ class VideoQueueConfigurationTests(unittest.TestCase):
 
 
 class VideoQueueFairnessTests(unittest.TestCase):
+    def test_plan_priority_precedes_lower_tiers_and_preserves_tier_fairness(self):
+        candidates = [
+            SimpleNamespace(id="low-1", batch_id="low", owner_id="free"),
+            SimpleNamespace(id="high-a1", batch_id="high-a", owner_id="team"),
+            SimpleNamespace(id="high-a2", batch_id="high-a", owner_id="team"),
+            SimpleNamespace(id="high-b1", batch_id="high-b", owner_id="studio"),
+        ]
+
+        result = prioritized_video_candidates(candidates, {"free": 9, "team": 0, "studio": 0})
+
+        self.assertEqual([item.id for item in result], ["high-a1", "high-b1", "high-a2", "low-1"])
+
     def test_interleaves_batches_while_preserving_each_batch_order(self):
         candidates = [
             SimpleNamespace(id="a1", batch_id="a"),

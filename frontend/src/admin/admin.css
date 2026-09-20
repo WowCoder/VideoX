@@ -504,6 +504,18 @@ select:focus-visible {
 .admin-button:disabled { cursor: not-allowed; opacity: 0.45; }
 
 .admin-table-wrap { overflow: auto; }
+.admin-inline-input { width: 96px; height: 34px; padding: 0 8px; border: 1px solid var(--admin-line-strong); border-radius: 8px; color: var(--admin-ink); background: var(--admin-surface); font-size: 12px; }
+.admin-inline-input:disabled { opacity: .65; cursor: not-allowed; }
+.admin-input-suffix { display: inline-flex; align-items: center; gap: 5px; }
+.admin-input-suffix > span { color: var(--admin-subtle); font-size: 10px; }
+.admin-compact-stack,
+.admin-checkbox-stack { display: grid; gap: 6px; }
+.admin-checkbox-stack label,
+.admin-inline-check { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.admin-checkbox-stack input,
+.admin-inline-check input { width: 14px; height: 14px; margin: 0; accent-color: var(--admin-ink); }
+.admin-plan-select { min-width: 112px; height: 84px; padding: 5px; border-radius: 8px; font-size: 11px; }
+.admin-muted { color: var(--admin-subtle); font-size: 11px; }
 table { width: 100%; border-collapse: collapse; }
 th {
   height: 42px;

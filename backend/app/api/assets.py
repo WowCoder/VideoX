@@ -36,6 +36,7 @@ from app.schemas.asset import (
 from app.services.project_access import require_project_access
 from app.services.quotas import QuotaExceededError, admit_job_quota
 from app.services.storage_usage import recalculate_storage_usage
+from app.services.billing_v2 import active_plan_for_user
 from app.utils.media import playable_media_path
 from app.utils.storage import delete_file, get_file_url, upload_stream
 
@@ -514,7 +515,12 @@ async def upload_asset(
             )
         )
     ).scalar() or 0.0
-    storage_limit_mb = (billing_user.membership.storage_gb if billing_user.membership else 5) * 1024
+    plan = await active_plan_for_user(db, billing_user)
+    storage_limit_mb = (
+        int(plan.storage_bytes) / (1024 * 1024)
+        if plan and int(plan.storage_bytes) > 0
+        else (billing_user.membership.storage_gb if billing_user.membership else 5) * 1024
+    )
     if storage_used_mb + file_size_mb > storage_limit_mb:
         raise HTTPException(status_code=413, detail="全局素材库存储空间不足")
 
@@ -549,12 +555,13 @@ async def upload_asset(
         eta="预计 1-5 分钟",
         payload={},
     )
-    processing_seconds = max(1, math.ceil(media_info["duration_ms"] / 1000))
-    try:
-        await admit_job_quota(db, job, user.id, "processing_seconds", processing_seconds)
-    except QuotaExceededError as exc:
-        await asyncio.to_thread(delete_file, object_name)
-        raise HTTPException(status_code=403, detail="素材处理额度不足") from exc
+    if not settings.billing_v2_enabled:
+        processing_seconds = max(1, math.ceil(media_info["duration_ms"] / 1000))
+        try:
+            await admit_job_quota(db, job, user.id, "processing_seconds", processing_seconds)
+        except QuotaExceededError as exc:
+            await asyncio.to_thread(delete_file, object_name)
+            raise HTTPException(status_code=403, detail="素材处理额度不足") from exc
 
     asset = Asset(
         owner_id=user.id,

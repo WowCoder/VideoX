@@ -5,7 +5,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import raiseload, selectinload
 
 from app.tasks.async_runner import run_async
@@ -306,17 +306,15 @@ async def _generate_project_script_async(project_id: str, job_id: str) -> None:
     except Exception as exc:
         logger.exception("AI project script generation failed for job %s", job_id)
         async with async_session_factory() as session:
-            await session.execute(
-                update(Job)
-                .where(Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"]))
-                .values(
-                    status="FAILED",
-                    stage="脚本生成失败",
-                    detail=str(exc)[:500],
-                    result=None,
-                    result_detail=str(exc)[:500],
-                    updated_at=datetime.now(timezone.utc),
-                )
+            from app.services.quotas import fail_job
+
+            await fail_job(
+                session,
+                job_id,
+                stage="脚本生成失败",
+                detail=str(exc)[:500],
+                error_code="SCRIPT_GENERATION_FAILED",
+                error_category="PROVIDER_ERROR",
             )
             await session.commit()
 
@@ -463,16 +461,14 @@ async def _complete_shot_descriptions_async(
     except Exception as exc:
         logger.exception("AI 完善分镜任务失败 job_id=%s script_id=%s", job_id, script_id)
         async with async_session_factory() as session:
-            await session.execute(
-                update(Job)
-                .where(Job.id == job_id, Job.status.in_(["QUEUED", "RUNNING"]))
-                .values(
-                    status="FAILED",
-                    stage="完善失败",
-                    detail=str(exc)[:500],
-                    result=None,
-                    result_detail=str(exc)[:500],
-                    updated_at=datetime.now(timezone.utc),
-                )
+            from app.services.quotas import fail_job
+
+            await fail_job(
+                session,
+                job_id,
+                stage="完善失败",
+                detail=str(exc)[:500],
+                error_code="STORYBOARD_GENERATION_FAILED",
+                error_category="PROVIDER_ERROR",
             )
             await session.commit()

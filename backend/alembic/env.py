@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.database import Base
 
 # 导入所有模型，确保 Alembic 能检测到
-from app.models import admin, asset, inspiration, invoice, job, migration, monitoring, notification, order, project, script, subscription, user, voice  # noqa: F401
+from app.models import admin, asset, billing, inspiration, invoice, job, migration, monitoring, notification, order, project, script, subscription, user, voice  # noqa: F401
 
 config = context.config
 
