@@ -7,6 +7,7 @@
 from pydantic_settings import BaseSettings
 from pydantic import model_validator
 from functools import lru_cache
+from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -192,8 +193,8 @@ class Settings(BaseSettings):
     # 填入后启用：手机验证码登录/注册
     sms_access_key_id: str = ""
     sms_access_key_secret: str = ""
-    sms_sign_name: str = "redacted"
-    sms_template_code: str = "redacted"
+    sms_sign_name: str = ""
+    sms_template_code: str = ""
     sms_code_ttl_seconds: int = 300
     sms_resend_interval_seconds: int = 60
     sms_hourly_limit: int = 5
@@ -579,7 +580,9 @@ class Settings(BaseSettings):
         return bool(self.alipay_app_id and self.alipay_private_key)
 
     class Config:
-        env_file = ".env"
+        # Host commands may run from the repository root or backend directory.
+        # Docker supplies settings through environment variables, which take precedence.
+        env_file = Path(__file__).resolve().parents[2] / ".env"
         env_file_encoding = "utf-8"
         # 同一个生产 env 文件也供 Compose、PostgreSQL、Redis 和 Nginx 使用。
         # 应用只读取自己声明的配置项，第三方服务变量由对应容器消费。

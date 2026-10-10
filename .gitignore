@@ -22,12 +22,17 @@ yarn-error.log*
 *.tsbuildinfo
 
 # ── 环境配置 ──
-.env
-.env.production
-.env.local
+.env*
+!.env.example
+!.env.production.example
 .deploy-state/
 backups/
-.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+*.dump
+*.sqlite*
 
 # ── IDE ──
 .idea/
@@ -45,6 +50,8 @@ Thumbs.db
 # ── 构建产物 ──
 frontend/dist/
 frontend/dist-admin/
+frontend/dist-pages/
+.superpowers/
 .host-metrics/
 backend/__pycache__/
 frontend/vite.config.js

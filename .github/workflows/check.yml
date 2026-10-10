@@ -21,10 +21,10 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -50,10 +50,10 @@ jobs:
         working-directory: frontend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: npm
@@ -65,15 +65,29 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Run unit tests
+        run: npm test
+
       - name: Build
         run: npm run build
+
+      - name: Build admin
+        run: npm run build:admin
+
+      - name: Build project website
+        run: npm run build:pages
 
   compose:
     name: Compose config
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Validate Docker Compose
-        run: docker compose config --quiet
+        run: docker compose --env-file .env.example config --quiet
+
+      - name: Validate production example
+        env:
+          OPENVMA_ENV_FILE: .env.production.example
+        run: docker compose --env-file .env.production.example -f compose.prod.yml config --quiet

@@ -7,10 +7,13 @@ import {
   FileText,
   Film,
   Loader2,
+  LockKeyhole,
+  Mail,
   MessageCircle,
   ShieldCheck,
   Smartphone,
   Sparkles,
+  UserRound,
 } from "lucide-react";
 import { getWechatQrcode, sendSmsCode } from "@/api/auth";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -20,13 +23,15 @@ import {
   getPostAuthStartAction,
   type PostAuthStartAction,
 } from "@/lib/publicNavigation";
+import { authenticateWithEmail } from "@/lib/emailAuth";
 import { useAuthStore } from "@/stores/authStore";
 import { useUIStore } from "@/stores/uiStore";
+import type { User } from "@/types/models";
 import "./AuthPanel.css";
 import "./AuthPage.css";
 
 type AuthMode = "login" | "register";
-type AuthChannel = "phone" | "wechat";
+type AuthChannel = "email" | "phone" | "wechat";
 
 const AUTH_VALUE_POINTS = [
   [FileText, "从一份文字开始", "粘贴文章、口播稿或课程文档即可。"],
@@ -102,14 +107,17 @@ function AuthPanel({
   onSwitchMode: (mode: AuthMode) => void;
 }) {
   const isRegister = mode === "register";
-  const [channel, setChannel] = useState<AuthChannel>("phone");
+  const [channel, setChannel] = useState<AuthChannel>("email");
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [countdown, setCountdown] = useState(0);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [wechatUrl, setWechatUrl] = useState<string | null>(null);
   const [wechatLoading, setWechatLoading] = useState(false);
-  const { loginWithPhone, loading } = useAuthStore();
+  const { login, register, loginWithPhone, loading } = useAuthStore();
   const notify = useUIStore((state) => state.notify);
   const navigate = useNavigate();
 
@@ -170,9 +178,14 @@ function AuthPanel({
     event.preventDefault();
     setFeedback(null);
     try {
-      if (!/^1\d{10}$/.test(phone)) throw new Error("请输入正确的 11 位手机号");
-      if (!/^\d{4,8}$/.test(code)) throw new Error("请输入手机验证码");
-      const user = await loginWithPhone(phone, code);
+      let user: User;
+      if (channel === "email") {
+        user = await authenticateWithEmail(mode, { email, name, password }, { login, register });
+      } else {
+        if (!/^1\d{10}$/.test(phone)) throw new Error("请输入正确的 11 位手机号");
+        if (!/^\d{4,8}$/.test(code)) throw new Error("请输入手机验证码");
+        user = await loginWithPhone(phone, code);
+      }
       notify(isRegister ? "注册成功，欢迎使用 OpenVMA" : `登录成功，欢迎回来 ${user.name}`);
       navigate("/workspace", {
         replace: true,
@@ -185,10 +198,14 @@ function AuthPanel({
 
   const title = channel === "wechat"
     ? `微信扫码${isRegister ? "注册" : "登录"} OpenVMA`
-    : isRegister ? "使用手机号创建 OpenVMA 工作区" : "使用手机号登录 OpenVMA";
+    : channel === "email"
+      ? isRegister ? "使用邮箱创建 OpenVMA 工作区" : "使用邮箱登录 OpenVMA"
+      : isRegister ? "使用手机号创建 OpenVMA 工作区" : "使用手机号登录 OpenVMA";
   const description = channel === "wechat"
     ? isRegister ? "使用微信扫一扫，确认后即可创建工作区。" : "使用微信扫一扫，在手机上确认登录。"
-    : isRegister ? "无需填写姓名，验证手机号后即可开始创作。" : "输入手机号和验证码，继续处理你的项目。";
+    : channel === "email"
+      ? isRegister ? "填写姓名、邮箱和密码，即可开始创作。" : "输入邮箱和密码，继续处理你的项目。"
+      : isRegister ? "无需填写姓名，验证手机号后即可开始创作。" : "输入手机号和验证码，继续处理你的项目。";
 
   return (
     <section className="auth-modal is-standalone" role="region" aria-labelledby="auth-modal-title">
@@ -208,7 +225,8 @@ function AuthPanel({
         <button className={isRegister ? "is-active" : ""} onClick={() => onSwitchMode("register")} type="button" role="tab" aria-selected={isRegister}>注册</button>
       </div>
 
-      <div className="auth-channel-tabs" role="tablist" aria-label="认证方式">
+      <div className="auth-channel-tabs is-three" role="tablist" aria-label="认证方式">
+        <button className={channel === "email" ? "is-active" : ""} onClick={() => setChannel("email")} type="button" role="tab" aria-selected={channel === "email"}><Mail size={14} />邮箱密码</button>
         <button className={channel === "phone" ? "is-active" : ""} onClick={() => setChannel("phone")} type="button" role="tab" aria-selected={channel === "phone"}><Smartphone size={14} />手机验证码</button>
         <button className={`is-wechat ${channel === "wechat" ? "is-active" : ""}`} onClick={() => setChannel("wechat")} type="button" role="tab" aria-selected={channel === "wechat"}><MessageCircle size={14} fill="currentColor" />微信扫码</button>
       </div>
@@ -226,7 +244,21 @@ function AuthPanel({
           </button>
         </section>
       ) : (
-        <form className="auth-form" onSubmit={submit}>
+        <form className="auth-form" onSubmit={submit} noValidate>
+          {channel === "email" ? <>
+            {isRegister ? <label>
+              <span>姓名</span>
+              <div className="auth-field-shell"><UserRound size={16} /><input type="text" value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" aria-label="姓名" placeholder="你的姓名" required /></div>
+            </label> : null}
+            <label>
+              <span>邮箱</span>
+              <div className="auth-field-shell"><Mail size={16} /><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" aria-label="邮箱" placeholder="name@example.com" required /></div>
+            </label>
+            <label>
+              <span>密码{isRegister ? "（6–128 个字符）" : ""}</span>
+              <div className="auth-field-shell"><LockKeyhole size={16} /><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={isRegister ? "new-password" : "current-password"} aria-label="密码" placeholder={isRegister ? "设置密码" : "输入密码"} required /></div>
+            </label>
+          </> : <>
           <label>
             <span>手机号</span>
             <div className="auth-phone-input"><Smartphone size={16} /><b>+86</b><i aria-hidden="true" /><input type="tel" inputMode="numeric" value={phone} onChange={(event) => setPhone(normalizePhone(event.target.value))} autoComplete="tel" aria-label="手机号" placeholder="请输入手机号" /></div>
@@ -239,10 +271,12 @@ function AuthPanel({
             </div>
           </label>
 
+          </>}
+
           {feedback ? <p className={`auth-feedback is-${feedback.type}`} role={feedback.type === "error" ? "alert" : "status"}>{feedback.type === "success" ? <Check size={14} /> : <AlertCircle size={14} />}{feedback.message}</p> : null}
           <button className="auth-submit" disabled={loading} type="submit">
             {loading ? <Loader2 className="is-spinning" size={16} /> : null}
-            {isRegister ? "验证并免费注册" : "验证并登录"}<ArrowRight size={16} />
+            {channel === "email" ? isRegister ? "免费注册" : "登录" : isRegister ? "验证并免费注册" : "验证并登录"}<ArrowRight size={16} />
           </button>
         </form>
       )}

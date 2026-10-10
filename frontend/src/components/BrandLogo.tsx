@@ -1,7 +1,8 @@
-const WORDMARK_DARK = "/branding/openvma-wordmark-minimal-dark.svg";
-const WORDMARK_LIGHT = "/branding/openvma-wordmark-minimal-light.svg";
-const MARK_DARK = "/branding/openvma-mark-minimal-dark.svg";
-const MARK_LIGHT = "/branding/openvma-mark-minimal-light.svg";
+const BRAND_BASE = `${import.meta.env.BASE_URL}branding/`;
+const WORDMARK_DARK = `${BRAND_BASE}openvma-wordmark-minimal-dark.svg`;
+const WORDMARK_LIGHT = `${BRAND_BASE}openvma-wordmark-minimal-light.svg`;
+const MARK_DARK = `${BRAND_BASE}openvma-mark-minimal-dark.svg`;
+const MARK_LIGHT = `${BRAND_BASE}openvma-mark-minimal-light.svg`;
 
 const BRAND_ASSETS = {
   wordmark: { dark: WORDMARK_DARK, light: WORDMARK_LIGHT },

@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: openvma_dev
       POSTGRES_DB: openvma
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - openvma_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -24,7 +24,7 @@ services:
     container_name: openvma-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - openvma_redisdata:/data
     healthcheck:
@@ -42,8 +42,8 @@ services:
       MINIO_ROOT_USER: openvma
       MINIO_ROOT_PASSWORD: openvma_dev
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - openvma_miniodata:/data
     command: server /data --console-address ":9001"
@@ -206,8 +206,8 @@ services:
       # ── 阿里云短信（手机验证码登录/注册）──
       SMS_ACCESS_KEY_ID: ${SMS_ACCESS_KEY_ID:-}
       SMS_ACCESS_KEY_SECRET: ${SMS_ACCESS_KEY_SECRET:-}
-      SMS_SIGN_NAME: ${SMS_SIGN_NAME:-redacted}
-      SMS_TEMPLATE_CODE: ${SMS_TEMPLATE_CODE:-redacted}
+      SMS_SIGN_NAME: ${SMS_SIGN_NAME:-}
+      SMS_TEMPLATE_CODE: ${SMS_TEMPLATE_CODE:-}
       SMS_CODE_TTL_SECONDS: ${SMS_CODE_TTL_SECONDS:-300}
       SMS_RESEND_INTERVAL_SECONDS: ${SMS_RESEND_INTERVAL_SECONDS:-60}
       SMS_HOURLY_LIMIT: ${SMS_HOURLY_LIMIT:-5}
@@ -276,7 +276,7 @@ services:
       AI_VIDEO_PROMPT_EXTEND: ${AI_VIDEO_PROMPT_EXTEND:-true}
       AI_VIDEO_WATERMARK: ${AI_VIDEO_WATERMARK:-false}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./backend:/app
     command: >
@@ -419,8 +419,10 @@ services:
       dockerfile: Dockerfile
     container_name: openvma-frontend
     restart: unless-stopped
+    environment:
+      API_PROXY_TARGET: http://backend:8000
     ports:
-      - "5273:5273"
+      - "127.0.0.1:5273:5273"
     volumes:
       - ./frontend:/app
       - /app/node_modules

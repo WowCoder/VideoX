@@ -119,7 +119,7 @@ docker compose -f compose.prod.yml --env-file .env.production \
 
 二维码、TOTP 密钥和 Authenticator URI 包含同一高敏感凭证，不得进入工单、聊天、邮件、截图共享或在线二维码服务。管理员角色固定为 `super_admin`、`operator` 和 `finance`；新增账号应按最小权限原则选择角色。
 
-当前确认的生产后台域名为 `admin.example.com`。MVP 阶段采用公网开放策略，不配置 VPN 或固定出口 IP 白名单；雷池 HTTPS、WAF、CC/Bot 防护，以及生产环境 Redis 认证接口限流必须保持启用。管理员登录仍强制使用独立账号、TOTP MFA，连续 5 次失败锁定 15 分钟。域名与路径不可作为安全边界，后续具备条件时应升级为 VPN 或固定出口 IP 白名单。
+后台域名使用部署者自己的域名，例如 `admin.example.com`。根据实际访问需求配置 VPN 或固定出口 IP 白名单；如采用公网入口，必须保留雷池 HTTPS、WAF、CC/Bot 防护和生产 Redis 认证接口限流。管理员仍使用独立账号与 TOTP MFA，默认连续 5 次失败锁定 15 分钟；域名与路径本身不能作为安全边界。
 
 ## 4. 配置雷池
 

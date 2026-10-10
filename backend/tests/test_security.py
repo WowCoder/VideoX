@@ -51,6 +51,8 @@ class ProductionSettingsTests(unittest.TestCase):
                 rate_limit_enabled=True,
                 minio_public_endpoint="media.example.com",
                 minio_public_secure=True,
+                ai_embedding_provider="local",
+                local_ai_api_key="",
             )
 
     def test_rejects_non_1024_embedding_configuration(self):
@@ -69,15 +71,17 @@ class ProductionSettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "SMS_ACCESS_KEY_ID"):
             Settings(_env_file=None, sms_access_key_id="configured", sms_access_key_secret="")
 
-    def test_sms_configuration_uses_approved_sign_and_template(self):
+    def test_sms_configuration_accepts_explicit_sign_and_template(self):
         settings = Settings(
             _env_file=None,
             sms_access_key_id="test-key-id",
             sms_access_key_secret="test-key-secret",
+            sms_sign_name="Example App",
+            sms_template_code="SMS_EXAMPLE",
         )
         self.assertTrue(settings.has_sms)
-        self.assertEqual(settings.sms_sign_name, "redacted")
-        self.assertEqual(settings.sms_template_code, "redacted")
+        self.assertEqual(settings.sms_sign_name, "Example App")
+        self.assertEqual(settings.sms_template_code, "SMS_EXAMPLE")
 
     def test_agnes_is_accepted_and_uses_provider_specific_models(self):
         settings = Settings(

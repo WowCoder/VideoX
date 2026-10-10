@@ -1,6 +1,38 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.ts";
+@source "../admin.html";
+
+/* Keep existing controls and utility names visually stable across the v4 upgrade. */
+@theme {
+  --default-ring-width: 3px;
+  --default-ring-color: #3b82f6;
+}
+
+@custom-variant hover (&:hover);
+
+@layer base {
+  *,
+  ::before,
+  ::after,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: #e5e7eb;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: #9ca3af;
+  }
+
+  dialog {
+    margin: auto;
+  }
+}
+
+@utility outline-none {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
 
 /* ── 设计令牌（CSS 变量，与 Tailwind 配置互补）── */
 :root {
@@ -20,67 +52,70 @@
   --shadow-soft: 0 16px 40px rgba(0, 0, 0, 0.08);
 }
 
-/* ── 全局重置 ── */
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* Base resets must stay below component/utility layers in Tailwind v4. */
+@layer base {
+  /* ── 全局重置 ── */
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-body {
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  color: var(--text);
-  background: var(--canvas);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+  body {
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    color: var(--text);
+    background: var(--canvas);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 
-button {
-  font-family: inherit;
-  cursor: pointer;
-  border: none;
-  background: none;
-}
+  button {
+    font-family: inherit;
+    cursor: pointer;
+    border: none;
+    background: none;
+  }
 
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  outline: 2px solid #171717;
-  outline-offset: 2px;
-}
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: 2px solid #171717;
+    outline-offset: 2px;
+  }
 
-input,
-textarea,
-select {
-  font-family: inherit;
-  outline: none;
-}
+  input,
+  textarea,
+  select {
+    font-family: inherit;
+    outline: none;
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
-}
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 
-/* ── 滚动条 ── */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
+  /* ── 滚动条 ── */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
 
-::-webkit-scrollbar-thumb {
-  background: rgba(23, 23, 23, 0.22);
-  border-radius: 3px;
-}
+  ::-webkit-scrollbar-thumb {
+    background: rgba(23, 23, 23, 0.22);
+    border-radius: 3px;
+  }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
 
-::selection {
-  color: #fff;
-  background: #171717;
+  ::selection {
+    color: #fff;
+    background: #171717;
+  }
 }
 
 @layer components {

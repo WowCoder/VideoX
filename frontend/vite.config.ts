@@ -14,8 +14,10 @@ export default defineConfig(({ mode }) => ({
     host: true,
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
+        // Server-only configuration: never expose this through a VITE_ variable.
+        target: process.env.API_PROXY_TARGET || "http://localhost:8000",
+        // Preserve localhost Host for FastAPI's TrustedHostMiddleware in Compose.
+        changeOrigin: false,
         ws: true,
       },
     },

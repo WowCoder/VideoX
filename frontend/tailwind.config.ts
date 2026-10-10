@@ -26,10 +26,27 @@ const config: Config = {
         sans: ['Inter', '"PingFang SC"', '"Microsoft YaHei"', "system-ui", "sans-serif"],
       },
       borderRadius: {
+        // Retain the v3 values for existing small-radius/shadow/blur utilities.
+        sm: "0.125rem",
+        DEFAULT: "0.25rem",
         pill: "9999px",
       },
       boxShadow: {
+        sm: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        DEFAULT: "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)",
         soft: "0 16px 40px rgba(0,0,0,.08)",
+      },
+      blur: {
+        sm: "4px",
+        DEFAULT: "8px",
+      },
+      backdropBlur: {
+        sm: "4px",
+        DEFAULT: "8px",
+      },
+      dropShadow: {
+        sm: "0 1px 1px rgb(0 0 0 / 0.05)",
+        DEFAULT: ["0 1px 2px rgb(0 0 0 / 0.1)", "0 1px 1px rgb(0 0 0 / 0.06)"],
       },
       transitionDuration: {
         fast: "160ms",
