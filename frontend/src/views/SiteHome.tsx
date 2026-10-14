@@ -92,7 +92,7 @@ const DOCUMENTATION = `${REPOSITORY}/blob/main/docs`;
 const GETTING_STARTED = `${DOCUMENTATION}/getting-started.md`;
 const IMAGE_SOURCES = {
   nasa: "https://science.nasa.gov/photojournal/nasas-asteroid-redirect-robotic-mission-artist-concept/",
-  esa: "https://www.esa.int/ESA_Multimedia/Images/2019/03/The_Moon_as_seen_from_the_Space_Station",
+  moon: "https://www.nasa.gov/image-article/crescent-moon-rising-earths-atmosphere/",
   alpine: "https://commons.wikimedia.org/wiki/File:Milky_Way_Galaxy_and_Kandersteg_viewed_from_the_Bl%C3%BCmlisalph%C3%BCtte_at_night.jpg",
 };
 
@@ -588,7 +588,7 @@ export function SiteHome({
           <section><strong>探索</strong><a href="#site-showcase">{isOpenSource ? "视觉参考" : "太空案例"}</a><a href={isOpenSource ? "#site-open-source" : "#site-pricing"}>{isOpenSource ? "开源部署" : "会员方案"}</a><a href="#site-help">{isOpenSource ? "常见问题" : "帮助中心"}</a></section>
           {isOpenSource ? <section><strong>OpenVMA</strong><a href={`${DOCUMENTATION}/architecture.md`}>架构文档</a><a href={`${DOCUMENTATION}/limitations.md`}>能力与限制</a><a href={`${REPOSITORY}/blob/main/CONTRIBUTING.md`}>参与贡献</a></section> : <section><strong>OpenVMA</strong><a href="#site-footer">关于我们</a><a href="#site-footer">隐私政策</a><a href="#site-footer">服务条款</a></section>}
         </nav>
-        <div className="ltx-footer-bottom"><div><span>{isOpenSource ? "© 2026 OpenVMA · MIT License" : "© 2026 OpenVMA. 保留所有权利。"}</span><p className="ltx-image-credits">视觉参考：<a href={IMAGE_SOURCES.nasa}>NASA</a> · <a href={IMAGE_SOURCES.esa}>© ESA/NASA, Tim Peake</a> · <a href={IMAGE_SOURCES.alpine}>Deralpinbergsteiger</a>（<a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>；已缩放、转码） · <a href={`${REPOSITORY}/blob/main/THIRD_PARTY_NOTICES.md`}>图片说明</a></p></div><span>FROM DOCUMENT TO FILM</span></div>
+        <div className="ltx-footer-bottom"><div><span>{isOpenSource ? "© 2026 OpenVMA · MIT License" : "© 2026 OpenVMA. 保留所有权利。"}</span><p className="ltx-image-credits">视觉参考：<a href={IMAGE_SOURCES.nasa}>NASA 概念图</a> · <a href={IMAGE_SOURCES.moon}>NASA 月球摄影</a> · <a href={IMAGE_SOURCES.alpine}>Deralpinbergsteiger</a>（<a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>；已缩放、转码） · <a href={`${REPOSITORY}/blob/main/THIRD_PARTY_NOTICES.md`}>图片说明</a></p></div><span>FROM DOCUMENT TO FILM</span></div>
       </footer>
     </main>
   );

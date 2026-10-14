@@ -17,7 +17,7 @@ npm run preview:pages
 
 构建输出 `frontend/dist-pages/`，默认 base 为 `/OpenVMA/`。预览服务默认在 `http://127.0.0.1:4175/OpenVMA/`；检查真实终端输出后打开对应地址。
 
-入口为 [pages/index.html](../frontend/pages/index.html)、[pagesMain.tsx](../frontend/src/pagesMain.tsx) 和 [vite.pages.config.ts](../frontend/vite.pages.config.ts)。[base.css](../frontend/pages/base.css) 仅提供首页所需的基础重置，不加载应用的全局工作区样式。独立的 `frontend/pages/public/` 携带品牌 SVG 和官网原有的三张概念图、摄影参考；修改原图时同步该目录的对应副本。资源路径使用 Vite `BASE_URL`，支持 GitHub Pages 的项目子路径。图片来源记录见 [第三方说明](../THIRD_PARTY_NOTICES.md)，未核实的记录应在正式公开前补齐。不要将用户照片、项目媒体、环境文件或 API Key 放入公开静态资源。
+入口为 [pages/index.html](../frontend/pages/index.html)、[pagesMain.tsx](../frontend/src/pagesMain.tsx) 和 [vite.pages.config.ts](../frontend/vite.pages.config.ts)。[base.css](../frontend/pages/base.css) 仅提供首页所需的基础重置，不加载应用的全局工作区样式。独立的 `frontend/pages/public/` 携带品牌 SVG 和官网原有的三张概念图、摄影参考；修改原图时同步该目录的对应副本。资源路径使用 Vite `BASE_URL`，支持 GitHub Pages 的项目子路径。原图来源已核对，署名与使用条件见 [第三方说明](../THIRD_PARTY_NOTICES.md)；新增或替换图片仍需核实再分发许可。不要将用户照片、项目媒体、环境文件或 API Key 放入公开静态资源。
 
 若仓库更名或改用自定义域名，在构建时设置完整首尾斜线 base：
 

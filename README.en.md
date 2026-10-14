@@ -34,7 +34,7 @@ docker compose up -d --build
 
 The example disables all AI providers, so this baseline neither downloads models nor invokes paid AI. Check existing environment files before starting. Visit [localhost:5273](http://localhost:5273), register with email, create a blank project, upload your own short video, add scenes/shots, select media, compile the main composition, and export MP4.
 
-API documentation is at [localhost:8000/docs](http://localhost:8000/docs). Check jobs with `docker compose logs -f backend celery-worker celery-beat`. The admin UI starts separately with `npm run dev:admin` in `frontend/`, at [localhost:5274/admin.html](http://localhost:5274/admin.html), and requires a separate administrator account with TOTP.
+API documentation is at [localhost:8000/docs](http://localhost:8000/docs). Check jobs with `docker compose logs -f backend celery-worker celery-beat`. For admin development, use `npm run dev:admin` in `frontend/`, at [localhost:5274/admin.html](http://localhost:5274/admin.html), with a separate administrator account and TOTP. The regular Vite dev server also serves `/admin.html`; production separation uses distinct builds and gateway configuration.
 
 For local AI, explicitly set the four core providers to `local` in `.env` before running `docker compose --profile local-ai up -d --build`. Cloud capabilities require their explicit provider setting, credentials, enabled models, and a service account that may incur charges. There is no silent local-to-paid fallback. See [configuration](docs/configuration.md).
 

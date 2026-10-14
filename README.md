@@ -146,7 +146,7 @@ make check
 
 前端 Vite 代理使用服务端环境变量 `API_PROXY_TARGET`：宿主机开发默认访问 `http://localhost:8000`，Compose 前端访问 `http://backend:8000`。它不作为浏览器构建配置注入静态页面。
 
-管理端不会随着用户前端在 5273 端口启动。在独立终端中：
+管理端开发建议使用独立的 5274 端口。在另一终端中：
 
 ```bash
 cd frontend
@@ -155,6 +155,8 @@ npm run dev:admin
 ```
 
 访问 [localhost:5274/admin.html](http://localhost:5274/admin.html)。管理员需通过 `backend/scripts/manage_admin.py` 单独创建并配置 TOTP；普通邮箱用户不是管理员。
+
+普通 Vite 开发服务也能直接访问 `/admin.html`；生产隔离由独立构建和网关配置提供。
 
 ## GitHub Pages 展示站
 

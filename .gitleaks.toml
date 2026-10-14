@@ -1,0 +1,24 @@
+title = "OpenVMA exact synthetic test fixtures"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+# A literal idempotency identifier in a local audit-log unit test.
+[[rules.allowlists]]
+description = "Exact AdminAuditLog idempotency identifier in its unit test"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(^|/)backend/tests/test_admin_operations\.py$''']
+regexes = ['''^key\-12345678$''']
+
+# Public RFC 6238 Appendix B SHA-1 test vector, used only in this test file.
+# Source: https://www.rfc-editor.org/rfc/rfc6238.html#appendix-B
+[[rules.allowlists]]
+description = "Exact public RFC 6238 SHA-1 vector in its TOTP unit test"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(^|/)backend/tests/test_admin_security\.py$''']
+regexes = ['''^GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$''']
