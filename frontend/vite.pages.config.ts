@@ -6,7 +6,12 @@ export default defineConfig({
   root: fileURLToPath(new URL("./pages", import.meta.url)),
   base: process.env.PAGES_BASE_PATH || "/OpenVMA/",
   plugins: [react()],
-  // Only the project's first-party brand assets enter the public showcase.
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
+  // Keep homepage assets separate from user uploads and workspace media.
   publicDir: "public",
   build: {
     outDir: "../dist-pages",

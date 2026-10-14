@@ -2,7 +2,7 @@
 
 [返回 README](../README.md)
 
-展示站是独立静态 React/Vite 入口，用于介绍项目能力、架构和源码。它不加载用户工作区、登录状态、应用 API 或付费会员交互。展示内容与概念图不是已生成视频或完整工作台的可操作演示。
+展示站通过独立静态 React/Vite 入口复用应用现有的 [SiteHome](../frontend/src/views/SiteHome.tsx) 首页及其样式，使用 `open-source` 模式介绍项目流程与源码，链接到仓库和部署文档。它不加载 `App`、登录状态或应用 API，也不提供付费会员交互。展示内容与概念图不是已生成视频或完整工作台的可操作演示。
 
 ## 本地构建与预览
 
@@ -17,7 +17,7 @@ npm run preview:pages
 
 构建输出 `frontend/dist-pages/`，默认 base 为 `/OpenVMA/`。预览服务默认在 `http://127.0.0.1:4175/OpenVMA/`；检查真实终端输出后打开对应地址。
 
-入口为 [pages/index.html](../frontend/pages/index.html)、[pagesMain.tsx](../frontend/src/pagesMain.tsx) 和 [vite.pages.config.ts](../frontend/vite.pages.config.ts)。构建只携带获准的品牌与本地展示资源。不要将用户照片、项目媒体、环境文件或 API Key 放入公开静态资源。
+入口为 [pages/index.html](../frontend/pages/index.html)、[pagesMain.tsx](../frontend/src/pagesMain.tsx) 和 [vite.pages.config.ts](../frontend/vite.pages.config.ts)。[base.css](../frontend/pages/base.css) 仅提供首页所需的基础重置，不加载应用的全局工作区样式。独立的 `frontend/pages/public/` 携带品牌 SVG 和官网原有的三张概念图、摄影参考；修改原图时同步该目录的对应副本。资源路径使用 Vite `BASE_URL`，支持 GitHub Pages 的项目子路径。图片来源记录见 [第三方说明](../THIRD_PARTY_NOTICES.md)，未核实的记录应在正式公开前补齐。不要将用户照片、项目媒体、环境文件或 API Key 放入公开静态资源。
 
 若仓库更名或改用自定义域名，在构建时设置完整首尾斜线 base：
 

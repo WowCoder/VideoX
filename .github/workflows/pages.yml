@@ -6,12 +6,16 @@ on:
     branches: [main]
     paths:
       - frontend/pages/**
-      - frontend/src/pages/**
       - frontend/src/pagesMain.tsx
       - frontend/src/components/BrandLogo.tsx
+      - frontend/src/views/SiteHome.tsx
+      - frontend/src/views/SiteHome.css
+      - frontend/src/views/siteContent.ts
+      - frontend/public/media/showcase/**
       - frontend/vite.pages.config.ts
       - frontend/package.json
       - frontend/package-lock.json
+      - docs/github-pages.md
       - .github/workflows/pages.yml
 
 permissions:

@@ -34,9 +34,10 @@ export interface StartingPoint {
   description: string;
 }
 
-const asteroidImage = "/media/showcase/orbit-concept.svg";
-const moonImage = "/media/showcase/moon-concept.svg";
-const milkyWayImage = "/media/showcase/night-sky-concept.svg";
+const showcaseBase = `${import.meta.env.BASE_URL}media/showcase/`;
+const asteroidImage = `${showcaseBase}asteroid-mission-concept.jpg`;
+const moonImage = `${showcaseBase}moonset-from-orbit.jpg`;
+const milkyWayImage = `${showcaseBase}cinematic/milky-way-kandersteg.webp`;
 
 export const membershipPlans: MembershipPlan[] = [
   {
@@ -146,27 +147,27 @@ export const helpFaqs: Array<[string, string]> = [
 export const FEATURED_SHOWCASE_WORKS: ShowcaseWork[] = [
   {
     id: "orbital-archive",
-    eyebrow: "ORIGINAL CONCEPT / ORBIT",
+    eyebrow: "MISSION CONCEPT / VISUAL REFERENCE",
     title: "轨道档案：小行星取样任务",
-    description: "原创 SVG 概念插画，用轨道、探测器与深空尺度表达视觉方向；这里展示的是静态示意。",
+    description: "以小行星任务概念图为视觉参考，用探测器、岩面与深空尺度建立硬科幻开场。展示画面为参考图，非 OpenVMA 生成结果。",
     mediaType: "image",
     src: asteroidImage,
     poster: asteroidImage,
   },
   {
     id: "moonset-orbit",
-    eyebrow: "ORIGINAL CONCEPT / HORIZON",
+    eyebrow: "ORBITAL OBSERVATION / VISUAL REFERENCE",
     title: "地球薄暮：月牙升过大气边缘",
-    description: "原创 SVG 概念插画，用月牙与大气边缘表达构图和氛围；不是实拍影像或生成成片。",
+    description: "轨道观测中的月牙与地球大气层，以留白呈现安静而宏大的宇宙尺度。展示画面为摄影参考，非 OpenVMA 生成结果。",
     mediaType: "image",
     src: moonImage,
     poster: moonImage,
   },
   {
     id: "milky-way-kandersteg",
-    eyebrow: "ORIGINAL CONCEPT / NIGHT",
+    eyebrow: "ALPINE NIGHT SKY / VISUAL REFERENCE",
     title: "雪线之上：银河横穿阿尔卑斯",
-    description: "原创 SVG 概念插画，用星群与山体轮廓表达夜景方向；成片需要使用自己的授权素材。",
+    description: "夜空长曝光中的星群、冰川与山体纹理，让银河成为横跨地景的叙事光带。展示画面为摄影参考，非 OpenVMA 生成结果。",
     mediaType: "image",
     src: milkyWayImage,
     poster: milkyWayImage,

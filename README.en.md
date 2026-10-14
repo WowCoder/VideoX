@@ -44,7 +44,7 @@ The root Compose file is a development environment. Use the [production deployme
 
 Node 22 and Python 3.12 are used for host development. `make check` runs checks through the running development containers. See [development](docs/development.md) for host workers, migrations, and separate app/admin builds.
 
-The independent Pages showcase has no application API or account dependency:
+The Pages showcase reuses the existing homepage design through an independent build, with no application API or account dependency:
 
 ```bash
 cd frontend

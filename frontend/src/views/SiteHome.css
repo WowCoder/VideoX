@@ -26,6 +26,7 @@
 #site-showcase,
 #site-start,
 #site-pricing,
+#site-open-source,
 #site-help,
 #site-footer { scroll-margin-top: 76px; }
 
@@ -208,17 +209,17 @@
 .ltx-showcase-grid article > div > span { color: #858580; font-size: 8px; letter-spacing: .1em; }
 .ltx-showcase-grid h3 { margin: 13px 0 0; font-size: clamp(22px, 2vw, 32px); font-weight: 580; letter-spacing: -.045em; }
 .ltx-showcase-grid p { max-width: 640px; margin: 14px 0 0; color: #686864; font-size: 10px; line-height: 1.8; }
-.ltx-showcase-grid button { display: inline-flex; align-items: center; gap: 8px; margin-top: 19px; border: 0; border-bottom: 1px solid #777; padding: 0 0 5px; background: transparent; font-size: 10px; }
+.ltx-showcase-grid :is(button, a) { display: inline-flex; align-items: center; gap: 8px; margin-top: 19px; border: 0; border-bottom: 1px solid #777; padding: 0 0 5px; background: transparent; font-size: 10px; }
 
 .ltx-start-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: clamp(68px, 8vw, 108px); border-top: 1px solid #bdbdb8; border-bottom: 1px solid #bdbdb8; }
-.ltx-start-grid > button { display: flex; min-height: 340px; flex-direction: column; border: 0; border-right: 1px solid #c9c9c4; padding: 22px 23px 25px; background: transparent; text-align: left; transition: background 160ms ease; }
-.ltx-start-grid > button:last-child { border-right: 0; }
-.ltx-start-grid > button:hover { background: rgba(255, 255, 255, .55); }
+.ltx-start-grid > :is(button, a) { display: flex; min-height: 340px; flex-direction: column; border: 0; border-right: 1px solid #c9c9c4; padding: 22px 23px 25px; background: transparent; text-align: left; transition: background 160ms ease; }
+.ltx-start-grid > :is(button, a):last-child { border-right: 0; }
+.ltx-start-grid > :is(button, a):hover { background: rgba(255, 255, 255, .55); }
 .ltx-start-grid header { display: flex; align-items: center; justify-content: space-between; color: #777773; }
 .ltx-start-grid header span { font-size: 8px; letter-spacing: .12em; }
-.ltx-start-grid > button > small { margin-top: 52px; color: #8a8a85; font-size: 8px; }
-.ltx-start-grid > button > strong { margin-top: 13px; font-size: 23px; font-weight: 580; letter-spacing: -.04em; }
-.ltx-start-grid > button > p { margin: 18px 0 0; color: #6b6b67; font-size: 10px; line-height: 1.75; }
+.ltx-start-grid > :is(button, a) > small { margin-top: 52px; color: #8a8a85; font-size: 8px; }
+.ltx-start-grid > :is(button, a) > strong { margin-top: 13px; font-size: 23px; font-weight: 580; letter-spacing: -.04em; }
+.ltx-start-grid > :is(button, a) > p { margin: 18px 0 0; color: #6b6b67; font-size: 10px; line-height: 1.75; }
 .ltx-start-grid footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; border-top: 1px solid var(--site-soft-line); padding-top: 18px; font-size: 9px; }
 
 .ltx-pricing { border-top: 1px solid var(--site-line); }
@@ -238,8 +239,8 @@
 .ltx-plan-price strong { font-size: 40px; font-weight: 550; letter-spacing: -.05em; }
 .ltx-plan-price span { color: #777773; font-size: 9px; }
 .ltx-pricing-grid > article > small { display: block; min-height: 34px; margin-top: 8px; color: #858580; font-size: 8px; }
-.ltx-pricing-grid > article > button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 42px; margin-top: 10px; border: 1px solid #222; border-radius: 7px; padding: 0 13px; background: transparent; font-size: 9px; }
-.ltx-pricing-grid article.is-featured > button { color: #fff; background: #171718; }
+.ltx-pricing-grid > article > :is(button, a) { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 42px; margin-top: 10px; border: 1px solid #222; border-radius: 7px; padding: 0 13px; background: transparent; font-size: 9px; }
+.ltx-pricing-grid article.is-featured > :is(button, a) { color: #fff; background: #171718; }
 .ltx-pricing-grid ul { display: grid; gap: 12px; margin: 28px 0 0; border-top: 1px solid var(--site-soft-line); padding: 22px 0 0; list-style: none; }
 .ltx-pricing-grid li { display: flex; align-items: center; gap: 8px; color: #5f5f5b; font-size: 9px; }
 
@@ -248,7 +249,7 @@
 .ltx-help-intro { align-self: start; border-top: 1px solid #bdbdb8; padding-top: 22px; }
 .ltx-help-intro strong { font-size: 17px; font-weight: 570; }
 .ltx-help-intro p { margin: 15px 0 0; color: #70706c; font-size: 10px; line-height: 1.8; }
-.ltx-help-intro button { display: inline-flex; align-items: center; gap: 8px; margin-top: 25px; border: 0; border-bottom: 1px solid #777; padding: 0 0 5px; background: transparent; font-size: 10px; }
+.ltx-help-intro :is(button, a) { display: inline-flex; align-items: center; gap: 8px; margin-top: 25px; border: 0; border-bottom: 1px solid #777; padding: 0 0 5px; background: transparent; font-size: 10px; }
 .ltx-help-faq { border-top: 1px solid #bdbdb8; }
 .ltx-help-faq article { border-bottom: 1px solid var(--site-line); }
 .ltx-help-faq article > button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 72px; border: 0; padding: 0; background: transparent; text-align: left; }
@@ -270,6 +271,8 @@
 .ltx-footer > nav strong { margin-bottom: 5px; font-size: 10px; }
 .ltx-footer > nav a { color: #747470; font-size: 9px; }
 .ltx-footer-bottom { display: flex; grid-column: 1 / -1; justify-content: space-between; margin-top: 50px; border-top: 1px solid var(--site-line); padding-top: 22px; color: #858580; font-size: 8px; letter-spacing: .08em; }
+.ltx-image-credits { margin: 10px 0 0; font-size: 9px; letter-spacing: 0; line-height: 1.8; }
+.ltx-image-credits a { text-decoration: underline; text-underline-offset: 3px; }
 
 @media (max-width: 1120px) {
   .ltx-site-header { grid-template-columns: 1fr auto; }
@@ -300,8 +303,8 @@
   .ltx-showcase-grid { grid-template-columns: 1fr; gap: 58px; }
   .ltx-showcase-grid figure, .ltx-showcase-grid article:nth-child(2) figure { height: min(66vw, 520px); }
   .ltx-start-grid, .ltx-pricing-grid { grid-template-columns: 1fr; }
-  .ltx-start-grid > button { min-height: 260px; border-right: 0; border-bottom: 1px solid #c9c9c4; }
-  .ltx-start-grid > button:last-child { border-bottom: 0; }
+  .ltx-start-grid > :is(button, a) { min-height: 260px; border-right: 0; border-bottom: 1px solid #c9c9c4; }
+  .ltx-start-grid > :is(button, a):last-child { border-bottom: 0; }
   .ltx-pricing-grid article { min-height: auto; }
   .ltx-help-layout { grid-template-columns: 1fr; gap: 50px; }
   .ltx-footer { grid-template-columns: 1fr; }
@@ -313,6 +316,7 @@
   #site-showcase,
   #site-start,
   #site-pricing,
+#site-open-source,
   #site-help,
   #site-footer { scroll-margin-top: 64px; }
 
@@ -366,7 +370,7 @@
   .ltx-showcase-grid { margin-top: 58px; }
   .ltx-showcase-grid figure, .ltx-showcase-grid article:nth-child(2) figure { height: 390px; border-radius: 11px; }
   .ltx-start-grid, .ltx-pricing-grid, .ltx-help-layout { margin-top: 58px; }
-  .ltx-start-grid > button { padding-inline: 5px; }
+  .ltx-start-grid > :is(button, a) { padding-inline: 5px; }
   .ltx-pricing-grid article { padding: 22px 18px; }
   .ltx-final-cta { justify-items: start; padding: 90px 18px; text-align: left; }
   .ltx-final-cta > div { width: 100%; flex-direction: column; }
@@ -379,3 +383,8 @@
 @media (prefers-reduced-motion: reduce) {
   .ltx-site *, .ltx-site *::before, .ltx-site *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+/* The open-source view shares the original homepage layout. */
+.ltx-demo-caption { margin: 18px 0 0; color: #74746f; font-size: 10px; line-height: 1.7; text-align: center; }
+.ltx-open-source .ltx-pricing-grid article { min-height: 340px; }
+.ltx-open-source .ltx-pricing-grid > article > :is(button, a) { margin-top: 28px; }
