@@ -6,10 +6,12 @@
 
 处理流程为：仓库外保存权限受限的恢复 bundle → 在独立 mirror 中试运行过滤 → 检查全部可达对象与提交元数据 → 对本地仓库应用同一过滤 → 核对工作区内容和引用。恢复 bundle 含原始私人信息，必须保持私密，不能上传到仓库、公开附件或共享网盘。
 
-本地历史清理不等于远端更新。过滤会改变受影响提交及其后续提交的 SHA，其他克隆必须协调重新克隆或重置，避免把旧历史合并回来。已验证实现保存在 `codex/open-source-preparation` 分支；在更新远端 `main` 前应先审查并将其整合为发布版本。
+本地历史清理不等于远端更新。过滤会改变受影响提交及其后续提交的 SHA，其他克隆必须协调重新克隆或重置，避免把旧历史合并回来。已验证实现保存在 `codex/open-source-preparation` 分支，并于 2026-10-14 经审查后更新到远端 `main`；独立 SSH 查询确认发布检查点一致。该检查点的 GitHub Check、Security 已实际通过。
 
 远端更新前记录各目标分支的原始 SHA，以明确的 `--force-with-lease=<ref>:<old-sha>` 保护更新；不要直接使用无条件 `--force` 或 `git push --mirror`，后者可能误删不相关引用。分支保护可能需要仓库管理员临时授权具体更新。
 
 除分支和标签外，还需核查 GitHub 的 PR 引用、缓存、附件、Actions 日志/产物及旧容器镜像。旧克隆和第三方副本不能靠一次 force push 自动删除。若发现真实密钥外泄，应先撤销或轮换对应密钥；这次精确匹配未发现本地配置的真实凭证进入 Git。
+
+2026-10-14 的登录后核查证实旧提交缓存仍可访问已移除的私人身份信息，仓库因此暂时保持私有。旧 Actions 记录删除与 GitHub Support 缓存清除属于后续服务器处理；公开前应再次确认旧文件页面不可访问，而不是仅确认 `main` 已换成新 SHA。不要把原始 SHA 的源码链接或私人值贴到公开讨论中。
 
 GitHub 的[敏感数据删除说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)解释历史重写、协作者处理和缓存清理范围。正式公开前以远端检查结果为准。
