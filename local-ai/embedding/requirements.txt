@@ -1,5 +1,5 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 sentence-transformers==3.3.1
-modelscope==1.22.3
+modelscope==1.27.0
 torch==2.13.0
