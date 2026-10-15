@@ -33,8 +33,12 @@
 - [x] Update clone instructions, contribution/security links, static homepage repository links and the Pages base path.
 - [x] Gate Pages deployment on public visibility and explicit enablement; document the release procedure.
 - [x] Distinguish old-repository cleanup evidence from the new repository's migration and publication gates.
-- [ ] Run frontend checks/builds, local Markdown link validation and Gitleaks over the prepared history.
+- [x] Run frontend checks/builds, local Markdown link validation and Gitleaks over the prepared history.
 - [x] Independently review the migration diff and resolve material findings.
-- [ ] Commit with the maintainer's GitHub noreply email, then push only `HEAD:main` to the verified private repository.
-- [ ] Verify remote SHA, clean-history ancestry, exact migrated tree, Private visibility, and Check/Security results.
-- [ ] Make VideoX the local origin, retain the original private remote, and report the repository URL and remaining publication decision.
+- [x] Commit with the maintainer's GitHub noreply email, then push only `HEAD:main` to the verified private repository.
+- [x] Verify remote SHA, clean-history ancestry, exact migrated tree, Private visibility, and Check/Security results.
+- [x] Make VideoX the local origin, retain the original private remote, and report the repository URL and remaining publication decision.
+
+## Verified Migration Checkpoint
+
+`53d3ac9` reached the independent private repository with 32 main-branch commits and 375 tracked files. A fresh remote mirror matched the local tree and passed Gitleaks across all 46 advertised refs / 62 reachable commits, including newly generated Dependabot branches and PR refs. The removed identity script and original unfiltered commit are absent. New-repository Check and Security passed; Pages was skipped. Repository metadata and dependency protections were independently verified. Public visibility and Pages publication remain subject to the maintainer's later confirmation.

@@ -27,6 +27,8 @@
 | 密钥扫描 | Gitleaks 8.30.1 在 `c148060` 检查点扫描全部本地引用的 29 个提交和 374 个可发布文件，精确排除两项已核实的测试值后零命中；例外边界反向验证通过 |
 | 原仓库远端历史 | 2026-10-14，独立私密 mirror 核查 `main` 的 `d9fdb6c` 及全部 46 个向已认证客户端提供的引用，共 60 个可达提交；Gitleaks 零命中，已移除的身份脚本零可达对象、零相关历史提交，提交邮箱均为 GitHub noreply，清理前的旧主分支提交不可达 |
 | 原仓库 GitHub CI | 2026-10-14，`main` 的 `c148060`、后续文档提交 `d9fdb6c`、`9535ebe` 均实际通过 Check 和 Security 工作流 |
+| VideoX 迁移核查 | 2026-10-15，`53d3ac9` 检查点保留主分支 32 个干净提交、375 个文件，独立远端 tree 与本地完全一致；新仓库 46 个引用、62 个可达提交的 Gitleaks 零命中，旧身份脚本和清理前的原始提交均不存在，提交邮箱均为 GitHub noreply |
+| VideoX GitHub CI | 2026-10-15，`53d3ac9` 实际通过新仓库 Check 和 Security，Pages 发布工作流按私有仓库条件跳过；旧敏感文件链接在新仓库返回 404 |
 | 浏览器 | 复用官网的 Pages 页面在桌面 1280 px、手机 390 px 下无横向溢出；导航、FAQ、示意动画与图片加载通过；此前邮箱登录、工作区与编辑器显示通过 |
 | 数据库 | 独立空数据库完成全部 37 次迁移；原有应用数据库未参与测试 |
 | 媒体流程 | 全部 AI Provider 与搜索关闭，邮箱注册/登录 → 原创视频上传与处理 → 手动分镜 → 主成片编排 → FFmpeg 导出 → 鉴权下载通过 |
@@ -52,6 +54,8 @@ Security 工作流固定同一 Gitleaks 版本和配置，增量检查后扫描�
 `WowCoder/VideoX` 使用独立的新仓库，仅迁入清理后的主分支及其祖先，不采用 Fork 或仓库转移。原仓库的服务器缓存、Actions 日志、附件和未审计引用不属于此次迁移内容。原仓库继续保持 Private，其缓存清除工单不作为独立新仓库公开的前置条件。
 
 新仓库保持 **Private**，Website 留空，等待维护者确认后再公开。源码、克隆、Issue、安全反馈链接和 Pages 默认项目路径使用 VideoX；应用名称、内部部署标识和原有图片保留。Pages 工作流需要仓库为 Public、`PAGES_ENABLED=true` 且分支为 `main` 才会发布，普通 Check 中的静态站构建不发布站点。
+
+新仓库的 Description、8 个 Topics 已保存；Dependency graph、Dependabot alerts 和 Dependabot security updates 已独立确认开启。当前 15 个 Dependabot 依赖 PR 由新仓库配置自动创建，没有从原仓库迁入或自动合并。本地默认 `origin` 指向 VideoX，原仓库远端保留为 `openvma`。
 
 1. 核对新仓库为独立的 Private 仓库，远端主分支与已审核的迁移提交完全一致；检查全部提供的分支、标签、PR 引用及提交元数据，确认没有清理前身份脚本或私人邮箱。
 2. 在新仓库运行 Check 和 Security，以新仓库实际结果为准；独立检查其 Description、Topics 和依赖保护设置。不得用原仓库的设置或 CI 结果代替。
