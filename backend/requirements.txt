@@ -21,7 +21,7 @@ celery==5.4.0
 redis==5.2.1
 
 # ── 对象存储 ──
-minio==7.2.12
+minio==7.2.20
 
 # ── 媒体处理 ──
 ffmpeg-python==0.2.0
