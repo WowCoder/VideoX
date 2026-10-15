@@ -4,6 +4,8 @@
 
 OpenVMA 是面向桌面浏览器的视频创作工作台：管理真实素材，编写脚本与分镜，检索可用镜头，编辑项目主时间线，再通过 FFmpeg 导出成片。
 
+代码仓库现为 [VideoX](https://github.com/WowCoder/VideoX)，应用沿用 OpenVMA 名称。
+
 AI 能力是可选组件。项目把模型输出、用户选择和确定性媒体处理分开：模型负责搜索规划、结构化草稿、语义候选与媒体生成；用户决定使用哪些镜头；后端负责版本校验、任务调度、主成片编排和导出。
 
 仓库包含 React/TypeScript 前端、FastAPI 后端、Celery Worker/Beat，以及 PostgreSQL/pgvector、Redis、MinIO 和可选本地模型服务。代码采用 [MIT](LICENSE)；模型、外部服务及第三方素材的许可另见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
@@ -49,8 +51,8 @@ AI 能力是可选组件。项目把模型输出、用户选择和确定性媒�
 需要 Docker Engine/Desktop 和 Compose v2。Docker 路径不要求宿主机安装 Node、Python 或 FFmpeg；宿主机开发和 Pages 构建使用 Node 22、Python 3.12。
 
 ```bash
-git clone https://github.com/WowCoder/OpenVMA.git
-cd OpenVMA
+git clone https://github.com/WowCoder/VideoX.git
+cd VideoX
 cp .env.example .env
 ```
 
@@ -162,7 +164,7 @@ npm run dev:admin
 
 展示站复用原官网的设计，通过独立入口构建，不连接应用 API，也不要求登录。仓库提供源码、配置和发布工作流；以下地址是部署后预期地址，不表示已上线：
 
-`https://WowCoder.github.io/OpenVMA/`
+`https://WowCoder.github.io/VideoX/`
 
 ```bash
 cd frontend
@@ -170,7 +172,7 @@ npm ci
 npm run build:pages
 ```
 
-产物位于 `frontend/dist-pages/`，默认 base 为 `/OpenVMA/`。启用 GitHub Actions、Settings → Pages 与仓库 About Website 的操作见 [Pages 指南](docs/github-pages.md)。
+产物位于 `frontend/dist-pages/`，默认 base 为 `/VideoX/`。远端发布需仓库为 Public 且显式设置 `PAGES_ENABLED=true`；当前迁移阶段保持 Private。完整操作见 [Pages 指南](docs/github-pages.md)。
 
 ## 文档与贡献
 

@@ -4,7 +4,7 @@
 
 ## 问题反馈
 
-通过 [GitHub Issues](https://github.com/WowCoder/OpenVMA/issues)报告可复现的问题或提出功能建议。说明版本、运行方式、操作步骤、预期与实际结果，并提供脱敏后的错误日志。不要附上环境文件、访问令牌、手机号、私有素材或带签名的媒体 URL。
+通过 [GitHub Issues](https://github.com/WowCoder/VideoX/issues)报告可复现的问题或提出功能建议。说明版本、运行方式、操作步骤、预期与实际结果，并提供脱敏后的错误日志。不要附上环境文件、访问令牌、手机号、私有素材或带签名的媒体 URL。
 
 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
@@ -23,7 +23,7 @@
 make check
 ```
 
-非 Docker 开发的检查入口见 [开发指南](docs/development.md)。宣传站改动还需运行 `cd frontend && npm run build:pages`，在 `/OpenVMA/` 路径预览，检查移动端、键盘导航、图片与链接。
+非 Docker 开发的检查入口见 [开发指南](docs/development.md)。宣传站改动还需运行 `cd frontend && npm run build:pages`，在 `/VideoX/` 路径预览，检查移动端、键盘导航、图片与链接。
 
 真实供应商调用可能产生费用，不是 PR 检查的必要步骤。注明测试使用的 Provider；未经配置和授权不要执行付费冒烟测试。
 

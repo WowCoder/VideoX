@@ -4,6 +4,8 @@
 
 2026-10-10 完成本地准备与验收，2026-10-14 补充原图来源比对、实际 Gitleaks 扫描、远端历史复查与 GitHub 设置。本记录描述实际检查范围，不代表仓库或展示站已经公开。
 
+2026-10-15 的迁移目标为独立私有仓库 `WowCoder/VideoX`，仅迁入清理后的主分支历史；原 `WowCoder/OpenVMA` 继续保持 Private。下述 2026-10-14 GitHub 平台结果均属于原仓库，不能替代新仓库的独立复核。新仓库公开须得到维护者确认，见 [迁移计划](superpowers/plans/2026-10-15-videox-migration.md)。
+
 ## 源码与文档
 
 - 使用 MIT；加入贡献、安全报告、Issue/PR 模板、Dependabot 和安全检查工作流。
@@ -23,8 +25,8 @@
 | 配置 | 开发和生产示例 Compose 校验通过；未读取真实生产配置 |
 | 依赖审计 | 2026-10-14 npm audit 零告警；pip-audit 2.10.1 完整解析当前 requirements 的 97 个包，零漏洞、零跳过、无忽略项 |
 | 密钥扫描 | Gitleaks 8.30.1 在 `c148060` 检查点扫描全部本地引用的 29 个提交和 374 个可发布文件，精确排除两项已核实的测试值后零命中；例外边界反向验证通过 |
-| 远端历史 | 2026-10-14，独立私密 mirror 核查 `main` 的 `d9fdb6c` 及全部 46 个向已认证客户端提供的引用，共 60 个可达提交；Gitleaks 零命中，已移除的身份脚本零可达对象、零相关历史提交，提交邮箱均为 GitHub noreply，清理前的旧主分支提交不可达 |
-| GitHub CI | 2026-10-14，`main` 的 `c148060`、后续文档提交 `d9fdb6c` 均实际通过 Check 和 Security 工作流 |
+| 原仓库远端历史 | 2026-10-14，独立私密 mirror 核查 `main` 的 `d9fdb6c` 及全部 46 个向已认证客户端提供的引用，共 60 个可达提交；Gitleaks 零命中，已移除的身份脚本零可达对象、零相关历史提交，提交邮箱均为 GitHub noreply，清理前的旧主分支提交不可达 |
+| 原仓库 GitHub CI | 2026-10-14，`main` 的 `c148060`、后续文档提交 `d9fdb6c`、`9535ebe` 均实际通过 Check 和 Security 工作流 |
 | 浏览器 | 复用官网的 Pages 页面在桌面 1280 px、手机 390 px 下无横向溢出；导航、FAQ、示意动画与图片加载通过；此前邮箱登录、工作区与编辑器显示通过 |
 | 数据库 | 独立空数据库完成全部 37 次迁移；原有应用数据库未参与测试 |
 | 媒体流程 | 全部 AI Provider 与搜索关闭，邮箱注册/登录 → 原创视频上传与处理 → 手动分镜 → 主成片编排 → FFmpeg 导出 → 鉴权下载通过 |
@@ -41,27 +43,20 @@ Security 工作流固定同一 Gitleaks 版本和配置，增量检查后扫描�
 
 云端模型真实推理、支付交易、生产负载与灾难恢复不属于这次离线验收范围。
 
-## 公开前最后操作
+## 仓库迁移与公开前确认
 
 2026-10-14 完成三张原图的直接来源比对：NASA 概念图像素一致，月球照片与 NASA ISS038e037342 逐字节一致，银河图与作者 Commons 原图在缩放、转码后匹配。原图全部保留，修正先前错误的 ESA 月球署名；保留 NASA 使用说明和银河图的 CC BY-SA 4.0 署名、来源及变换说明，见 [第三方说明](../THIRD_PARTY_NOTICES.md)。
 
-历史清理与远端更新按 [历史处理说明](history-cleanup.md)进行。Git 提交历史的本地清理不会删除远端缓存、旧克隆、旧镜像、Actions 日志或附件。
+原 `WowCoder/OpenVMA` 的目标分支已经清理、推送并通过当时的 CI；已删除 6 次旧 Check 记录，原有的 12 个依赖或工具缓存均为清理后创建。原仓库的 Description、8 个 Topics、Dependency graph、Dependabot alerts 和 Dependabot security updates 已设置。原提交的服务器缓存仍需通过已提交的 GitHub Support 工单处理；这些平台记录只适用于原仓库，详情见 [历史处理说明](history-cleanup.md)。不要向原仓库重新推送未清理历史。
 
-2026-10-14 已使用明确旧 SHA 的 `force-with-lease` 更新远端 `main`，后续文档提交以正常快进更新至 `d9fdb6c`。更新前仅有 `main`、无标签，未返回 PR、notes 或 replace 引用；这些检查没有把清理前对象拉回本地。更新后 Dependabot 创建了 15 个依赖 PR，没有自动合并主版本升级。独立私密 mirror 再次核查 `main`、15 个 Dependabot 分支、15 个 PR head 和 15 个 PR merge，共 46 个引用、60 个可达提交；审计前后提供的引用一致。该范围的 Gitleaks、已移除身份脚本与提交邮箱检查通过，清理前旧主分支提交不可达；此检查不覆盖 GitHub 未向客户端提供的内部引用或不可达对象缓存。
+`WowCoder/VideoX` 使用独立的新仓库，仅迁入清理后的主分支及其祖先，不采用 Fork 或仓库转移。原仓库的服务器缓存、Actions 日志、附件和未审计引用不属于此次迁移内容。原仓库继续保持 Private，其缓存清除工单不作为独立新仓库公开的前置条件。
 
-仓库 Description 已保存为“开源视频创作工作流：AI 辅助策划、可编辑分镜、素材审阅与 FFmpeg 导出。”，8 个 Topics 已保存。Dependency graph、Dependabot alerts 和 Dependabot security updates 已在 GitHub 设置中确认开启；这些功能不能替代完整依赖审计或服务器缓存清理。
+新仓库保持 **Private**，Website 留空，等待维护者确认后再公开。源码、克隆、Issue、安全反馈链接和 Pages 默认项目路径使用 VideoX；应用名称、内部部署标识和原有图片保留。Pages 工作流需要仓库为 Public、`PAGES_ENABLED=true` 且分支为 `main` 才会发布，普通 Check 中的静态站构建不发布站点。
 
-登录 GitHub 后确认仓库仍为 Private，Website 留空，主页没有已发布的 Release、Package 或 Fork；列出的 12 个 Actions 缓存均为本次清理后创建的依赖或工具缓存。经管理员确认，6 次清理前的 Check 运行记录已永久删除；重新加载服务器列表后核实这 6 个目标 ID 全部消失，干净主分支的 Check、Security 和新 Dependabot 运行保留。
+1. 核对新仓库为独立的 Private 仓库，远端主分支与已审核的迁移提交完全一致；检查全部提供的分支、标签、PR 引用及提交元数据，确认没有清理前身份脚本或私人邮箱。
+2. 在新仓库运行 Check 和 Security，以新仓库实际结果为准；独立检查其 Description、Topics 和依赖保护设置。不得用原仓库的设置或 CI 结果代替。
+3. 得到维护者明确公开确认后，将新仓库设为 Public；按届时可用功能配置私密漏洞报告、Secret scanning / Push protection 与主分支保护。
+4. 按 [Pages 指南](github-pages.md)显式设置发布变量、启用 Pages，核对实际站点后再填写 Website URL。当前预计项目路径为 `/VideoX/`，不声称站点已上线。
+5. 只从已检查的干净源码构建公开镜像或发布包，不上传环境文件、原始备份、私人媒体或旧部署产物。首个版本的演示与验证说明应使用自有素材，并标明实际验证范围。
 
-已移除的私人身份信息此前仍能通过旧提交的服务器缓存页面访问。GitHub Support 的缓存清除工单已创建，完整说明已保存到同一私密工单，当前状态为 Open；需得到旧提交缓存和相关内部引用的清除确认、再次核查旧文件页面不可访问后再公开。支持申请只提供必要的仓库、提交与路径元数据，没有发送实际私人身份值或恢复备份。
-
-当前账号的私有仓库尚不能启用 Pages；缓存清除后再设为 Public、启用 Pages 并填写实际 Website URL。私密漏洞报告、Secret scanning / Push protection 与主分支保护也需按届时仓库可用功能核实，不能仅凭本地工作流声明它们已经启用。
-
-1. 检查最终差异及本地历史清理结果，暂停其他人向原仓库提交。
-2. 更新原仓库的目标分支与受影响引用，检查远端历史、分支、标签及 PR 引用；需要时联系 GitHub 处理缓存。
-3. 确认 Actions 的 Check 和 Security 通过；启用可用的私密漏洞报告和 Secret scanning / Push protection，并设置主分支保护。
-4. 确认旧镜像、构建产物、附件和日志没有包含已移除脚本或私人数据；公开镜像应从最终干净源码重新构建。
-5. 将仓库设为 Public，按 [Pages 指南](github-pages.md)启用 GitHub Actions 发布，并填写 About Website 的实际 URL。
-6. 发布第一个带验证说明的版本；使用自己的素材录制短演示，再逐步添加性能或质量评估。
-
-已保存 Topics：`video-editing`、`ai-workflows`、`human-in-the-loop`、`fastapi`、`react`、`celery`、`pgvector`、`ffmpeg`。不要把尚未实现的通用自主 Agent 或多人协作当成项目标签或已完成能力。
+建议 Topics：`video-editing`、`ai-workflows`、`human-in-the-loop`、`fastapi`、`react`、`celery`、`pgvector`、`ffmpeg`。不要把尚未实现的通用自主 Agent 或多人协作当成项目标签或已完成能力。

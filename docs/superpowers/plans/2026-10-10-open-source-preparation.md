@@ -1,5 +1,7 @@
 # OpenVMA Open Source Preparation Implementation Plan
 
+> Historical preparation plan for the original repository. The subsequent independent private-repository migration is recorded in [the VideoX migration plan](2026-10-15-videox-migration.md).
+
 > **For agentic workers:** Use superpowers:subagent-driven-development for the independent tasks below. The user approved the implementation scope in this chat on 2026-10-10; no second approval of that scope is needed.
 
 **Goal:** Prepare a truthful, usable and sanitized MIT-licensed project for public review, with a standalone GitHub Pages showcase.

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   root: fileURLToPath(new URL("./pages", import.meta.url)),
-  base: process.env.PAGES_BASE_PATH || "/OpenVMA/",
+  base: process.env.PAGES_BASE_PATH || "/VideoX/",
   plugins: [react()],
   resolve: {
     alias: {

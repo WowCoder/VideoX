@@ -2,6 +2,8 @@
 
 [中文](README.md) · [Getting started](docs/getting-started.md) · [Architecture](docs/architecture.md)
 
+The repository is now [VideoX](https://github.com/WowCoder/VideoX); the application retains the OpenVMA name.
+
 OpenVMA is a desktop-browser video workspace for real media assets, scripts, storyboards, material selection, a project's main timeline, and FFmpeg export. It includes a React/TypeScript frontend, FastAPI backend, Celery workers, PostgreSQL/pgvector, Redis, MinIO, and optional local AI services.
 
 AI is optional. Models produce structured drafts, search plans, matching candidates, and generated media. Users select material; backend code validates revisions, schedules jobs, compiles the composition, and renders it.
@@ -25,8 +27,8 @@ Each project has one script and main composition. Revision checks protect edits;
 Install Docker Engine/Desktop and Compose v2, then:
 
 ```bash
-git clone https://github.com/WowCoder/OpenVMA.git
-cd OpenVMA
+git clone https://github.com/WowCoder/VideoX.git
+cd VideoX
 cp .env.example .env
 docker compose config --quiet
 docker compose up -d --build
@@ -52,6 +54,6 @@ npm ci
 npm run build:pages
 ```
 
-Output: `frontend/dist-pages/`; default base: `/OpenVMA/`. `https://WowCoder.github.io/OpenVMA/` is the expected URL after deployment, not a claim that it is live. See the [Pages setup guide](docs/github-pages.md).
+Output: `frontend/dist-pages/`; default base: `/VideoX/`. Deployment requires a public repository and an explicit `PAGES_ENABLED=true` repository variable; the migration remains private until maintainer approval. `https://WowCoder.github.io/VideoX/` is the expected URL after deployment. See the [Pages setup guide](docs/github-pages.md).
 
 Code is licensed under [MIT](LICENSE). Third-party assets, model weights, and hosted services have their own terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Security reporting: [SECURITY.md](SECURITY.md).

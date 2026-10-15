@@ -87,7 +87,7 @@ const SIMPLE_PROMISES = [
   ["不会覆盖原文件", "AI 处理先成为候选版本，确认后才会进入当前影片。"],
 ];
 
-const REPOSITORY = "https://github.com/WowCoder/OpenVMA";
+const REPOSITORY = "https://github.com/WowCoder/VideoX";
 const DOCUMENTATION = `${REPOSITORY}/blob/main/docs`;
 const GETTING_STARTED = `${DOCUMENTATION}/getting-started.md`;
 const IMAGE_SOURCES = {

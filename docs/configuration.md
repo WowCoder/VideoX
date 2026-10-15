@@ -10,7 +10,7 @@ Compose 从根 `.env` 做变量替换，并为各服务设置内部数据库、R
 
 前端 Vite 使用 **服务端变量** `API_PROXY_TARGET`，宿主机默认 `http://localhost:8000`，Compose 前端设置 `http://backend:8000`。它不带 `VITE_` 前缀，不注入浏览器 JavaScript；浏览器通过同源 `/api` 和 WebSocket 访问后端。见 [Vite 配置](../frontend/vite.config.ts)。
 
-Pages 只需要可选 `PAGES_BASE_PATH`（默认 `/OpenVMA/`），不使用应用凭证。所有 API Key、JWT、数据库和管理员密钥留在服务端。
+Pages 只需要可选 `PAGES_BASE_PATH`（默认 `/VideoX/`），不使用应用凭证。所有 API Key、JWT、数据库和管理员密钥留在服务端。
 
 ## Provider 支持矩阵
 

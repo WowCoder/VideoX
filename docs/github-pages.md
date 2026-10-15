@@ -15,7 +15,7 @@ npm run build:pages
 npm run preview:pages
 ```
 
-构建输出 `frontend/dist-pages/`，默认 base 为 `/OpenVMA/`。预览服务默认在 `http://127.0.0.1:4175/OpenVMA/`；检查真实终端输出后打开对应地址。
+构建输出 `frontend/dist-pages/`，默认 base 为 `/VideoX/`。预览服务默认在 `http://127.0.0.1:4175/VideoX/`；检查真实终端输出后打开对应地址。
 
 入口为 [pages/index.html](../frontend/pages/index.html)、[pagesMain.tsx](../frontend/src/pagesMain.tsx) 和 [vite.pages.config.ts](../frontend/vite.pages.config.ts)。[base.css](../frontend/pages/base.css) 仅提供首页所需的基础重置，不加载应用的全局工作区样式。独立的 `frontend/pages/public/` 携带品牌 SVG 和官网原有的三张概念图、摄影参考；修改原图时同步该目录的对应副本。资源路径使用 Vite `BASE_URL`，支持 GitHub Pages 的项目子路径。原图来源已核对，署名与使用条件见 [第三方说明](../THIRD_PARTY_NOTICES.md)；新增或替换图片仍需核实再分发许可。不要将用户照片、项目媒体、环境文件或 API Key 放入公开静态资源。
 
@@ -29,16 +29,17 @@ PAGES_BASE_PATH=/ npm run build:pages
 
 ## 仓库中启用发布
 
-仓库提供 [Pages 工作流](../.github/workflows/pages.yml)，支持手动运行和主分支触发。发布前先把已检查的实现合入对应主分支；本地构建不会自动开启 Pages 或发布远端内容。
+仓库提供 [Pages 工作流](../.github/workflows/pages.yml)，支持手动运行和主分支触发。发布前先把已检查的实现合入对应主分支；本地构建不会自动开启 Pages 或发布远端内容。迁移阶段仓库保持 Private，Pages 构建和部署任务会跳过；常规 Check 仍会构建静态站以验证产物。
 
-1. 在 GitHub 仓库 Settings → Actions 中允许工作流运行。
-2. 打开 Settings → Pages，把 Build and deployment 的 Source 设为 **GitHub Actions**。
-3. 在 Actions 中打开 Pages 工作流，选择 `main` 手动执行；当前工作流仅允许 `main` 构建和部署，其他分支的手动运行会跳过这些任务。也可通过 `main` 上相关路径的提交触发。
-4. 检查 build/deploy 任务与 `github-pages` environment 的结果，以 GitHub 返回的实际页面 URL 为准。
-5. 打开发布地址，检查项目路径下 CSS、图片、移动布局、源码链接和文档链接。
-6. 在仓库首页 About 旁点击编辑，把 Website 设置为实际发布 URL。
+1. 完成迁移复核并得到维护者的公开确认后，将仓库设为 **Public**。
+2. 在 GitHub 仓库 Settings → Actions 中允许工作流运行；在 Settings → Secrets and variables → Actions → Variables 添加仓库变量 `PAGES_ENABLED`，值设为 `true`。保留未设置状态或其他值时不会发布。
+3. 打开 Settings → Pages，把 Build and deployment 的 Source 设为 **GitHub Actions**。
+4. 在 Actions 中打开 Pages 工作流，选择 `main` 手动执行；只有仓库为 Public、`PAGES_ENABLED=true` 且分支为 `main` 时允许构建和部署。也可通过 `main` 上相关路径的提交触发。
+5. 检查 build/deploy 任务与 `github-pages` environment 的结果，以 GitHub 返回的实际页面 URL 为准。
+6. 打开发布地址，检查项目路径下 CSS、图片、移动布局、源码链接和文档链接。
+7. 在仓库首页 About 旁点击编辑，把 Website 设置为实际发布 URL。
 
-对于 `WowCoder/OpenVMA`，默认预期 URL 是 `https://WowCoder.github.io/OpenVMA/`。这只是命名推导，文档不声称它已上线。Fork 的用户名不同，实际地址也不同；组织策略或 environment 保护规则可能需要仓库管理员处理。
+对于 `WowCoder/VideoX`，默认预期 URL 是 `https://WowCoder.github.io/VideoX/`。这只是命名推导，文档不声称它已上线。Fork 的用户名不同，实际地址也不同；组织策略或 environment 保护规则可能需要仓库管理员处理。
 
 ## 检查与限制
 

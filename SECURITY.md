@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report authentication bypasses, access-control failures, credential exposure and similar issues privately. Use GitHub's **Report a vulnerability** entry on the [Security tab](https://github.com/WowCoder/OpenVMA/security) when private vulnerability reporting is enabled.
+Please report authentication bypasses, access-control failures, credential exposure and similar issues privately. Use GitHub's **Report a vulnerability** entry on the [Security tab](https://github.com/WowCoder/VideoX/security) when private vulnerability reporting is enabled.
 
 If that entry is unavailable, open an issue asking the maintainer to provide a private reporting channel. Include only the affected version and a broad category; do not include an exploit, personal data, credentials or private URLs in a public issue.
 
