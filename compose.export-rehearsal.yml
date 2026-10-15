@@ -1,19 +1,19 @@
-name: openvma-export-rehearsal
+name: videox-export-rehearsal
 
 services:
   rehearsal-db:
     image: pgvector/pgvector:pg16
     restart: "no"
     environment:
-      POSTGRES_USER: openvma_export_rehearsal
-      POSTGRES_PASSWORD: openvma_export_rehearsal_only
-      POSTGRES_DB: openvma_export_rehearsal
+      POSTGRES_USER: videox_export_rehearsal
+      POSTGRES_PASSWORD: videox_export_rehearsal_only
+      POSTGRES_DB: videox_export_rehearsal
     ports:
       - "127.0.0.1:55433:5432"
     tmpfs:
       - /var/lib/postgresql/data:size=2g,mode=0700
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openvma_export_rehearsal -d openvma_export_rehearsal"]
+      test: ["CMD-SHELL", "pg_isready -U videox_export_rehearsal -d videox_export_rehearsal"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -36,8 +36,8 @@ services:
     image: minio/minio:latest
     restart: "no"
     environment:
-      MINIO_ROOT_USER: openvma_export_rehearsal
-      MINIO_ROOT_PASSWORD: openvma_export_rehearsal_only
+      MINIO_ROOT_USER: videox_export_rehearsal
+      MINIO_ROOT_PASSWORD: videox_export_rehearsal_only
     command: server /data --console-address ":9001"
     ports:
       - "127.0.0.1:59010:9000"

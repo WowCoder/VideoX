@@ -1,8 +1,8 @@
 const BRAND_BASE = `${import.meta.env.BASE_URL}branding/`;
-const WORDMARK_DARK = `${BRAND_BASE}openvma-wordmark-minimal-dark.svg`;
-const WORDMARK_LIGHT = `${BRAND_BASE}openvma-wordmark-minimal-light.svg`;
-const MARK_DARK = `${BRAND_BASE}openvma-mark-minimal-dark.svg`;
-const MARK_LIGHT = `${BRAND_BASE}openvma-mark-minimal-light.svg`;
+const WORDMARK_DARK = `${BRAND_BASE}videox-wordmark-minimal-dark.svg`;
+const WORDMARK_LIGHT = `${BRAND_BASE}videox-wordmark-minimal-light.svg`;
+const MARK_DARK = `${BRAND_BASE}videox-mark-minimal-dark.svg`;
+const MARK_LIGHT = `${BRAND_BASE}videox-mark-minimal-light.svg`;
 
 const BRAND_ASSETS = {
   wordmark: { dark: WORDMARK_DARK, light: WORDMARK_LIGHT },
@@ -29,16 +29,16 @@ export function BrandLogo({
   const isWordmark = variant === "wordmark";
   return (
     <span
-      className={`openvma-brand openvma-brand--${variant} ${className}`.trim()}
+      className={`videox-brand videox-brand--${variant} ${className}`.trim()}
       aria-hidden={decorative || undefined}
     >
       <img
-        className={isWordmark ? "openvma-brand-wordmark" : "openvma-brand-mark"}
+        className={isWordmark ? "videox-brand-wordmark" : "videox-brand-mark"}
         src={BRAND_ASSETS[variant][tone]}
-        width={isWordmark ? 508 : 100}
+        width={isWordmark ? 448 : 100}
         height={100}
         style={isWordmark ? { height, width: "auto" } : { width: size, height: size }}
-        alt={decorative ? "" : "OpenVMA"}
+        alt={decorative ? "" : "VideoX"}
         draggable="false"
       />
     </span>

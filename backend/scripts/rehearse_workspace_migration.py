@@ -126,7 +126,7 @@ def _restore_dump(
                 "--no-owner",
                 "--no-privileges",
                 "--username",
-                "openvma_rehearsal",
+                "videox_rehearsal",
                 "--dbname",
                 target.database_name,
             ),
@@ -250,11 +250,11 @@ def main() -> None:
     parser.add_argument(
         "--confirm-database",
         required=True,
-        help="必须逐字填写目标数据库名，例如 openvma_rehearsal_021",
+        help="必须逐字填写目标数据库名，例如 videox_rehearsal_021",
     )
     parser.add_argument(
         "--report-dir",
-        default="/tmp/openvma-migration-rehearsal",
+        default="/tmp/videox-migration-rehearsal",
         help="迁移前后 JSON 报告目录",
     )
     parser.add_argument(

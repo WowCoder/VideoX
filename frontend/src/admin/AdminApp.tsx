@@ -149,7 +149,7 @@ function Login({ onLogin }: { onLogin: (admin: AdminProfile) => void }) {
     finally { setBusy(false); }
   };
   return <main className="admin-login"><div className="admin-login-card">
-    <div className="admin-login-brand"><img src="/favicon.svg" alt=""/><span>OpenVMA</span></div>
+    <div className="admin-login-brand"><img src="/favicon.svg" alt=""/><span>VideoX</span></div>
     <div className="admin-login-heading"><p className="eyebrow">SECURE ADMIN</p><h1>登录运营后台</h1><p>使用独立管理员账号、密码和动态验证码继续。</p></div>
     <form onSubmit={submit}>
       <label>管理员邮箱<input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required/></label>
@@ -385,7 +385,7 @@ function Pricing({ admin }: { admin: AdminProfile }) {
   };
   const createDraft = async () => {
     const source = catalogs.data?.items.find((item) => item.status === "published")?.id;
-    const key = `openvma-${new Date().toISOString().replaceAll("-", "").replaceAll(":", "").replaceAll("T", "").replaceAll("Z", "").replaceAll(".", "").slice(0, 14)}`;
+    const key = `videox-${new Date().toISOString().replaceAll("-", "").replaceAll(":", "").replaceAll("T", "").replaceAll("Z", "").replaceAll(".", "").slice(0, 14)}`;
     const created = await api<Data>("/api/admin/billing/catalogs", {
       method: "POST",
       headers: { "Idempotency-Key": crypto.randomUUID() },
@@ -567,7 +567,7 @@ function AdminRoot() {
   }, [admin, view, selected]);
   if (booting) return <div className="admin-boot"><LoaderCircle className="spin"/><span>正在恢复安全会话</span></div>;
   if (!admin) return <Login onLogin={setAdmin}/>;
-  return <div className="admin-layout"><aside className="admin-sidebar"><div className="sidebar-brand"><img className="admin-brand-mark small" src="/favicon.svg" alt=""/><div><strong>OpenVMA</strong><span>运营后台</span></div></div><span className="sidebar-section-label">管理</span><nav aria-label="运营后台导航">{NAV.map((item) => { const Icon = item.icon; return <button type="button" className={view === item.id ? "active" : ""} key={item.id} onClick={() => navigate(item.id)}><Icon size={18}/>{item.label}</button>; })}</nav><div className="sidebar-footer"><div><span className="admin-avatar">{admin.name.slice(0, 1)}</span><span><strong>{admin.name}</strong><small>{ROLE_NAMES[admin.role] || admin.role}</small></span></div><button type="button" aria-label="退出运营后台" title="退出" onClick={async () => { await logoutAdmin(); setAdmin(null); }}><LogOut size={18}/></button></div></aside><main className="admin-main"><header className="admin-topbar"><div className="topbar-context"><span>运营控制台</span><div className="environment-banner"><Activity size={13}/>{location.hostname.includes("localhost") ? "开发环境" : "生产环境"}</div></div><GlobalSearch onOpen={openSearchResult}/></header><div className="admin-content">{content}</div></main></div>;
+  return <div className="admin-layout"><aside className="admin-sidebar"><div className="sidebar-brand"><img className="admin-brand-mark small" src="/favicon.svg" alt=""/><div><strong>VideoX</strong><span>运营后台</span></div></div><span className="sidebar-section-label">管理</span><nav aria-label="运营后台导航">{NAV.map((item) => { const Icon = item.icon; return <button type="button" className={view === item.id ? "active" : ""} key={item.id} onClick={() => navigate(item.id)}><Icon size={18}/>{item.label}</button>; })}</nav><div className="sidebar-footer"><div><span className="admin-avatar">{admin.name.slice(0, 1)}</span><span><strong>{admin.name}</strong><small>{ROLE_NAMES[admin.role] || admin.role}</small></span></div><button type="button" aria-label="退出运营后台" title="退出" onClick={async () => { await logoutAdmin(); setAdmin(null); }}><LogOut size={18}/></button></div></aside><main className="admin-main"><header className="admin-topbar"><div className="topbar-context"><span>运营控制台</span><div className="environment-banner"><Activity size={13}/>{location.hostname.includes("localhost") ? "开发环境" : "生产环境"}</div></div><GlobalSearch onOpen={openSearchResult}/></header><div className="admin-content">{content}</div></main></div>;
 }
 
 export default function AdminApp() {

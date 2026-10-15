@@ -1,19 +1,21 @@
+name: videox
+
 services:
   # ── PostgreSQL + pgvector ──
   db:
     image: pgvector/pgvector:pg16
-    container_name: openvma-db
+    container_name: videox-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: openvma
-      POSTGRES_PASSWORD: openvma_dev
-      POSTGRES_DB: openvma
+      POSTGRES_USER: videox
+      POSTGRES_PASSWORD: videox_dev
+      POSTGRES_DB: videox
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - openvma_pgdata:/var/lib/postgresql/data
+      - videox_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openvma"]
+      test: ["CMD-SHELL", "pg_isready -U videox"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,12 +23,12 @@ services:
   # ── Redis（Celery broker + WebSocket）──
   redis:
     image: redis:7-alpine
-    container_name: openvma-redis
+    container_name: videox-redis
     restart: unless-stopped
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
-      - openvma_redisdata:/data
+      - videox_redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -36,16 +38,16 @@ services:
   # ── MinIO（S3 兼容对象存储）──
   minio:
     image: minio/minio:latest
-    container_name: openvma-minio
+    container_name: videox-minio
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: openvma
-      MINIO_ROOT_PASSWORD: openvma_dev
+      MINIO_ROOT_USER: videox
+      MINIO_ROOT_PASSWORD: videox_dev
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
     volumes:
-      - openvma_miniodata:/data
+      - videox_miniodata:/data
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
@@ -58,7 +60,7 @@ services:
     profiles: ["local-ai"]
     build:
       context: ./local-ai/embedding
-    container_name: openvma-local-embedding
+    container_name: videox-local-embedding
     restart: unless-stopped
     environment:
       EMBEDDING_MODEL: BAAI/bge-m3
@@ -71,8 +73,8 @@ services:
     ports:
       - "127.0.0.1:8001:8000"
     volumes:
-      - openvma_huggingface_models:/models/huggingface
-      - openvma_modelscope_models:/models/modelscope
+      - videox_huggingface_models:/models/huggingface
+      - videox_modelscope_models:/models/modelscope
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -85,7 +87,7 @@ services:
     profiles: ["local-ai"]
     build:
       context: ./local-ai/reranker
-    container_name: openvma-local-reranker
+    container_name: videox-local-reranker
     restart: unless-stopped
     environment:
       RERANK_MODEL: BAAI/bge-reranker-v2-m3
@@ -97,8 +99,8 @@ services:
     ports:
       - "127.0.0.1:8002:8000"
     volumes:
-      - openvma_huggingface_models:/models/huggingface
-      - openvma_modelscope_models:/models/modelscope
+      - videox_huggingface_models:/models/huggingface
+      - videox_modelscope_models:/models/modelscope
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -111,7 +113,7 @@ services:
     profiles: ["local-ai"]
     build:
       context: ./local-ai/asr
-    container_name: openvma-local-asr
+    container_name: videox-local-asr
     restart: unless-stopped
     environment:
       MODEL_DEVICE: ${LOCAL_AI_DEVICE:-cpu}
@@ -120,7 +122,7 @@ services:
     ports:
       - "127.0.0.1:8003:8000"
     volumes:
-      - openvma_modelscope_models:/models/modelscope
+      - videox_modelscope_models:/models/modelscope
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -133,7 +135,7 @@ services:
     profiles: ["local-ai"]
     build:
       context: ./local-ai/ocr
-    container_name: openvma-local-ocr
+    container_name: videox-local-ocr
     restart: unless-stopped
     environment:
       OCR_MODEL: PP-OCRv4-ONNX
@@ -152,7 +154,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: openvma-backend
+    container_name: videox-backend
     restart: unless-stopped
     depends_on:
       db:
@@ -163,9 +165,9 @@ services:
         condition: service_healthy
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      DATABASE_URL: postgresql+asyncpg://openvma:openvma_dev@db:5432/openvma
+      DATABASE_URL: postgresql+asyncpg://videox:videox_dev@db:5432/videox
       REDIS_URL: redis://redis:6379/0
-      CELERY_TASK_DEFAULT_QUEUE: openvma-docker
+      CELERY_TASK_DEFAULT_QUEUE: videox-docker
       VIDEO_BATCH_MAX_SHOTS: ${VIDEO_BATCH_MAX_SHOTS:-2000}
       VIDEO_QUEUE_MAX_PER_USER: ${VIDEO_QUEUE_MAX_PER_USER:-4000}
       VIDEO_QUEUE_MAX_PER_PROJECT: ${VIDEO_QUEUE_MAX_PER_PROJECT:-2000}
@@ -182,9 +184,9 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
       MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-false}
-      MINIO_ACCESS_KEY: openvma
-      MINIO_SECRET_KEY: openvma_dev
-      MINIO_BUCKET: openvma-media
+      MINIO_ACCESS_KEY: videox
+      MINIO_SECRET_KEY: videox_dev
+      MINIO_BUCKET: videox-media
       MAX_UPLOAD_SIZE_GB: ${MAX_UPLOAD_SIZE_GB:-1}
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-}
@@ -193,7 +195,7 @@ services:
       ADMIN_SESSION_EXPIRE_DAYS: ${ADMIN_SESSION_EXPIRE_DAYS:-7}
       ADMIN_LOGIN_MAX_ATTEMPTS: ${ADMIN_LOGIN_MAX_ATTEMPTS:-5}
       ADMIN_LOGIN_LOCK_MINUTES: ${ADMIN_LOGIN_LOCK_MINUTES:-15}
-      ADMIN_REFRESH_COOKIE_NAME: ${ADMIN_REFRESH_COOKIE_NAME:-openvma_admin_refresh}
+      ADMIN_REFRESH_COOKIE_NAME: ${ADMIN_REFRESH_COOKIE_NAME:-videox_admin_refresh}
       SYSTEM_METRICS_ENABLED: ${SYSTEM_METRICS_ENABLED:-true}
       SYSTEM_METRICS_NODE_NAME: ${SYSTEM_METRICS_NODE_NAME:-primary}
       SYSTEM_METRICS_DISK_PATH: ${SYSTEM_METRICS_DISK_PATH:-/}
@@ -288,7 +290,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: openvma-celery
+    container_name: videox-celery
     restart: unless-stopped
     depends_on:
       db:
@@ -298,9 +300,9 @@ services:
       minio:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://openvma:openvma_dev@db:5432/openvma
+      DATABASE_URL: postgresql+asyncpg://videox:videox_dev@db:5432/videox
       REDIS_URL: redis://redis:6379/0
-      CELERY_TASK_DEFAULT_QUEUE: openvma-docker
+      CELERY_TASK_DEFAULT_QUEUE: videox-docker
       VIDEO_INFLIGHT_MAX_PER_USER: ${VIDEO_INFLIGHT_MAX_PER_USER:-2}
       VIDEO_INFLIGHT_MAX_PER_PROJECT: ${VIDEO_INFLIGHT_MAX_PER_PROJECT:-2}
       VIDEO_INFLIGHT_MAX_GLOBAL: ${VIDEO_INFLIGHT_MAX_GLOBAL:-4}
@@ -318,9 +320,9 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
       MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-false}
-      MINIO_ACCESS_KEY: openvma
-      MINIO_SECRET_KEY: openvma_dev
-      MINIO_BUCKET: openvma-media
+      MINIO_ACCESS_KEY: videox
+      MINIO_SECRET_KEY: videox_dev
+      MINIO_BUCKET: videox-media
       AI_EMBEDDING_PROVIDER: ${AI_EMBEDDING_PROVIDER:-local}
       AI_RERANK_PROVIDER: ${AI_RERANK_PROVIDER:-local}
       AI_ASR_PROVIDER: ${AI_ASR_PROVIDER:-local}
@@ -384,13 +386,13 @@ services:
       - ./backend:/app
     command: >-
       celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4
-      --queues=openvma-docker,openvma-docker.control,openvma-docker.short-ai,openvma-docker.video,openvma-docker.media,openvma-docker.export
+      --queues=videox-docker,videox-docker.control,videox-docker.short-ai,videox-docker.video,videox-docker.media,videox-docker.export
 
   celery-beat:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: openvma-celery-beat
+    container_name: videox-celery-beat
     restart: unless-stopped
     depends_on:
       db:
@@ -398,26 +400,26 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://openvma:openvma_dev@db:5432/openvma
+      DATABASE_URL: postgresql+asyncpg://videox:videox_dev@db:5432/videox
       REDIS_URL: redis://redis:6379/0
-      CELERY_TASK_DEFAULT_QUEUE: openvma-docker
+      CELERY_TASK_DEFAULT_QUEUE: videox-docker
       VIDEO_DISPATCH_INTERVAL_SECONDS: ${VIDEO_DISPATCH_INTERVAL_SECONDS:-5}
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
       MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-false}
-      MINIO_ACCESS_KEY: openvma
-      MINIO_SECRET_KEY: openvma_dev
-      MINIO_BUCKET: openvma-media
+      MINIO_ACCESS_KEY: videox
+      MINIO_SECRET_KEY: videox_dev
+      MINIO_BUCKET: videox-media
     volumes:
       - ./backend:/app
-    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule=/tmp/openvma-celerybeat-schedule
+    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule=/tmp/videox-celerybeat-schedule
 
   # ── 前端 dev server ──
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: openvma-frontend
+    container_name: videox-frontend
     restart: unless-stopped
     environment:
       API_PROXY_TARGET: http://backend:8000
@@ -429,8 +431,8 @@ services:
     command: npm run dev -- --force
 
 volumes:
-  openvma_pgdata:
-  openvma_redisdata:
-  openvma_miniodata:
-  openvma_huggingface_models:
-  openvma_modelscope_models:
+  videox_pgdata:
+  videox_redisdata:
+  videox_miniodata:
+  videox_huggingface_models:
+  videox_modelscope_models:

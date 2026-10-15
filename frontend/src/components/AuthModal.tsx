@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - 登录 / 注册弹窗
+// VideoX - 登录 / 注册弹窗
 // 两种模式：login / register
 // 两种方式：手机验证码 / 微信扫码
 // ──────────────────────────────────────────────
@@ -125,7 +125,7 @@ export function AuthModal() {
         const user = mode === "register"
           ? await register({ email: email.trim(), password, name: name.trim() })
           : await login({ email: email.trim(), password });
-        notify(mode === "register" ? "注册成功，欢迎使用 OpenVMA" : `登录成功，欢迎回来 ${user.name}`);
+        notify(mode === "register" ? "注册成功，欢迎使用 VideoX" : `登录成功，欢迎回来 ${user.name}`);
         closeAuth();
         if (!location.pathname.startsWith("/invite/")) navigate("/workspace");
       } catch (err) {
@@ -148,7 +148,7 @@ export function AuthModal() {
         );
         notify(
           mode === "register"
-            ? "注册成功，欢迎使用 OpenVMA"
+            ? "注册成功，欢迎使用 VideoX"
             : `登录成功，欢迎回来 ${user.name}`,
         );
         closeAuth();
@@ -177,7 +177,7 @@ export function AuthModal() {
           <div>
             <div className="flex items-center gap-2.5">
               <img src="/favicon.svg" alt="" className="h-9 w-9 rounded-lg" />
-              <span className="text-lg font-semibold tracking-wide">OpenVMA</span>
+              <span className="text-lg font-semibold tracking-wide">VideoX</span>
             </div>
             <h2 className="mt-10 text-2xl font-bold leading-snug">
               把脚本和素材交给 AI，<br />几分钟得到一版可改的初剪。

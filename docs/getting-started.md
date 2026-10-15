@@ -88,15 +88,15 @@ API、Alembic、Worker 的 Settings 读取仓库根 `.env`，不依赖启动时�
 
 ```bash
 celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 \
-  --queues=openvma-local,openvma-local.control,openvma-local.short-ai,openvma-local.video,openvma-local.media,openvma-local.export
+  --queues=videox-local,videox-local.control,videox-local.short-ai,videox-local.video,videox-local.media,videox-local.export
 ```
 
 ```bash
 celery -A app.tasks.celery_app beat --loglevel=info \
-  --schedule=/tmp/openvma-local-celerybeat-schedule
+  --schedule=/tmp/videox-local-celerybeat-schedule
 ```
 
-上述队列名对应默认 `CELERY_TASK_DEFAULT_QUEUE=openvma-local`；若修改基名或显式队列配置，须同步 `--queues`。容器使用 `openvma-docker` 及其后缀队列，宿主机 Worker 不应监听容器队列。只监听默认队列会漏掉媒体、匹配、视频与导出任务。参见 [Celery 路由](../backend/app/tasks/celery_app.py)。
+上述队列名对应默认 `CELERY_TASK_DEFAULT_QUEUE=videox-local`；若修改基名或显式队列配置，须同步 `--queues`。容器使用 `videox-docker` 及其后缀队列，宿主机 Worker 不应监听容器队列。只监听默认队列会漏掉媒体、匹配、视频与导出任务。参见 [Celery 路由](../backend/app/tasks/celery_app.py)。
 
 前端终端：
 

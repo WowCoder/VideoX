@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - 认证 API
+// VideoX - 认证 API
 // 后端返回 { user, access_token, refresh_token }
 // 前端转换为 { user, tokens: { accessToken, refreshToken } }
 // ──────────────────────────────────────────────

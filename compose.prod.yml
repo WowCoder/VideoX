@@ -1,18 +1,18 @@
-name: openvma-production
+name: videox-production
 
 x-app-image: &app-image
-  image: ${OPENVMA_BACKEND_IMAGE:-openvma-backend}:${OPENVMA_IMAGE_TAG:-latest}
+  image: ${VIDEOX_BACKEND_IMAGE:-videox-backend}:${VIDEOX_IMAGE_TAG:-latest}
   build:
     context: ./backend
     dockerfile: Dockerfile
     args:
-      OPENVMA_APT_MIRROR: ${OPENVMA_APT_MIRROR:-}
-      OPENVMA_PIP_INDEX_URL: ${OPENVMA_PIP_INDEX_URL:-}
+      VIDEOX_APT_MIRROR: ${VIDEOX_APT_MIRROR:-}
+      VIDEOX_PIP_INDEX_URL: ${VIDEOX_PIP_INDEX_URL:-}
 
 x-app-runtime: &app-runtime
   <<: *app-image
   env_file:
-    - ${OPENVMA_ENV_FILE:-.env.production}
+    - ${VIDEOX_ENV_FILE:-.env.production}
   networks:
     - private
   security_opt:
@@ -23,11 +23,11 @@ services:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-openvma}
+      POSTGRES_USER: ${POSTGRES_USER:-videox}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-      POSTGRES_DB: ${POSTGRES_DB:-openvma}
+      POSTGRES_DB: ${POSTGRES_DB:-videox}
     volumes:
-      - openvma_pgdata:/var/lib/postgresql/data
+      - videox_pgdata:/var/lib/postgresql/data
     networks:
       - private
     security_opt:
@@ -46,7 +46,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
     volumes:
-      - openvma_redisdata:/data
+      - videox_redisdata:/data
     networks:
       - private
     security_opt:
@@ -65,7 +65,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
     command: server /data --console-address ":9001"
     volumes:
-      - openvma_miniodata:/data
+      - videox_miniodata:/data
     networks:
       - private
     security_opt:
@@ -86,12 +86,12 @@ services:
     environment:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
-      MINIO_BUCKET: ${MINIO_BUCKET:-openvma-media}
+      MINIO_BUCKET: ${MINIO_BUCKET:-videox-media}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        mc alias set openvma http://minio:9000 "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}" &&
-        mc mb --ignore-existing "openvma/$${MINIO_BUCKET}"
+        mc alias set videox http://minio:9000 "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}" &&
+        mc mb --ignore-existing "videox/$${MINIO_BUCKET}"
     networks:
       - private
     security_opt:
@@ -143,7 +143,7 @@ services:
     command:
       - /bin/sh
       - -c
-      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_SHORT_AI_CONCURRENCY:-2}" --queues="$${CELERY_SHORT_AI_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.short-ai},$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}"
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_SHORT_AI_CONCURRENCY:-2}" --queues="$${CELERY_SHORT_AI_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-videox-production}.short-ai},$${CELERY_TASK_DEFAULT_QUEUE:-videox-production}"
     stop_grace_period: 2m
     volumes:
       - ${HOST_METRICS_PATH:-./.host-metrics}:/host-metrics-disk:ro
@@ -159,7 +159,7 @@ services:
     command:
       - /bin/sh
       - -c
-      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --queues="$${CELERY_CONTROL_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.control}"
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --queues="$${CELERY_CONTROL_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-videox-production}.control}"
 
   celery-video:
     <<: *app-runtime
@@ -174,7 +174,7 @@ services:
     command:
       - /bin/sh
       - -c
-      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_VIDEO_CONCURRENCY:-2}" --queues="$${CELERY_VIDEO_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.video}"
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_VIDEO_CONCURRENCY:-2}" --queues="$${CELERY_VIDEO_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-videox-production}.video}"
     stop_grace_period: 2m
 
   celery-media:
@@ -190,7 +190,7 @@ services:
     command:
       - /bin/sh
       - -c
-      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_MEDIA_CONCURRENCY:-1}" --queues="$${CELERY_MEDIA_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.media}"
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_MEDIA_CONCURRENCY:-1}" --queues="$${CELERY_MEDIA_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-videox-production}.media}"
     stop_grace_period: 2m
 
   celery-export:
@@ -206,7 +206,7 @@ services:
     command:
       - /bin/sh
       - -c
-      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_EXPORT_CONCURRENCY:-1}" --queues="$${CELERY_EXPORT_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-openvma-production}.export}"
+      - exec celery -A app.tasks.celery_app worker --loglevel=info --concurrency="$${CELERY_EXPORT_CONCURRENCY:-1}" --queues="$${CELERY_EXPORT_QUEUE:-$${CELERY_TASK_DEFAULT_QUEUE:-videox-production}.export}"
     stop_grace_period: 2m
 
   celery-beat:
@@ -217,15 +217,15 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-    command: ["celery", "-A", "app.tasks.celery_app", "beat", "--loglevel=info", "--schedule=/tmp/openvma-celerybeat-schedule"]
+    command: ["celery", "-A", "app.tasks.celery_app", "beat", "--loglevel=info", "--schedule=/tmp/videox-celerybeat-schedule"]
 
   gateway:
-    image: ${OPENVMA_GATEWAY_IMAGE:-openvma-gateway}:${OPENVMA_IMAGE_TAG:-latest}
+    image: ${VIDEOX_GATEWAY_IMAGE:-videox-gateway}:${VIDEOX_IMAGE_TAG:-latest}
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
       args:
-        OPENVMA_NPM_REGISTRY: ${OPENVMA_NPM_REGISTRY:-https://registry.npmjs.org}
+        VIDEOX_NPM_REGISTRY: ${VIDEOX_NPM_REGISTRY:-https://registry.npmjs.org}
     restart: unless-stopped
     depends_on:
       backend:
@@ -248,12 +248,12 @@ services:
       retries: 5
 
   admin-gateway:
-    image: ${OPENVMA_ADMIN_GATEWAY_IMAGE:-openvma-admin-gateway}:${OPENVMA_IMAGE_TAG:-latest}
+    image: ${VIDEOX_ADMIN_GATEWAY_IMAGE:-videox-admin-gateway}:${VIDEOX_IMAGE_TAG:-latest}
     build:
       context: ./frontend
       dockerfile: Dockerfile.admin
       args:
-        OPENVMA_NPM_REGISTRY: ${OPENVMA_NPM_REGISTRY:-https://registry.npmjs.org}
+        VIDEOX_NPM_REGISTRY: ${VIDEOX_NPM_REGISTRY:-https://registry.npmjs.org}
     restart: unless-stopped
     depends_on:
       backend:
@@ -274,7 +274,7 @@ services:
 
   local-embedding:
     profiles: ["local-ai"]
-    image: ${OPENVMA_EMBEDDING_IMAGE:-openvma-local-embedding}:${OPENVMA_IMAGE_TAG:-latest}
+    image: ${VIDEOX_EMBEDDING_IMAGE:-videox-local-embedding}:${VIDEOX_IMAGE_TAG:-latest}
     build:
       context: ./local-ai/embedding
     restart: unless-stopped
@@ -287,8 +287,8 @@ services:
       MODEL_SOURCE: ${LOCAL_MODEL_SOURCE:-modelscope}
       MODELSCOPE_CACHE: /models/modelscope
     volumes:
-      - openvma_huggingface_models:/models/huggingface
-      - openvma_modelscope_models:/models/modelscope
+      - videox_huggingface_models:/models/huggingface
+      - videox_modelscope_models:/models/modelscope
     networks:
       - private
     security_opt:
@@ -302,7 +302,7 @@ services:
 
   local-reranker:
     profiles: ["local-ai"]
-    image: ${OPENVMA_RERANKER_IMAGE:-openvma-local-reranker}:${OPENVMA_IMAGE_TAG:-latest}
+    image: ${VIDEOX_RERANKER_IMAGE:-videox-local-reranker}:${VIDEOX_IMAGE_TAG:-latest}
     build:
       context: ./local-ai/reranker
     restart: unless-stopped
@@ -314,8 +314,8 @@ services:
       MODEL_SOURCE: ${LOCAL_MODEL_SOURCE:-modelscope}
       MODELSCOPE_CACHE: /models/modelscope
     volumes:
-      - openvma_huggingface_models:/models/huggingface
-      - openvma_modelscope_models:/models/modelscope
+      - videox_huggingface_models:/models/huggingface
+      - videox_modelscope_models:/models/modelscope
     networks:
       - private
     security_opt:
@@ -329,7 +329,7 @@ services:
 
   local-asr:
     profiles: ["local-ai"]
-    image: ${OPENVMA_ASR_IMAGE:-openvma-local-asr}:${OPENVMA_IMAGE_TAG:-latest}
+    image: ${VIDEOX_ASR_IMAGE:-videox-local-asr}:${VIDEOX_IMAGE_TAG:-latest}
     build:
       context: ./local-ai/asr
     restart: unless-stopped
@@ -338,7 +338,7 @@ services:
       MODEL_DEVICE: ${LOCAL_AI_DEVICE:-cpu}
       MODELSCOPE_CACHE: /models/modelscope
     volumes:
-      - openvma_modelscope_models:/models/modelscope
+      - videox_modelscope_models:/models/modelscope
     networks:
       - private
     security_opt:
@@ -352,7 +352,7 @@ services:
 
   local-ocr:
     profiles: ["local-ai"]
-    image: ${OPENVMA_OCR_IMAGE:-openvma-local-ocr}:${OPENVMA_IMAGE_TAG:-latest}
+    image: ${VIDEOX_OCR_IMAGE:-videox-local-ocr}:${VIDEOX_IMAGE_TAG:-latest}
     build:
       context: ./local-ai/ocr
     restart: unless-stopped
@@ -375,8 +375,8 @@ networks:
     driver: bridge
 
 volumes:
-  openvma_pgdata:
-  openvma_redisdata:
-  openvma_miniodata:
-  openvma_huggingface_models:
-  openvma_modelscope_models:
+  videox_pgdata:
+  videox_redisdata:
+  videox_miniodata:
+  videox_huggingface_models:
+  videox_modelscope_models:

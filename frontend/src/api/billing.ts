@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - 会员与账单 API
+// VideoX - 会员与账单 API
 // 后端返回 snake_case，前端映射为 camelCase
 // ──────────────────────────────────────────────
 
@@ -565,7 +565,7 @@ export async function downloadInvoiceApplication(invoiceId: string): Promise<voi
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = filename ?? `OpenVMA-开票申请单-${invoiceId}.pdf`;
+  anchor.download = filename ?? `VideoX-开票申请单-${invoiceId}.pdf`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();

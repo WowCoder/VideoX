@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - 帮助中心
+// VideoX - 帮助中心
 // 分类导航 + 文章列表 + FAQ
 // ──────────────────────────────────────────────
 
@@ -139,7 +139,7 @@ const helpFaqs: [string, string][] = [
   ],
   [
     "AI 生成的画面会和原有素材不一致吗？",
-    "OpenVMA 会引用脚本中锁定的人物、物品、空间、画幅与色彩风格，让 AI 补齐镜头尽量保持视觉连续。你仍可在剪辑工作区替换任何不满意的镜头。",
+    "VideoX 会引用脚本中锁定的人物、物品、空间、画幅与色彩风格，让 AI 补齐镜头尽量保持视觉连续。你仍可在剪辑工作区替换任何不满意的镜头。",
   ],
   [
     "支持哪些导出格式？",
@@ -174,7 +174,7 @@ export function HelpCenterView() {
       {/* 页头 */}
       <header className="mb-6">
         <h1 className="text-2xl font-bold text-text">帮助中心</h1>
-        <p className="mt-1.5 text-sm text-muted">了解 OpenVMA 的功能与使用流程</p>
+        <p className="mt-1.5 text-sm text-muted">了解 VideoX 的功能与使用流程</p>
       </header>
 
       {/* 搜索 */}

@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="OpenVMA API",
+    title="VideoX API",
     description="把脚本和素材交给 AI，几分钟得到一版可改的初剪。",
     version="3.0.0",
     lifespan=lifespan,

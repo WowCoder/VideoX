@@ -37,6 +37,8 @@ from app.services.auth_identities import (  # noqa: E402
 
 
 APPLY_CONFIRMATION = "BIND_PRODUCTION_PHONE_IDENTITIES"
+# VideoX guards both historical and current phone placeholder addresses before binding.
+PHONE_PLACEHOLDER_EMAIL_PATTERN = r"^[0-9]{11}@(openvma|videox)\.cn$"
 ENTITY_SPECS: dict[str, str | None] = {
     "users": None,
     "projects": "owner_id",
@@ -289,7 +291,8 @@ async def _snapshot(session) -> dict[str, Any]:
         )
     legacy_phone_users = int(
         await session.scalar(
-            text("SELECT count(*) FROM users WHERE email ~ '^[0-9]{11}@openvma\\.cn$'")
+            text("SELECT count(*) FROM users WHERE email ~ :phone_placeholder_pattern"),
+            {"phone_placeholder_pattern": PHONE_PLACEHOLDER_EMAIL_PATTERN},
         )
         or 0
     )
@@ -479,7 +482,8 @@ async def bind(args: argparse.Namespace) -> int:
                 )
             legacy_phone_users = int(
                 await session.scalar(
-                    text("SELECT count(*) FROM users WHERE email ~ '^[0-9]{11}@openvma\\.cn$'")
+                    text("SELECT count(*) FROM users WHERE email ~ :phone_placeholder_pattern"),
+                    {"phone_placeholder_pattern": PHONE_PLACEHOLDER_EMAIL_PATTERN},
                 )
                 or 0
             )
@@ -545,7 +549,7 @@ async def bind(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="OpenVMA 发布用户身份审计与手机号绑定")
+    parser = argparse.ArgumentParser(description="VideoX 发布用户身份审计与手机号绑定")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     audit_parser = subparsers.add_parser("audit", help="生成只读迁移审计报告")

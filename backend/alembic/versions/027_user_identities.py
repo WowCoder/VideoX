@@ -37,6 +37,7 @@ def upgrade() -> None:
     op.create_index("ix_user_identities_provider", "user_identities", ["provider"])
     op.create_index("ix_user_identities_user_id", "user_identities", ["user_id"])
 
+    # VideoX 保留历史伪邮箱域名匹配，确保旧账号仍迁移到相同的独立身份。
     # 兼容旧结构：普通邮箱保留密码；手机号和微信伪邮箱转换为独立身份。
     op.execute(
         """

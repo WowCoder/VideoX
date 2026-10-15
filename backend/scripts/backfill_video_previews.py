@@ -67,7 +67,7 @@ async def backfill(*, asset_id: str | None = None, limit: int | None = None, dry
             print(f"[{index}/{len(assets)}] 跳过 {asset.id}（状态已变化或素材已删除）")
             continue
         try:
-            with tempfile.TemporaryDirectory(prefix=f"openvma_preview_{asset.id}_") as temp_dir:
+            with tempfile.TemporaryDirectory(prefix=f"videox_preview_{asset.id}_") as temp_dir:
                 source_path = os.path.join(temp_dir, Path(asset.file_path or "source.mp4").name)
                 proxy_path = os.path.join(temp_dir, "preview.mp4")
                 await asyncio.to_thread(_download_from_minio, asset.file_path, source_path)

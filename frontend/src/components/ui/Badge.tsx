@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - Badge 标签组件
+// VideoX - Badge 标签组件
 // variant: default / success / warning / danger / info
 // ──────────────────────────────────────────────
 

@@ -186,7 +186,7 @@ function AuthPanel({
         if (!/^\d{4,8}$/.test(code)) throw new Error("请输入手机验证码");
         user = await loginWithPhone(phone, code);
       }
-      notify(isRegister ? "注册成功，欢迎使用 OpenVMA" : `登录成功，欢迎回来 ${user.name}`);
+      notify(isRegister ? "注册成功，欢迎使用 VideoX" : `登录成功，欢迎回来 ${user.name}`);
       navigate("/workspace", {
         replace: true,
         state: postAuthAction ? { postAuthAction } : undefined,
@@ -197,10 +197,10 @@ function AuthPanel({
   }
 
   const title = channel === "wechat"
-    ? `微信扫码${isRegister ? "注册" : "登录"} OpenVMA`
+    ? `微信扫码${isRegister ? "注册" : "登录"} VideoX`
     : channel === "email"
-      ? isRegister ? "使用邮箱创建 OpenVMA 工作区" : "使用邮箱登录 OpenVMA"
-      : isRegister ? "使用手机号创建 OpenVMA 工作区" : "使用手机号登录 OpenVMA";
+      ? isRegister ? "使用邮箱创建 VideoX 工作区" : "使用邮箱登录 VideoX"
+      : isRegister ? "使用手机号创建 VideoX 工作区" : "使用手机号登录 VideoX";
   const description = channel === "wechat"
     ? isRegister ? "使用微信扫一扫，确认后即可创建工作区。" : "使用微信扫一扫，在手机上确认登录。"
     : channel === "email"
@@ -214,7 +214,7 @@ function AuthPanel({
           {channel === "wechat" ? <MessageCircle size={19} fill="currentColor" /> : <Sparkles size={19} />}
         </span>
         <div>
-          <p>OpenVMA 账号</p>
+          <p>VideoX 账号</p>
           <h2 id="auth-modal-title">{title}</h2>
           <span>{description}</span>
         </div>
@@ -236,7 +236,7 @@ function AuthPanel({
           {wechatLoading ? <div className="auth-wechat-provider"><Loader2 className="is-spinning" size={34} /><span>正在连接微信开放平台…</span></div> : feedback?.type === "error" ? <div className="auth-wechat-provider is-error"><AlertCircle size={34} /><span>{feedback.message}</span></div> : <WechatQrCode />}
           <div className="auth-wechat-copy">
             <strong>打开微信完成授权</strong>
-            <p>{isRegister ? "确认后会自动创建 OpenVMA 账号。" : "请在微信中确认登录，本次授权链接短时间内有效。"}</p>
+            <p>{isRegister ? "确认后会自动创建 VideoX 账号。" : "请在微信中确认登录，本次授权链接短时间内有效。"}</p>
           </div>
           <button className="auth-wechat-submit" disabled={!wechatUrl || wechatLoading} onClick={() => wechatUrl && window.location.assign(wechatUrl)} type="button">
             {wechatLoading ? <Loader2 className="is-spinning" size={16} /> : <MessageCircle size={16} fill="currentColor" />}
@@ -300,16 +300,16 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
   return (
     <main className="auth-page">
       <header className="auth-page-header">
-        <button className="auth-page-brand" onClick={() => navigate("/")} aria-label="返回 OpenVMA 官网" type="button"><BrandLogo variant="wordmark" tone="dark" height={16} decorative /></button>
+        <button className="auth-page-brand" onClick={() => navigate("/")} aria-label="返回 VideoX 官网" type="button"><BrandLogo variant="wordmark" tone="dark" height={16} decorative /></button>
         <button className="auth-page-back" onClick={() => navigate("/")} type="button"><ArrowLeft size={15} />返回官网</button>
       </header>
 
       <section className="auth-page-layout">
         <div className="auth-page-intro">
-          <span className="auth-page-kicker">OPENVMA ACCOUNT</span>
+          <span className="auth-page-kicker">VIDEOX ACCOUNT</span>
           <h1>{isRegister ? "从第一段文字，\n开始第一支影片。" : "欢迎回来，\n继续完成你的影片。"}</h1>
-          <p>{isRegister ? "不需要先学会策划、分镜或剪辑。创建工作区后，把想表达的内容交给 OpenVMA。" : "你的项目、脚本、素材和生成记录都保留在同一个工作区中。"}</p>
-          <div className="auth-page-points" aria-label="OpenVMA 工作区能力">
+          <p>{isRegister ? "不需要先学会策划、分镜或剪辑。创建工作区后，把想表达的内容交给 VideoX。" : "你的项目、脚本、素材和生成记录都保留在同一个工作区中。"}</p>
+          <div className="auth-page-points" aria-label="VideoX 工作区能力">
             {AUTH_VALUE_POINTS.map(([Icon, title, description]) => <article key={title}><span><Icon size={17} /></span><div><strong>{title}</strong><small>{description}</small></div></article>)}
           </div>
           <small className="auth-page-note"><Check size={13} />项目自动保存，可随时回来继续。</small>
@@ -327,7 +327,7 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
         </div>
       </section>
 
-      <footer className="auth-page-footer"><span>© 2026 OpenVMA</span><nav aria-label="账号页底部链接"><a href="#terms">服务条款</a><a href="#privacy">隐私政策</a></nav></footer>
+      <footer className="auth-page-footer"><span>© 2026 VideoX</span><nav aria-label="账号页底部链接"><a href="#terms">服务条款</a><a href="#privacy">隐私政策</a></nav></footer>
     </main>
   );
 }

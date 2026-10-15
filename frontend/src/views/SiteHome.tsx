@@ -111,10 +111,10 @@ const OPEN_SOURCE_PROMISES = [
 ];
 
 const OPEN_SOURCE_FAQS: Array<[string, string]> = [
-  ["这是在线创作工具，还是项目展示页？", "这里介绍 OpenVMA 的创作流程。完整工作区需要自行部署，快速开始文档提供本地启动步骤。"],
+  ["这是在线创作工具，还是项目展示页？", "这里介绍 VideoX 的创作流程。完整工作区需要自行部署，快速开始文档提供本地启动步骤。"],
   ["没有 AI 服务也能开始吗？", "可以。默认配置关闭 AI 供应商；你仍可上传媒体、手动编辑脚本与分镜、选择素材并导出视频。"],
   ["需要准备什么环境？", "本地快速开始使用 Docker Engine 或 Docker Desktop，以及 Docker Compose。模型与生成服务可以在基础流程跑通后按需接入。"],
-  ["页面里的画面是真实生成结果吗？", "太空画面沿用官网原有的任务概念图与摄影参考，并非 OpenVMA 生成的成片。工作台是界面示意，播放按钮展示示意动画。"],
+  ["页面里的画面是真实生成结果吗？", "太空画面沿用官网原有的任务概念图与摄影参考，并非 VideoX 生成的成片。工作台是界面示意，播放按钮展示示意动画。"],
   ["可以参与开发或复用代码吗？", "可以。项目代码采用 MIT 许可，仓库提供贡献指南和架构文档。模型、外部服务与第三方素材遵循各自的许可。"],
 ];
 
@@ -164,7 +164,7 @@ function AccountArea({
     return (
       <button className="ltx-site-account" onClick={() => onEnterWorkspace("projects")} type="button">
         <span>{user?.initial || "U"}</span>
-        <div><strong>{user?.name || "OpenVMA 用户"}</strong><small>{membership?.name || "Free"} · 进入项目中心</small></div>
+        <div><strong>{user?.name || "VideoX 用户"}</strong><small>{membership?.name || "Free"} · 进入项目中心</small></div>
         <ArrowRight size={14} />
       </button>
     );
@@ -208,7 +208,7 @@ function ComposerPreview({ work, isOpenSource = false }: { work: ShowcaseWork; i
   }
 
   return (
-    <div className={`ltx-composer-frame ${playing ? "is-playing" : ""}`} aria-label="OpenVMA 文档式脚本编排工作台示意">
+    <div className={`ltx-composer-frame ${playing ? "is-playing" : ""}`} aria-label="VideoX 文档式脚本编排工作台示意">
       <header className="ltx-composer-topbar">
         <div><i /><strong>轨道档案：寻找第二个家园</strong></div>
         <span>{isOpenSource ? "界面示意 · 静态参考" : "已自动保存"}</span>
@@ -403,11 +403,11 @@ export function SiteHome({
   return (
     <main className="ltx-site">
       <a className="ltx-site-announcement" href={isOpenSource ? REPOSITORY : "#site-capabilities"}>
-        <span>{isOpenSource ? "OpenVMA · MIT 开源 · 在 GitHub 探索项目" : "OpenVMA 为第一次做视频的人而设计"}</span><ArrowRight size={16} />
+        <span>{isOpenSource ? "VideoX · MIT 开源 · 在 GitHub 探索项目" : "VideoX 为第一次做视频的人而设计"}</span><ArrowRight size={16} />
       </a>
 
       <header className={`ltx-site-header ${mobileNavOpen ? "is-menu-open" : ""}`}>
-        <button className="ltx-site-logo-button" onClick={goToSiteTop} aria-label="返回 OpenVMA 官网顶部" type="button">
+        <button className="ltx-site-logo-button" onClick={goToSiteTop} aria-label="返回 VideoX 官网顶部" type="button">
           <SiteBrand decorative />
         </button>
 
@@ -446,7 +446,7 @@ export function SiteHome({
         <div className="ltx-hero-content">
           <span className="ltx-kicker">{isOpenSource ? "开源视频创作 · AI 策划 · 文档编排" : "AI 策划 · AI 导演 · AI 剪辑"}</span>
           <h1 id="ltx-hero-title">只会写文档，<br />也能完成一支影片。</h1>
-          <p>{isOpenSource ? "把想法写成脚本，把素材组织成影片。OpenVMA 连接 AI 策划、分镜编辑和视频导出，让每一步都可以查看和修改。" : "你负责写下观点。OpenVMA 负责选题策划、影片导演和自动剪辑，把文章变成可以直接发布的视频。"}</p>
+          <p>{isOpenSource ? "把想法写成脚本，把素材组织成影片。VideoX 连接 AI 策划、分镜编辑和视频导出，让每一步都可以查看和修改。" : "你负责写下观点。VideoX 负责选题策划、影片导演和自动剪辑，把文章变成可以直接发布的视频。"}</p>
           <div className="ltx-hero-actions">
             <SiteAction href={isOpenSource ? GETTING_STARTED : undefined} className="ltx-site-button is-dark" onClick={() => startPath("ai-script")}>{isOpenSource ? "本地开始创作" : "写下第一个选题"}<ArrowRight size={17} /></SiteAction>
             <a className="ltx-site-button is-outline" href="#site-workflow">看看如何工作<Play size={15} /></a>
@@ -456,10 +456,10 @@ export function SiteHome({
 
         <figure className="ltx-hero-visual">
           <div><ShowcaseMedia work={heroWork} eager /></div>
-          <figcaption><span>{isOpenSource ? "SPACE STORY / 太空视觉参考" : "SPACE STORY / 电影级太空视觉参考"}</span><strong>{heroWork.title}</strong><small>{isOpenSource ? "任务概念图用于建立视觉方向，非 OpenVMA 生成结果。故事仍然从你的文字开始。" : "真实影像只负责建立方向，故事仍然从你的文字开始。"}</small></figcaption>
+          <figcaption><span>{isOpenSource ? "SPACE STORY / 太空视觉参考" : "SPACE STORY / 电影级太空视觉参考"}</span><strong>{heroWork.title}</strong><small>{isOpenSource ? "任务概念图用于建立视觉方向，非 VideoX 生成结果。故事仍然从你的文字开始。" : "真实影像只负责建立方向，故事仍然从你的文字开始。"}</small></figcaption>
         </figure>
 
-        <div className="ltx-hero-proof" aria-label="OpenVMA 创作前提">
+        <div className="ltx-hero-proof" aria-label="VideoX 创作前提">
           <span><strong>01</strong>给一个主题</span>
           <span><strong>02</strong>粘贴一篇文章</span>
           <span><strong>03</strong>{isOpenSource ? "确认素材，编排并导出" : "像改文档一样确认成片"}</span>
@@ -509,7 +509,7 @@ export function SiteHome({
       <section className="ltx-showcase ltx-site-section" id="site-showcase" aria-labelledby="ltx-showcase-title">
         <div className="ltx-section-heading is-split">
           <div><span>SPACE REFERENCES</span><h2 id="ltx-showcase-title">先看见方向，<br />再让故事发生。</h2></div>
-          <p>{isOpenSource ? "用构图和情绪表达视觉方向，再为镜头选择合适的素材。以下沿用官网的概念图与摄影参考，展示的是静态画面。" : "太空题材适合解释尺度、未知和未来。OpenVMA 会从镜头参考中提取构图与情绪，而不是堆叠无关图片。"}</p>
+          <p>{isOpenSource ? "用构图和情绪表达视觉方向，再为镜头选择合适的素材。以下沿用官网的概念图与摄影参考，展示的是静态画面。" : "太空题材适合解释尺度、未知和未来。VideoX 会从镜头参考中提取构图与情绪，而不是堆叠无关图片。"}</p>
         </div>
 
         <div className="ltx-showcase-grid">
@@ -574,7 +574,7 @@ export function SiteHome({
       <section className="ltx-final-cta">
         <span>YOUR FIRST FILM</span>
         <h2>不用先成为剪辑师。<br />先把想表达的写下来。</h2>
-        <p>{isOpenSource ? "从自己的素材和脚本开始，搭建可以持续修改的创作流程。" : "OpenVMA 会从内容策划开始，陪你完成导演、剪辑和交付。"}</p>
+        <p>{isOpenSource ? "从自己的素材和脚本开始，搭建可以持续修改的创作流程。" : "VideoX 会从内容策划开始，陪你完成导演、剪辑和交付。"}</p>
         <div>
           <SiteAction href={isOpenSource ? GETTING_STARTED : undefined} className="ltx-site-button is-light" onClick={() => startPath("ai-script")}>{isOpenSource ? "阅读快速开始" : "免费开始创作"}<ArrowRight size={16} /></SiteAction>
           <SiteAction href={isOpenSource ? REPOSITORY : undefined} className="ltx-site-button is-dark-outline" onClick={() => isAuthenticated ? onEnterWorkspace?.("projects") : onOpenAuth?.("login")}>{isOpenSource ? "查看 GitHub 源码" : "进入项目中心"}</SiteAction>
@@ -586,9 +586,9 @@ export function SiteHome({
         <nav aria-label="页脚导航">
           <section><strong>产品</strong><a href="#site-capabilities">如何工作</a><a href="#site-workflow">产品体验</a><a href="#site-start">开始方式</a></section>
           <section><strong>探索</strong><a href="#site-showcase">{isOpenSource ? "视觉参考" : "太空案例"}</a><a href={isOpenSource ? "#site-open-source" : "#site-pricing"}>{isOpenSource ? "开源部署" : "会员方案"}</a><a href="#site-help">{isOpenSource ? "常见问题" : "帮助中心"}</a></section>
-          {isOpenSource ? <section><strong>OpenVMA</strong><a href={`${DOCUMENTATION}/architecture.md`}>架构文档</a><a href={`${DOCUMENTATION}/limitations.md`}>能力与限制</a><a href={`${REPOSITORY}/blob/main/CONTRIBUTING.md`}>参与贡献</a></section> : <section><strong>OpenVMA</strong><a href="#site-footer">关于我们</a><a href="#site-footer">隐私政策</a><a href="#site-footer">服务条款</a></section>}
+          {isOpenSource ? <section><strong>VideoX</strong><a href={`${DOCUMENTATION}/architecture.md`}>架构文档</a><a href={`${DOCUMENTATION}/limitations.md`}>能力与限制</a><a href={`${REPOSITORY}/blob/main/CONTRIBUTING.md`}>参与贡献</a></section> : <section><strong>VideoX</strong><a href="#site-footer">关于我们</a><a href="#site-footer">隐私政策</a><a href="#site-footer">服务条款</a></section>}
         </nav>
-        <div className="ltx-footer-bottom"><div><span>{isOpenSource ? "© 2026 OpenVMA · MIT License" : "© 2026 OpenVMA. 保留所有权利。"}</span><p className="ltx-image-credits">视觉参考：<a href={IMAGE_SOURCES.nasa}>NASA 概念图</a> · <a href={IMAGE_SOURCES.moon}>NASA 月球摄影</a> · <a href={IMAGE_SOURCES.alpine}>Deralpinbergsteiger</a>（<a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>；已缩放、转码） · <a href={`${REPOSITORY}/blob/main/THIRD_PARTY_NOTICES.md`}>图片说明</a></p></div><span>FROM DOCUMENT TO FILM</span></div>
+        <div className="ltx-footer-bottom"><div><span>{isOpenSource ? "© 2026 VideoX · MIT License" : "© 2026 VideoX. 保留所有权利。"}</span><p className="ltx-image-credits">视觉参考：<a href={IMAGE_SOURCES.nasa}>NASA 概念图</a> · <a href={IMAGE_SOURCES.moon}>NASA 月球摄影</a> · <a href={IMAGE_SOURCES.alpine}>Deralpinbergsteiger</a>（<a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>；已缩放、转码） · <a href={`${REPOSITORY}/blob/main/THIRD_PARTY_NOTICES.md`}>图片说明</a></p></div><span>FROM DOCUMENT TO FILM</span></div>
       </footer>
     </main>
   );

@@ -124,7 +124,7 @@ async def reset_mfa(email: str) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description="OpenVMA 运营后台管理员维护")
+    root = argparse.ArgumentParser(description="VideoX 运营后台管理员维护")
     commands = root.add_subparsers(dest="command", required=True)
     create = commands.add_parser("create")
     create.add_argument("--email", required=True)

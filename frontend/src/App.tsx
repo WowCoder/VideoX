@@ -60,7 +60,7 @@ export default function App() {
   if (!initialized) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas text-sm text-muted">
-        正在恢复 OpenVMA 工作区…
+        正在恢复 VideoX 工作区…
       </div>
     );
   }

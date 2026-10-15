@@ -36,7 +36,7 @@ def _persist_remote_media(
     }[media_kind]
     if suffix not in allowed:
         suffix = ".png" if media_kind == "image" else ".mp4"
-    handle = tempfile.NamedTemporaryFile(prefix="openvma_ai_", suffix=suffix, delete=False)
+    handle = tempfile.NamedTemporaryFile(prefix="videox_ai_", suffix=suffix, delete=False)
     local_path = handle.name
     handle.close()
     try:

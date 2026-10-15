@@ -635,7 +635,7 @@ def _burn_subtitles(
 
 
 def requires_export_watermark(membership_rank: int) -> bool:
-    """Free exports carry the OpenVMA brand; paid plans export clean video."""
+    """Free exports carry the VideoX brand; paid plans export clean video."""
     return membership_rank <= 0
 
 
@@ -649,7 +649,7 @@ def _render_watermark_image(
 
     font_size = max(22, min(56, target_h // 24))
     font = ImageFont.truetype(_font_path(configured_font), font_size)
-    text = "OpenVMA"
+    text = "VideoX"
     probe = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
     draw = ImageDraw.Draw(probe)
     bbox = draw.textbbox((0, 0), text, font=font, stroke_width=max(1, font_size // 28))
@@ -698,7 +698,7 @@ def _apply_export_watermark(
         shutil.copy2(source_file, output_path)
         return
 
-    watermark_path = os.path.join(temp_dir, "openvma_watermark.png")
+    watermark_path = os.path.join(temp_dir, "videox_watermark.png")
     _render_watermark_image(watermark_path, target_w, target_h, configured_font)
     margin = max(16, target_h // 36)
     _run_command(
@@ -714,7 +714,7 @@ def _apply_export_watermark(
             "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-pix_fmt", "yuv420p",
             "-c:a", "copy", "-y", output_path,
         ],
-        "OpenVMA 水印烧录",
+        "VideoX 水印烧录",
     )
 
 

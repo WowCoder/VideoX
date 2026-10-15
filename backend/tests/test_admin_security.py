@@ -77,7 +77,7 @@ class AdminJwtTests(unittest.TestCase):
 
         with patch("app.admin.security._admin_jwt_secret", return_value="admin-test-secret" * 4):
             token = jwt.encode(
-                {"sub": "user-1", "type": "access", "aud": "openvma-user"},
+                {"sub": "user-1", "type": "access", "aud": "videox-user"},
                 "admin-test-secret" * 4,
                 algorithm="HS256",
             )

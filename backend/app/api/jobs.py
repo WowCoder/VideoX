@@ -488,7 +488,7 @@ async def download_job_result(
 
     extension = Path(object_name).suffix or ".mp4"
     safe_name = "".join(char if char not in '\\/:*?\"<>|' else "_" for char in project.name)
-    filename = f"{safe_name or 'OpenVMA'}-{job.id}{extension}"
+    filename = f"{safe_name or 'VideoX'}-{job.id}{extension}"
     media_type = "video/mp4" if extension.lower() == ".mp4" else "video/quicktime"
     return StreamingResponse(
         chunks(),

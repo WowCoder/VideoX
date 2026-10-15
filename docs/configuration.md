@@ -12,6 +12,14 @@ Compose 从根 `.env` 做变量替换，并为各服务设置内部数据库、R
 
 Pages 只需要可选 `PAGES_BASE_PATH`（默认 `/VideoX/`），不使用应用凭证。所有 API Key、JWT、数据库和管理员密钥留在服务端。
 
+## 既有部署切换
+
+品牌统一也更新了运行名称：构建/部署变量使用 `VIDEOX_*`，默认数据库、Docker 数据卷、MinIO bucket 和 Celery 队列使用 `videox` 名称。旧配置与既有资源不会自动重命名或迁移；直接采用新默认值可能连接到空资源。
+
+升级前先停止新任务提交，排空旧队列并协调停止旧 API、Worker 和 Beat，再完成[备份](../deploy/README.md#6-备份与保留)。核对 `.env`、镜像、Compose 项目名、卷名、数据库连接、bucket 和队列，通过显式配置及 Compose override 映射 `<existing-volume>`、`<existing-database>`、`<existing-bucket>` 等既有资源，或按[恢复流程](../deploy/restore.md)将数据迁入新资源；验证后再切换全部服务，避免两套 Worker 同时处理同一队列。
+
+浏览器登录存储键、管理员令牌 audience 与刷新 cookie、创建草稿键也使用新名称，切换后需重新登录；旧浏览器草稿不会自动迁移，短信验证码与限流等 Redis 临时状态从新命名空间开始。历史迁移中的既有数据标识保留，用于兼容旧数据。
+
 ## Provider 支持矩阵
 
 | 配置项 | 支持值 |
@@ -85,7 +93,7 @@ TTS 使用 `DASHSCOPE_API_KEY`，并有请求/下载超时、文本分段与时�
 <base>.export
 ```
 
-可用 `CELERY_CONTROL_QUEUE`、`CELERY_SHORT_AI_QUEUE`、`CELERY_VIDEO_QUEUE`、`CELERY_MEDIA_QUEUE`、`CELERY_EXPORT_QUEUE` 单独覆盖。宿主机基名默认 `openvma-local`，开发 Compose 为 `openvma-docker`；不要让不同代码版本 Worker 争抢同一队列。
+可用 `CELERY_CONTROL_QUEUE`、`CELERY_SHORT_AI_QUEUE`、`CELERY_VIDEO_QUEUE`、`CELERY_MEDIA_QUEUE`、`CELERY_EXPORT_QUEUE` 单独覆盖。宿主机基名默认 `videox-local`，开发 Compose 为 `videox-docker`；不要让不同代码版本 Worker 争抢同一队列。
 
 `VIDEO_QUEUE_MAX_PER_USER/PROJECT/GLOBAL` 是排队容量；`VIDEO_INFLIGHT_MAX_PER_USER/PROJECT/GLOBAL` 是供应商在途并发，不等于 Celery Worker 并发。`VIDEO_BATCH_MAX_SHOTS` 限制单批次规模，`VIDEO_DISPATCH_INTERVAL_SECONDS`、`VIDEO_POLL_INTERVAL_SECONDS`、`VIDEO_PROVIDER_TIMEOUT_SECONDS` 控制调度、查询和等待上限。
 

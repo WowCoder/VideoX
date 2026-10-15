@@ -637,7 +637,7 @@ class AgnesGenerationProviderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(fake_redis.set_calls), 2)
         first_key, _, first_options = fake_redis.set_calls[0]
-        self.assertTrue(first_key.startswith("openvma:agnes-video-submit:"))
+        self.assertTrue(first_key.startswith("videox:agnes-video-submit:"))
         self.assertEqual(first_options, {"nx": True, "px": 61000})
         sleep.assert_awaited_once_with(1.55)
         self.assertTrue(fake_redis.closed)

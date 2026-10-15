@@ -16,7 +16,7 @@ import jwt
 from app.config import get_settings
 
 
-ADMIN_AUDIENCE = "openvma-admin"
+ADMIN_AUDIENCE = "videox-admin"
 ADMIN_ACCESS_TYPE = "admin_access"
 TOTP_PERIOD_SECONDS = 30
 TOTP_DIGITS = 6
@@ -100,7 +100,7 @@ def verify_totp(secret: str, code: str, *, at_time: int | None = None, window: i
     )
 
 
-def totp_provisioning_uri(secret: str, email: str, issuer: str = "OpenVMA Admin") -> str:
+def totp_provisioning_uri(secret: str, email: str, issuer: str = "VideoX Admin") -> str:
     label = quote(f"{issuer}:{email}")
     return (
         f"otpauth://totp/{label}?secret={quote(secret)}&issuer={quote(issuer)}"

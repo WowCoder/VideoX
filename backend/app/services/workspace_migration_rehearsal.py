@@ -8,7 +8,7 @@ import re
 from sqlalchemy.engine import URL, make_url
 
 
-_DATABASE_NAME = re.compile(r"^openvma_rehearsal_[a-z0-9_]+$")
+_DATABASE_NAME = re.compile(r"^videox_rehearsal_[a-z0-9_]+$")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _POSTGRES_DRIVERS = {"postgresql", "postgresql+asyncpg"}
 
@@ -64,7 +64,7 @@ def validate_rehearsal_target(
     if (parsed.port or 5432) != 55432:
         raise ValueError("演练目标必须使用隔离 Compose 服务的本机端口 55432")
     if not parsed.database or not _DATABASE_NAME.fullmatch(parsed.database):
-        raise ValueError("演练数据库名必须以 openvma_rehearsal_ 开头，且只能包含小写字母、数字和下划线")
+        raise ValueError("演练数据库名必须以 videox_rehearsal_ 开头，且只能包含小写字母、数字和下划线")
     if confirmation != parsed.database:
         raise ValueError("--confirm-database 必须与演练数据库名完全一致")
 

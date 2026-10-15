@@ -29,7 +29,7 @@ export function getPostAuthStartAction(state: unknown): PostAuthStartAction | nu
 }
 
 export function encodeWechatNavigationState(action: PostAuthStartAction | null): string {
-  return action ? `start-project:${action.method}` : "openvma";
+  return action ? `start-project:${action.method}` : "videox";
 }
 
 export function decodeWechatNavigationState(value: string | null): PostAuthStartAction | null {

@@ -203,9 +203,9 @@ async def health(_: AdminPrincipal = Depends(require_admin_permission("dashboard
     beat_dispatch = False
     client = aioredis.from_url(get_settings().redis_url, decode_responses=True)
     try:
-        async for _key in client.scan_iter(match="openvma:heartbeat:worker:*"):
+        async for _key in client.scan_iter(match="videox:heartbeat:worker:*"):
             worker_count += 1
-        beat_dispatch = bool(await client.get("openvma:heartbeat:beat-dispatch"))
+        beat_dispatch = bool(await client.get("videox:heartbeat:beat-dispatch"))
     except Exception:
         checks["celery_worker"] = "unknown"
         checks["celery_beat"] = "unknown"

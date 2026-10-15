@@ -27,5 +27,5 @@ test("微信扫码 state 可以往返携带创作意图", () => {
   const action = { kind: "start-project", method: "upload-assets" } as const;
   assert.equal(encodeWechatNavigationState(action), "start-project:upload-assets");
   assert.deepEqual(decodeWechatNavigationState("start-project:upload-assets"), action);
-  assert.equal(decodeWechatNavigationState("openvma"), null);
+  assert.equal(decodeWechatNavigationState("videox"), null);
 });

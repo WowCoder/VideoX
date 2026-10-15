@@ -31,7 +31,7 @@ class EnvironmentLoadingTests(unittest.TestCase):
                 os.chdir(elsewhere)
                 with patch.dict(os.environ, {}, clear=True):
                     self.assertEqual(module.Settings().celery_task_default_queue, "fixture-root-queue")
-                    self.assertEqual(module.Settings(_env_file=None).celery_task_default_queue, "openvma-local")
+                    self.assertEqual(module.Settings(_env_file=None).celery_task_default_queue, "videox-local")
                     self.assertEqual(module.Settings(celery_task_default_queue="explicit-queue").celery_task_default_queue, "explicit-queue")
                 with patch.dict(os.environ, {"CELERY_TASK_DEFAULT_QUEUE": "container-queue"}, clear=True):
                     self.assertEqual(module.Settings().celery_task_default_queue, "container-queue")

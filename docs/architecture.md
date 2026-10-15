@@ -2,7 +2,7 @@
 
 [返回 README](../README.md) · [配置](configuration.md) · [边界](limitations.md)
 
-OpenVMA 的应用状态以 PostgreSQL 为准；Redis 负责消息、缓存和调度，MinIO 保存原始媒体、预览与生成/导出文件。FastAPI 提供鉴权 API，Celery 执行媒体和 AI 任务，Beat 派发周期工作。前端通过 REST 和 WebSocket 读取真实状态，轮询提供任务状态兜底。
+VideoX 的应用状态以 PostgreSQL 为准；Redis 负责消息、缓存和调度，MinIO 保存原始媒体、预览与生成/导出文件。FastAPI 提供鉴权 API，Celery 执行媒体和 AI 任务，Beat 派发周期工作。前端通过 REST 和 WebSocket 读取真实状态，轮询提供任务状态兜底。
 
 ```mermaid
 flowchart LR
@@ -23,9 +23,11 @@ flowchart LR
 
 一个项目拥有脚本、场景、镜头、关联素材及主成片配置。项目工作区返回一个统一文档，脚本/分镜与主时间线来自这份项目数据。镜头可引用素材区间或选中媒体版本；历史版本记录来源和生成参数。
 
+这也是「脚本即创作规格（Script as Spec）」的实现基础：场景保存叙事意图与台词/旁白，镜头保存画面描述、时长和媒体选择，全片设置补充视觉与声音要求。人工输入或 AI 草稿进入同一套可编辑结构，检索、生成、配音与渲染读取对应字段；创作者可以逐步补齐素材、调整脚本，再编排和导出。
+
 保存请求带 `expected_revision`。服务端锁定项目聚合并比较当前版本，旧客户端提交会得到冲突；删除、恢复与异步结果也记录修订。项目修订记录用于审计和恢复，当前主成片工作流不会复制成另一个隐藏脚本或独立初剪项目。
 
-源码：[工作区聚合](../backend/app/services/workspace.py)、[项目 API](../backend/app/api/projects.py)、[项目 Schema](../backend/app/schemas/project.py)。
+源码：[脚本与镜头模型](../backend/app/models/script.py)、[脚本任务](../backend/app/tasks/script_tasks.py)、[工作区聚合](../backend/app/services/workspace.py)、[脚本工作台](../frontend/src/views/MvpScriptComposer.tsx)、[项目 API](../backend/app/api/projects.py)、[项目 Schema](../backend/app/schemas/project.py)。
 
 ## 素材处理与候选匹配
 

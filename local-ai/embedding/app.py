@@ -72,7 +72,7 @@ async def lifespan(_: FastAPI):
     model = None
 
 
-app = FastAPI(title="OpenVMA Local Embedding", lifespan=lifespan)
+app = FastAPI(title="VideoX Local Embedding", lifespan=lifespan)
 
 
 class EmbeddingRequest(BaseModel):

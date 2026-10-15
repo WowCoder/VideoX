@@ -1,6 +1,6 @@
-# Contributing to OpenVMA
+# Contributing to VideoX
 
-感谢你帮助改进 OpenVMA。开始前请阅读 [快速开始](docs/getting-started.md)和[架构说明](docs/architecture.md)。
+感谢你帮助改进 VideoX。开始前请阅读 [快速开始](docs/getting-started.md)和[架构说明](docs/architecture.md)。
 
 ## 问题反馈
 

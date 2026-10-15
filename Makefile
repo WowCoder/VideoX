@@ -5,9 +5,9 @@ COMPOSE := docker compose
 BACKEND := $(COMPOSE) exec -T backend
 FRONTEND := $(COMPOSE) exec -T frontend
 
-export OPENVMA_TEST_ACCOUNT_EMAIL := $(EMAIL)
-export OPENVMA_TEST_ACCOUNT_PASSWORD := $(PASSWORD)
-export OPENVMA_TEST_ACCOUNT_NAME := $(if $(strip $(NAME)),$(NAME),测试账号)
+export VIDEOX_TEST_ACCOUNT_EMAIL := $(EMAIL)
+export VIDEOX_TEST_ACCOUNT_PASSWORD := $(PASSWORD)
+export VIDEOX_TEST_ACCOUNT_NAME := $(if $(strip $(NAME)),$(NAME),测试账号)
 
 .PHONY: help setup doctor \
 	up up-ai rebuild rebuild-ai stop down restart restart-backend restart-worker ps \
@@ -27,7 +27,7 @@ backfill-video-previews: ## 为缺少代理的历史视频生成浏览器预览�
 		$(if $(strip $(ASSET_ID)),--asset-id $(ASSET_ID),)
 
 help: ## 显示可用命令
-	@awk 'BEGIN {FS = ":.*## "; printf "OpenVMA 常用命令\n\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "; printf "VideoX 常用命令\n\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 setup: ## 首次初始化 .env（已存在时不会覆盖）
 	@if [[ -f .env ]]; then \
@@ -143,7 +143,7 @@ shell-frontend: ## 进入前端容器 Shell
 	@$(COMPOSE) exec frontend sh
 
 shell-db: ## 进入 PostgreSQL 控制台
-	@$(COMPOSE) exec db psql -U openvma -d openvma
+	@$(COMPOSE) exec db psql -U videox -d videox
 
 worker-ping: ## 检查 Celery Worker 是否响应
 	@$(BACKEND) celery -A app.tasks.celery_app inspect ping
@@ -176,9 +176,9 @@ create-test-account: ## 创建测试账号：EMAIL=... PASSWORD=... [NAME=...] [
 	@test -n "$(PASSWORD)" || { echo "缺少 PASSWORD" >&2; exit 1; }
 	@$(BACKEND) python -c 'import os, sys; value = os.getenv("ENVIRONMENT", ""); sys.exit("容器未注入 ENVIRONMENT，请先执行 make up 以更新后端容器") if not value else None; sys.exit("生产环境禁止管理测试账号") if value.lower() == "production" else None'
 	@$(COMPOSE) exec -T \
-		-e OPENVMA_TEST_ACCOUNT_EMAIL \
-		-e OPENVMA_TEST_ACCOUNT_PASSWORD \
-		-e OPENVMA_TEST_ACCOUNT_NAME \
+		-e VIDEOX_TEST_ACCOUNT_EMAIL \
+		-e VIDEOX_TEST_ACCOUNT_PASSWORD \
+		-e VIDEOX_TEST_ACCOUNT_NAME \
 		backend python scripts/manage_test_account.py create \
 		$(if $(filter 1,$(RESET_PASSWORD)),--reset-password,)
 
@@ -187,5 +187,5 @@ reset-ai-usage: ## 重置账号 AI 生图/视频用量：EMAIL=... CONFIRM=1
 	@test "$(CONFIRM)" = "1" || { echo "该操作会修改账号用量，请增加 CONFIRM=1" >&2; exit 1; }
 	@$(BACKEND) python -c 'import os, sys; value = os.getenv("ENVIRONMENT", ""); sys.exit("容器未注入 ENVIRONMENT，请先执行 make up 以更新后端容器") if not value else None; sys.exit("生产环境禁止重置 AI 用量") if value.lower() == "production" else None'
 	@$(COMPOSE) exec -T \
-		-e OPENVMA_TEST_ACCOUNT_EMAIL \
+		-e VIDEOX_TEST_ACCOUNT_EMAIL \
 		backend python scripts/manage_test_account.py reset-ai-usage

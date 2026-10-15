@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - HTTP 客户端封装
+// VideoX - HTTP 客户端封装
 // 功能：JWT 自动注入 Bearer token、401 自动刷新、统一错误处理
 // 基础路径：/api（Vite proxy 转发到后端 8000）
 // ──────────────────────────────────────────────
@@ -10,8 +10,8 @@ const BASE_URL = "/api";
 
 /* ── Token 管理（内存 + localStorage 持久化）── */
 
-const ACCESS_TOKEN_KEY = "openvma_access_token";
-const REFRESH_TOKEN_KEY = "openvma_refresh_token";
+const ACCESS_TOKEN_KEY = "videox_access_token";
+const REFRESH_TOKEN_KEY = "videox_refresh_token";
 
 let accessToken: string | null = localStorage.getItem(ACCESS_TOKEN_KEY);
 let refreshToken: string | null = localStorage.getItem(REFRESH_TOKEN_KEY);

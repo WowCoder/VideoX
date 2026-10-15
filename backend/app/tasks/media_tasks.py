@@ -387,7 +387,7 @@ async def _process_asset_async(asset_id: str, job_id: str) -> None:
     from sqlalchemy import delete
 
     owner_id = await _get_job_owner(job_id)
-    temp_dir = tempfile.mkdtemp(prefix="openvma_asset_")
+    temp_dir = tempfile.mkdtemp(prefix="videox_asset_")
     try:
         async with async_session_factory() as session:
             asset = await session.get(Asset, asset_id)

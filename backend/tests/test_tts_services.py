@@ -36,7 +36,7 @@ class StubProject:
 
 
 def test_normalize_and_bill_chinese_characters():
-    assert normalize_tts_text("  你好   OpenVMA  ") == "你好 OpenVMA"
+    assert normalize_tts_text("  你好   VideoX  ") == "你好 VideoX"
     assert dashscope_billable_characters("你好A") == 5
 
 

@@ -81,7 +81,7 @@ async def search_web(
 
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(settings.web_search_timeout_seconds, connect=8.0),
-        headers={"User-Agent": "OpenVMA-Inspiration-Search/1.0"},
+        headers={"User-Agent": "VideoX-Inspiration-Search/1.0"},
         follow_redirects=True,
     ) as client:
         params = {"q": query, "format": "rss", "setlang": "zh-Hans"}

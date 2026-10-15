@@ -31,7 +31,7 @@ export interface WorkspaceCreationDraft {
   updatedAt: string;
 }
 
-export const WORKSPACE_CREATION_DRAFT_KEY = "openvma:workspace-creation-draft:v1";
+export const WORKSPACE_CREATION_DRAFT_KEY = "videox:workspace-creation-draft:v1";
 
 const SOURCES = new Set<WorkspaceCreationSource>(["ai-script", "write-script", "upload-assets"]);
 const STAGES = new Set<WorkspaceCreationStage>(["input", "script", "settings"]);

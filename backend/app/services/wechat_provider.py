@@ -29,7 +29,7 @@ def get_qrcode_url(state: str = "") -> str:
         f"&redirect_uri={settings.wechat_redirect_uri}"
         f"&response_type=code"
         f"&scope=snsapi_login"
-        f"&state={state or 'openvma'}"
+        f"&state={state or 'videox'}"
         f"#wechat_redirect"
     )
 

@@ -132,7 +132,7 @@ async def start_job_update_subscriber() -> None:
     if _subscriber_task is None or _subscriber_task.done():
         _subscriber_task = asyncio.create_task(
             _job_update_subscriber(),
-            name="openvma-job-update-subscriber",
+            name="videox-job-update-subscriber",
         )
 
 

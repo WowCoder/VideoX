@@ -46,7 +46,7 @@ class AudioUploadDetectionTests(unittest.TestCase):
             stream.seek(0)
             result = _probe_upload_stream(UploadFile(file=stream, filename="music.flac"))
 
-        self.assertEqual(result["openvma"], {
+        self.assertEqual(result["videox"], {
             "media_type": "audio",
             "has_audio": True,
             "duration_ms": 12500,

@@ -1,12 +1,12 @@
 # 雷池 SafeLine 配置说明
 
-雷池负责公网 80/443、TLS、WAF、CC/Bot 防护和域名转发；OpenVMA 内部 Nginx 负责 React SPA、API、WebSocket、1 GiB 上传与 MinIO Range 代理。不要把 PostgreSQL、Redis、Backend、MinIO Console 或本地 AI 直接添加为雷池上游。
+雷池负责公网 80/443、TLS、WAF、CC/Bot 防护和域名转发；VideoX 内部 Nginx 负责 React SPA、API、WebSocket、1 GiB 上传与 MinIO Range 代理。不要把 PostgreSQL、Redis、Backend、MinIO Console 或本地 AI 直接添加为雷池上游。
 
 ## 前置条件
 
 - 选择经过实际链路验收的雷池版本，对照所用版本的官方资料检查路径转发、WebSocket Upgrade 和 XFF 配置。
 - DNS 中将应用域名、后台域名与媒体域名解析到雷池公网 IP。
-- OpenVMA `gateway` 与 `admin-gateway` 已健康，且雷池容器或节点能分别访问 `GATEWAY_BIND_IP:GATEWAY_PORT` 和 `ADMIN_GATEWAY_BIND_IP:ADMIN_GATEWAY_PORT`。
+- VideoX `gateway` 与 `admin-gateway` 已健康，且雷池容器或节点能分别访问 `GATEWAY_BIND_IP:GATEWAY_PORT` 和 `ADMIN_GATEWAY_BIND_IP:ADMIN_GATEWAY_PORT`。
 - 主机防火墙只允许雷池到该内部端口的流量。
 
 ## 创建三个应用
@@ -37,13 +37,13 @@
 
 ## 来源 IP 与限流
 
-OpenVMA Backend 使用转发后的客户端地址执行应用级限流。雷池应覆盖或可信提取 `X-Forwarded-For`，内部 Nginx 会继续追加代理链。由于 Backend 只在 Docker 私有网络内开放，并且内部 8080 受防火墙限制，外部用户不能绕过雷池直接伪造转发头。
+VideoX Backend 使用转发后的客户端地址执行应用级限流。雷池应覆盖或可信提取 `X-Forwarded-For`，内部 Nginx 会继续追加代理链。由于 Backend 只在 Docker 私有网络内开放，并且内部 8080 受防火墙限制，外部用户不能绕过雷池直接伪造转发头。
 
 应用级限流与雷池 CC/Bot 策略需要同时保留：雷池负责边缘拦截，Backend 在 Redis 中做最后一道按客户端地址计数的保护。
 
 ## 1 GiB 上传验收
 
-OpenVMA Backend 的权威上限是精确 `1 GiB = 1073741824` 字节；内部 Nginx 设置为 `1100m`，为 multipart 边界和请求头留余量。雷池公开文档没有对超大请求体代理给出可依赖的统一上限承诺，因此不能只根据配置推断成功，必须通过真实链路测试：
+VideoX Backend 的权威上限是精确 `1 GiB = 1073741824` 字节；内部 Nginx 设置为 `1100m`，为 multipart 边界和请求头留余量。雷池公开文档没有对超大请求体代理给出可依赖的统一上限承诺，因此不能只根据配置推断成功，必须通过真实链路测试：
 
 1. 上传一个普通有效媒体文件，确认雷池、Nginx、FastAPI、MinIO 全链路成功。
 2. 上传一个接近但不超过 1 GiB 的有效媒体文件，确认不会在雷池处提前被拒绝或中断。

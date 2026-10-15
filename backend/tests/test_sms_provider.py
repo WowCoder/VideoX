@@ -98,8 +98,8 @@ class SmsProviderTests(unittest.IsolatedAsyncioTestCase):
             sent = await sms_provider.send_code("18888888888")
 
         self.assertTrue(sent)
-        self.assertEqual(redis.values["openvma:sms-code:18888888888"], "123456")
-        self.assertIn("openvma:sms-cooldown:18888888888", redis.values)
+        self.assertEqual(redis.values["videox:sms-code:18888888888"], "123456")
+        self.assertIn("videox:sms-cooldown:18888888888", redis.values)
         provider.assert_awaited_once_with("18888888888", "123456")
         self.assertTrue(redis.closed)
 
@@ -135,7 +135,7 @@ class SmsProviderTests(unittest.IsolatedAsyncioTestCase):
             sent = await sms_provider.send_code("18888888888")
 
         self.assertFalse(sent)
-        self.assertNotIn("openvma:sms-cooldown:18888888888", redis.values)
+        self.assertNotIn("videox:sms-cooldown:18888888888", redis.values)
         self.assertFalse(any("sms-hourly" in key for key in redis.values))
         self.assertFalse(any("sms-daily" in key for key in redis.values))
 
@@ -159,7 +159,7 @@ class SmsProviderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_correct_code_can_only_be_consumed_once(self):
         redis = FakeRedis()
-        redis.values["openvma:sms-code:18888888888"] = "123456"
+        redis.values["videox:sms-code:18888888888"] = "123456"
         with (
             patch.object(sms_provider, "settings", sms_settings()),
             patch("redis.asyncio.from_url", return_value=redis),
@@ -169,7 +169,7 @@ class SmsProviderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_code_is_invalidated_after_too_many_wrong_attempts(self):
         redis = FakeRedis()
-        redis.values["openvma:sms-code:18888888888"] = "123456"
+        redis.values["videox:sms-code:18888888888"] = "123456"
         with (
             patch.object(sms_provider, "settings", sms_settings()),
             patch("redis.asyncio.from_url", return_value=redis),
@@ -177,8 +177,8 @@ class SmsProviderTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(5):
                 self.assertFalse(await sms_provider.verify_code("18888888888", "000000"))
 
-        self.assertNotIn("openvma:sms-code:18888888888", redis.values)
-        self.assertNotIn("openvma:sms-attempts:18888888888", redis.values)
+        self.assertNotIn("videox:sms-code:18888888888", redis.values)
+        self.assertNotIn("videox:sms-attempts:18888888888", redis.values)
 
 
 if __name__ == "__main__":

@@ -13,14 +13,14 @@ from pathlib import Path
 class Settings(BaseSettings):
     environment: str = "development"
     # ── 数据库 ──
-    database_url: str = "postgresql+asyncpg://openvma:openvma_dev@localhost:5432/openvma"
+    database_url: str = "postgresql+asyncpg://videox:videox_dev@localhost:5432/videox"
     db_pool_size: int = 10
     db_max_overflow: int = 10
 
     # ── Redis ──
     redis_url: str = "redis://localhost:6379/0"
     # 本地开发与 Docker 使用不同队列，防止遗留宿主机 Worker 截走容器任务。
-    celery_task_default_queue: str = "openvma-local"
+    celery_task_default_queue: str = "videox-local"
     celery_control_queue: str = ""
     celery_short_ai_queue: str = ""
     celery_video_queue: str = ""
@@ -47,9 +47,9 @@ class Settings(BaseSettings):
 
     # ── MinIO ──
     minio_endpoint: str = "localhost:9000"
-    minio_access_key: str = "openvma"
-    minio_secret_key: str = "openvma_dev"
-    minio_bucket: str = "openvma-media"
+    minio_access_key: str = "videox"
+    minio_secret_key: str = "videox_dev"
+    minio_bucket: str = "videox-media"
     minio_secure: bool = False
     minio_public_endpoint: str = ""
     minio_public_secure: bool = False
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     admin_mfa_encryption_key: str = ""
     admin_login_max_attempts: int = 5
     admin_login_lock_minutes: int = 15
-    admin_refresh_cookie_name: str = "openvma_admin_refresh"
+    admin_refresh_cookie_name: str = "videox_admin_refresh"
 
     # ── 低频服务器资源采集 ──
     system_metrics_enabled: bool = True

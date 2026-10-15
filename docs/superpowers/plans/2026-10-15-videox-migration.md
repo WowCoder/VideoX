@@ -13,11 +13,11 @@
 ## Global Constraints
 
 - New repository owner/name: `WowCoder/VideoX`; visibility: **Private**.
-- Original `WowCoder/OpenVMA` stays private and is not overwritten or deleted.
+- The legacy private repository stays private and is not overwritten or deleted.
 - Do not migrate old server caches, workflow logs, unreviewed refs, secrets, local environment files, media, or recovery backups.
 - Keep sanitized commit authorship and MIT/third-party notices.
 - Do not publish Pages during migration. Require public visibility and an explicit `PAGES_ENABLED=true` repository variable before its workflow can deploy.
-- Preserve the original remote under `openvma` when making VideoX the local `origin`.
+- Preserve the original private-repository remote when making VideoX the local `origin`.
 
 ## Review Focus
 

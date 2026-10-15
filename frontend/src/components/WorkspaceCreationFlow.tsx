@@ -56,7 +56,7 @@ import { VideoThumb } from "@/components/VideoThumb";
 const sampleScript = `01 创作者有一份好文档，却常常卡在策划、分镜和剪辑之间。
 画面：文档、素材目录和剪辑软件在桌面上来回切换。
 
-02 OpenVMA 让脚本成为影片的控制台。
+02 VideoX 让脚本成为影片的控制台。
 画面：一段文案被自动拆成场景、旁白和镜头说明。
 
 03 修改文字，画面、声音和成片预览会一起更新。
@@ -541,7 +541,7 @@ export function WorkspaceCreationFlow({
             <div className="mb-5"><h2 className="text-lg font-semibold tracking-[-0.02em] text-text">{sourceMeta[draft.source].label}</h2><p className="mt-1 text-xs leading-5 text-muted">{sourceMeta[draft.source].description}</p></div>
 
             {draft.source === "ai-script" && <div className="space-y-5">
-              <label className="block"><span className="text-xs font-semibold text-text">告诉 AI 你想制作什么</span><textarea autoFocus rows={7} value={draft.prompt} onChange={(event) => patchDraft({ prompt: event.target.value })} placeholder="例如：制作一支 60 秒的 OpenVMA 产品介绍视频，先说明创作者从文档开始的痛点，再展示 AI 生成脚本、分镜和成片预览，最后以品牌愿景收束。" className={`mt-2 w-full resize-y rounded-2xl border bg-[#fcfcfd] p-4 text-sm leading-6 text-text transition focus:bg-white focus:ring-2 focus:ring-black/5 ${validationMessage ? "border-red" : "border-line focus:border-ink/40"}`} /></label>
+              <label className="block"><span className="text-xs font-semibold text-text">告诉 AI 你想制作什么</span><textarea autoFocus rows={7} value={draft.prompt} onChange={(event) => patchDraft({ prompt: event.target.value })} placeholder="例如：制作一支 60 秒的 VideoX 产品介绍视频，先说明创作者从文档开始的痛点，再展示 AI 生成脚本、分镜和成片预览，最后以品牌愿景收束。" className={`mt-2 w-full resize-y rounded-2xl border bg-[#fcfcfd] p-4 text-sm leading-6 text-text transition focus:bg-white focus:ring-2 focus:ring-black/5 ${validationMessage ? "border-red" : "border-line focus:border-ink/40"}`} /></label>
               <div><span className="text-[11px] font-medium text-muted">快速补充</span><div className="mt-2 flex flex-wrap gap-2">{promptSuggestions.map((suggestion) => <button key={suggestion} type="button" onClick={() => patchDraft({ prompt: draft.prompt.trim() ? `${draft.prompt.trim()}；${suggestion}` : suggestion })} className="rounded-full border border-line bg-white px-3 py-1.5 text-[10px] text-muted transition hover:border-ink/30 hover:text-text">＋ {suggestion}</button>)}</div></div>
               <div className="grid gap-5 sm:grid-cols-2"><ChoiceGroup label="目标时长" value={`${draft.durationSeconds} 秒`} options={["30 秒", "60 秒", "90 秒"]} onChange={(value) => patchDraft({ durationSeconds: Number.parseInt(value, 10) })} /><ChoiceGroup label="表达语气" value={draft.tone} options={["专业克制", "科技感", "故事化"]} onChange={(tone) => patchDraft({ tone })} /></div>
             </div>}

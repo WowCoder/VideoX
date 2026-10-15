@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - Input 输入框组件
+// VideoX - Input 输入框组件
 // ──────────────────────────────────────────────
 
 import { forwardRef, type InputHTMLAttributes, type TextareaHTMLAttributes, type ReactNode } from "react";

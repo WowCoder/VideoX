@@ -17,7 +17,7 @@ class ManageAdminScriptTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("OpenVMA", result.stdout)
+        self.assertIn("VideoX", result.stdout)
         self.assertNotIn("ModuleNotFoundError", result.stderr)
 
 

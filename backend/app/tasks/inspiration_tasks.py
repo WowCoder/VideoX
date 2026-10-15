@@ -162,7 +162,7 @@ async def _fetch_source(url: str, headers: dict[str, str]) -> tuple[int, str, di
     current_url = url
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(25.0, connect=8.0), follow_redirects=False,
-        headers={"User-Agent": "OpenVMA-Inspiration/2.0", **headers},
+        headers={"User-Agent": "VideoX-Inspiration/2.0", **headers},
     ) as client:
         for _ in range(6):
             validate_public_https_url(current_url)

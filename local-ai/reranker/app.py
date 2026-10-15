@@ -66,7 +66,7 @@ async def lifespan(_: FastAPI):
     model = None
 
 
-app = FastAPI(title="OpenVMA Local Reranker", lifespan=lifespan)
+app = FastAPI(title="VideoX Local Reranker", lifespan=lifespan)
 
 
 class RerankRequest(BaseModel):

@@ -1,4 +1,4 @@
-# OpenVMA 版本发布与回滚运行手册
+# VideoX 版本发布与回滚运行手册
 
 本文档用于已经完成首次部署后的日常版本发布。首次安装、生产环境变量、雷池接入和灾难恢复分别参见：
 
@@ -23,7 +23,7 @@
 推荐生产服务器使用以下结构：
 
 ```text
-/srv/openvma/
+/srv/videox/
 ├── .env.production          生产密钥和配置，权限 600
 ├── .deploy-state/           当前版本和上一个版本
 ├── backups/                 PostgreSQL 与 MinIO 备份
@@ -34,7 +34,7 @@
 └── temporary-access/        可选的临时访问保护，不随应用发布覆盖
 ```
 
-Docker Compose 项目名固定为 `openvma-production`，因此从不同版本目录运行 `compose.prod.yml` 时仍会复用同一组生产网络和数据卷。
+Docker Compose 项目名固定为 `videox-production`，因此从不同版本目录运行 `compose.prod.yml` 时仍会复用同一组生产网络和数据卷。
 
 ## 3. 发布窗口前检查
 
@@ -43,7 +43,7 @@ Docker Compose 项目名固定为 `openvma-production`，因此从不同版本�
 先检查正在处理的任务：
 
 ```bash
-cd /srv/openvma
+cd /srv/videox
 
 docker compose \
   -f compose.prod.yml \
@@ -94,16 +94,16 @@ docker system df
 发布脚本默认会在切换前创建一次 PostgreSQL + MinIO 备份。如果已经在同一发布窗口创建并校验了最终备份，可将其路径传给发布脚本，脚本会校验 manifest、版本标签和 SHA256 后复用，不会再次执行全量备份：
 
 ```bash
-OPENVMA_BACKUP_PATH=/srv/openvma/backups/<timestamp> \
-OPENVMA_IMAGE_TAG=<target-commit-sha> \
+VIDEOX_BACKUP_PATH=/srv/videox/backups/<timestamp> \
+VIDEOX_IMAGE_TAG=<target-commit-sha> \
 ./deploy/deploy.sh
 ```
 
-未提供 `OPENVMA_BACKUP_PATH` 时仍按默认策略自动备份。备份脚本会将 MinIO 增量同步到 `minio-current`，并为每次发布生成可独立恢复的快照目录；未变化对象使用硬链接复用磁盘空间。
+未提供 `VIDEOX_BACKUP_PATH` 时仍按默认策略自动备份。备份脚本会将 MinIO 增量同步到 `minio-current`，并为每次发布生成可独立恢复的快照目录；未变化对象使用硬链接复用磁盘空间。
 
-生产机默认使用阿里云 apt/PyPI 镜像和 npmmirror npm 镜像，并在构建前做连通性预检。也可以通过 `OPENVMA_APT_MIRROR`、`OPENVMA_PIP_INDEX_URL` 和 `OPENVMA_NPM_REGISTRY` 覆盖。Backend 和 Gateway Dockerfile 使用 BuildKit cache mount，生产机应保持 Docker/BuildKit 缓存，不要在普通发布后清理构建缓存。
+生产机默认使用阿里云 apt/PyPI 镜像和 npmmirror npm 镜像，并在构建前做连通性预检。也可以通过 `VIDEOX_APT_MIRROR`、`VIDEOX_PIP_INDEX_URL` 和 `VIDEOX_NPM_REGISTRY` 覆盖。Backend 和 Gateway Dockerfile 使用 BuildKit cache mount，生产机应保持 Docker/BuildKit 缓存，不要在普通发布后清理构建缓存。
 
-数据库迁移默认使用 `OPENVMA_MIGRATION_MODE=auto`：仅当数据库已经处于目标 head 且新旧迁移目录一致时跳过 migration 容器；任何不确定情况都会执行迁移。需要强制执行时使用 `OPENVMA_MIGRATION_MODE=always`。
+数据库迁移默认使用 `VIDEOX_MIGRATION_MODE=auto`：仅当数据库已经处于目标 head 且新旧迁移目录一致时跳过 migration 容器；任何不确定情况都会执行迁移。需要强制执行时使用 `VIDEOX_MIGRATION_MODE=always`。
 
 在开发机仓库中运行完整检查：
 
@@ -120,21 +120,21 @@ git status --short
 工作区应为空。然后使用 12 位 commit SHA 生成归档：
 
 ```bash
-OPENVMA_RELEASE_TAG="$(git rev-parse --short=12 HEAD)"
-OPENVMA_RELEASE_ARCHIVE="/tmp/openvma-${OPENVMA_RELEASE_TAG}.tar.gz"
+VIDEOX_RELEASE_TAG="$(git rev-parse --short=12 HEAD)"
+VIDEOX_RELEASE_ARCHIVE="/tmp/videox-${VIDEOX_RELEASE_TAG}.tar.gz"
 
 git archive \
   --format=tar.gz \
-  --output="${OPENVMA_RELEASE_ARCHIVE}" \
+  --output="${VIDEOX_RELEASE_ARCHIVE}" \
   HEAD
 
-sha256sum "${OPENVMA_RELEASE_ARCHIVE}"
+sha256sum "${VIDEOX_RELEASE_ARCHIVE}"
 ```
 
 macOS 没有 `sha256sum` 时使用：
 
 ```bash
-shasum -a 256 "${OPENVMA_RELEASE_ARCHIVE}"
+shasum -a 256 "${VIDEOX_RELEASE_ARCHIVE}"
 ```
 
 `git archive` 只包含已提交文件，不包含 `.env.production`、本地 `.env`、Git 历史和未跟踪文件。
@@ -144,22 +144,22 @@ shasum -a 256 "${OPENVMA_RELEASE_ARCHIVE}"
 从开发机上传归档。服务器地址由运维人员按实际环境填写：
 
 ```bash
-scp "${OPENVMA_RELEASE_ARCHIVE}" \
+scp "${VIDEOX_RELEASE_ARCHIVE}" \
   root@<server-ip>:/tmp/
 ```
 
 登录服务器后设置相同版本号：
 
 ```bash
-OPENVMA_RELEASE_TAG="<12-character-commit-sha>"
-OPENVMA_RELEASE_DIR="/srv/openvma/releases/${OPENVMA_RELEASE_TAG}"
-OPENVMA_RELEASE_ARCHIVE="/tmp/openvma-${OPENVMA_RELEASE_TAG}.tar.gz"
+VIDEOX_RELEASE_TAG="<12-character-commit-sha>"
+VIDEOX_RELEASE_DIR="/srv/videox/releases/${VIDEOX_RELEASE_TAG}"
+VIDEOX_RELEASE_ARCHIVE="/tmp/videox-${VIDEOX_RELEASE_TAG}.tar.gz"
 
-install -d -m 0755 "${OPENVMA_RELEASE_DIR}"
-tar -xzf "${OPENVMA_RELEASE_ARCHIVE}" -C "${OPENVMA_RELEASE_DIR}"
+install -d -m 0755 "${VIDEOX_RELEASE_DIR}"
+tar -xzf "${VIDEOX_RELEASE_ARCHIVE}" -C "${VIDEOX_RELEASE_DIR}"
 ```
 
-可以对照开发机输出校验归档哈希。确认解压成功后再进入发布步骤。不要把 `/srv/openvma/.env.production` 复制到版本目录，也不要从归档中覆盖它。
+可以对照开发机输出校验归档哈希。确认解压成功后再进入发布步骤。不要把 `/srv/videox/.env.production` 复制到版本目录，也不要从归档中覆盖它。
 
 ## 6. 初始化版本状态
 
@@ -167,19 +167,19 @@ tar -xzf "${OPENVMA_RELEASE_ARCHIVE}" -C "${OPENVMA_RELEASE_DIR}"
 
 ```bash
 docker compose \
-  -f /srv/openvma/compose.prod.yml \
-  --env-file /srv/openvma/.env.production \
+  -f /srv/videox/compose.prod.yml \
+  --env-file /srv/videox/.env.production \
   images
 ```
 
 从 Backend 或 Gateway 的 `TAG` 列读取当前标签，然后执行：
 
 ```bash
-OPENVMA_CURRENT_TAG="<currently-running-tag>"
+VIDEOX_CURRENT_TAG="<currently-running-tag>"
 
-install -d -m 0700 /srv/openvma/.deploy-state
-printf '%s\n' "${OPENVMA_CURRENT_TAG}" \
-  > /srv/openvma/.deploy-state/current_tag
+install -d -m 0700 /srv/videox/.deploy-state
+printf '%s\n' "${VIDEOX_CURRENT_TAG}" \
+  > /srv/videox/.deploy-state/current_tag
 ```
 
 只需初始化一次。此后 `deploy.sh` 会自动维护：
@@ -194,28 +194,28 @@ printf '%s\n' "${OPENVMA_CURRENT_TAG}" \
 在新版本目录运行生产发布脚本：
 
 ```bash
-cd "${OPENVMA_RELEASE_DIR}"
+cd "${VIDEOX_RELEASE_DIR}"
 
-OPENVMA_ENV_FILE=/srv/openvma/.env.production \
-OPENVMA_BACKUP_DIR=/srv/openvma/backups \
-OPENVMA_STATE_DIR=/srv/openvma/.deploy-state \
-OPENVMA_APT_MIRROR=mirrors.aliyun.com \
-OPENVMA_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-OPENVMA_NPM_REGISTRY=https://registry.npmmirror.com \
-OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}" \
+VIDEOX_ENV_FILE=/srv/videox/.env.production \
+VIDEOX_BACKUP_DIR=/srv/videox/backups \
+VIDEOX_STATE_DIR=/srv/videox/.deploy-state \
+VIDEOX_APT_MIRROR=mirrors.aliyun.com \
+VIDEOX_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+VIDEOX_NPM_REGISTRY=https://registry.npmmirror.com \
+VIDEOX_IMAGE_TAG="${VIDEOX_RELEASE_TAG}" \
 ./deploy/deploy.sh
 ```
 
 如果生产服务器访问 Debian、PyPI 或 npm 官方源不稳定，可以只在构建/发布命令的进程环境中增加镜像源，不需要把它们写入包含业务密钥的环境文件：
 
 ```bash
-OPENVMA_APT_MIRROR=mirrors.aliyun.com \
-OPENVMA_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-OPENVMA_NPM_REGISTRY=https://registry.npmmirror.com \
-OPENVMA_ENV_FILE=/srv/openvma/.env.production \
-OPENVMA_BACKUP_DIR=/srv/openvma/backups \
-OPENVMA_STATE_DIR=/srv/openvma/.deploy-state \
-OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}" \
+VIDEOX_APT_MIRROR=mirrors.aliyun.com \
+VIDEOX_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+VIDEOX_NPM_REGISTRY=https://registry.npmmirror.com \
+VIDEOX_ENV_FILE=/srv/videox/.env.production \
+VIDEOX_BACKUP_DIR=/srv/videox/backups \
+VIDEOX_STATE_DIR=/srv/videox/.deploy-state \
+VIDEOX_IMAGE_TAG="${VIDEOX_RELEASE_TAG}" \
 ./deploy/deploy.sh
 ```
 
@@ -235,7 +235,7 @@ OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}" \
 成功结束时会输出：
 
 ```text
-OpenVMA <commit-sha> 发布完成
+VideoX <commit-sha> 发布完成
 ```
 
 生产环境不要用开发 Compose 或 Makefile 的开发目标替代上述命令：
@@ -264,12 +264,12 @@ local-ai/ocr/
 先构建带相同版本标签的 AI 镜像：
 
 ```bash
-cd "${OPENVMA_RELEASE_DIR}"
-export OPENVMA_IMAGE_TAG="${OPENVMA_RELEASE_TAG}"
+cd "${VIDEOX_RELEASE_DIR}"
+export VIDEOX_IMAGE_TAG="${VIDEOX_RELEASE_TAG}"
 
 docker compose \
   -f compose.prod.yml \
-  --env-file /srv/openvma/.env.production \
+  --env-file /srv/videox/.env.production \
   --profile local-ai \
   build \
   local-embedding \
@@ -283,7 +283,7 @@ docker compose \
 ```bash
 docker compose \
   -f compose.prod.yml \
-  --env-file /srv/openvma/.env.production \
+  --env-file /srv/videox/.env.production \
   --profile local-ai \
   up -d --no-deps --force-recreate local-ocr
 ```
@@ -295,9 +295,9 @@ docker compose \
 ### 9.1 内部健康检查
 
 ```bash
-cd "${OPENVMA_RELEASE_DIR}"
+cd "${VIDEOX_RELEASE_DIR}"
 
-OPENVMA_ENV_FILE=/srv/openvma/.env.production \
+VIDEOX_ENV_FILE=/srv/videox/.env.production \
 ./deploy/healthcheck.sh
 ```
 
@@ -306,7 +306,7 @@ OPENVMA_ENV_FILE=/srv/openvma/.env.production \
 ```bash
 docker compose \
   -f compose.prod.yml \
-  --env-file /srv/openvma/.env.production \
+  --env-file /srv/videox/.env.production \
   --profile local-ai \
   ps
 ```
@@ -316,7 +316,7 @@ docker compose \
 ```bash
 docker compose \
   -f compose.prod.yml \
-  --env-file /srv/openvma/.env.production \
+  --env-file /srv/videox/.env.production \
   logs --since=15m \
   backend celery-worker celery-control celery-video celery-media celery-export \
   celery-beat gateway admin-gateway
@@ -329,10 +329,10 @@ docker compose \
 正式域名和雷池已经启用时执行：
 
 ```bash
-cd "${OPENVMA_RELEASE_DIR}"
+cd "${VIDEOX_RELEASE_DIR}"
 
-OPENVMA_ENV_FILE=/srv/openvma/.env.production \
-OPENVMA_PUBLIC_CHECK=1 \
+VIDEOX_ENV_FILE=/srv/videox/.env.production \
+VIDEOX_PUBLIC_CHECK=1 \
 ./deploy/healthcheck.sh
 ```
 
@@ -358,18 +358,18 @@ OPENVMA_PUBLIC_CHECK=1 \
 先读取版本状态：
 
 ```bash
-sed -n '1p' /srv/openvma/.deploy-state/current_tag
-sed -n '1p' /srv/openvma/.deploy-state/previous_tag
+sed -n '1p' /srv/videox/.deploy-state/current_tag
+sed -n '1p' /srv/videox/.deploy-state/previous_tag
 ```
 
 只有确认旧版本兼容当前数据库 schema 时，才允许应用回滚：
 
 ```bash
-cd "${OPENVMA_RELEASE_DIR}"
+cd "${VIDEOX_RELEASE_DIR}"
 
-OPENVMA_ENV_FILE=/srv/openvma/.env.production \
-OPENVMA_BACKUP_DIR=/srv/openvma/backups \
-OPENVMA_STATE_DIR=/srv/openvma/.deploy-state \
+VIDEOX_ENV_FILE=/srv/videox/.env.production \
+VIDEOX_BACKUP_DIR=/srv/videox/backups \
+VIDEOX_STATE_DIR=/srv/videox/.deploy-state \
 ROLLBACK_IMAGE_TAG="<previous-image-tag>" \
 CONFIRM_SCHEMA_COMPATIBLE=1 \
 ./deploy/rollback.sh

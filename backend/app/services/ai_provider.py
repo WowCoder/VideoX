@@ -1,4 +1,4 @@
-"""OpenVMA AI Provider。
+"""VideoX AI Provider。
 
 高频基础能力（Embedding、Rerank、ASR、OCR）支持本地模型服务；
 生成式能力（文本、视觉、生图、文生视频、图生视频）支持 DashScope 与 Agnes AI。
@@ -640,7 +640,7 @@ def _decode_image_data_url(data_url: str) -> tuple[bytes, str, str]:
 
 
 def _read_minio_image(object_name: str) -> tuple[bytes, str, str]:
-    """从 OpenVMA 私有 MinIO 读取关键帧，供上传到 DashScope 临时 OSS。"""
+    """从 VideoX 私有 MinIO 读取关键帧，供上传到 DashScope 临时 OSS。"""
     from app.utils.storage import get_minio_client
     from app.config import get_settings as get_storage_settings
 
@@ -709,7 +709,7 @@ async def _upload_dashscope_temporary_file(
         upload_response = await client.post(
             str(upload_host),
             data=form_data,
-            files={"file": (f"openvma-frame{suffix}", content, content_type)},
+            files={"file": (f"videox-frame{suffix}", content, content_type)},
         )
         upload_response.raise_for_status()
     return f"oss://{object_key}"
@@ -973,7 +973,7 @@ async def _wait_for_agnes_video_submit_slot() -> None:
 
     interval_ms = max(1000, round(settings.agnes_video_submit_interval_seconds * 1000))
     key_fingerprint = hashlib.sha256(settings.agnes_api_key.encode()).hexdigest()[:16]
-    limiter_key = f"openvma:agnes-video-submit:{key_fingerprint}"
+    limiter_key = f"videox:agnes-video-submit:{key_fingerprint}"
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
         while True:

@@ -23,7 +23,7 @@ type ResourceTab = "outline" | "assets" | "settings";
 type InspectorTab = "visual" | "audio" | "caption";
 type EditorPaneSide = "left" | "right";
 
-const EDITOR_PANE_STORAGE_KEY = "openvma:project-editor-pane-widths:v1";
+const EDITOR_PANE_STORAGE_KEY = "videox:project-editor-pane-widths:v1";
 const EDITOR_PANE_DEFAULTS = { left: 260, right: 420 };
 const EDITOR_PANE_MINIMUMS = { left: 200, center: 420, right: 340 };
 const EDITOR_SPLITTER_WIDTH = 8;

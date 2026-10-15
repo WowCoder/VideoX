@@ -3,15 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-COMPOSE_FILE="${OPENVMA_COMPOSE_FILE:-${PROJECT_DIR}/compose.prod.yml}"
-OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE:-${PROJECT_DIR}/.env.production}"
-BACKUP_ROOT="${OPENVMA_BACKUP_DIR:-${PROJECT_DIR}/backups}"
+COMPOSE_FILE="${VIDEOX_COMPOSE_FILE:-${PROJECT_DIR}/compose.prod.yml}"
+VIDEOX_ENV_FILE="${VIDEOX_ENV_FILE:-${PROJECT_DIR}/.env.production}"
+BACKUP_ROOT="${VIDEOX_BACKUP_DIR:-${PROJECT_DIR}/backups}"
 BACKUP_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_PATH="${BACKUP_ROOT}/${BACKUP_TIMESTAMP}"
 MINIO_CURRENT="${BACKUP_ROOT}/minio-current"
 
-if [[ ! -f "${OPENVMA_ENV_FILE}" ]]; then
-    echo "生产环境文件不存在：${OPENVMA_ENV_FILE}" >&2
+if [[ ! -f "${VIDEOX_ENV_FILE}" ]]; then
+    echo "生产环境文件不存在：${VIDEOX_ENV_FILE}" >&2
     exit 1
 fi
 
@@ -20,8 +20,8 @@ command -v docker >/dev/null 2>&1 || {
     exit 1
 }
 
-export OPENVMA_ENV_FILE
-compose=(docker compose -f "${COMPOSE_FILE}" --env-file "${OPENVMA_ENV_FILE}")
+export VIDEOX_ENV_FILE
+compose=(docker compose -f "${COMPOSE_FILE}" --env-file "${VIDEOX_ENV_FILE}")
 
 db_container="$("${compose[@]}" ps -q db)"
 minio_container="$("${compose[@]}" ps -q minio)"
@@ -71,8 +71,8 @@ if command -v git >/dev/null 2>&1 && git -C "${PROJECT_DIR}" rev-parse --is-insi
     git_revision="$(git -C "${PROJECT_DIR}" rev-parse HEAD)"
 fi
 
-source_image_tag="${OPENVMA_SOURCE_IMAGE_TAG:-${OPENVMA_IMAGE_TAG:-unknown}}"
-target_image_tag="${OPENVMA_TARGET_IMAGE_TAG:-unknown}"
+source_image_tag="${VIDEOX_SOURCE_IMAGE_TAG:-${VIDEOX_IMAGE_TAG:-unknown}}"
+target_image_tag="${VIDEOX_TARGET_IMAGE_TAG:-unknown}"
 
 {
     echo "created_at=${BACKUP_TIMESTAMP}"

@@ -1,16 +1,16 @@
-# OpenVMA
+# VideoX
 
 [English](README.en.md) · [快速开始](docs/getting-started.md) · [架构](docs/architecture.md) · [配置](docs/configuration.md)
 
-OpenVMA 是面向桌面浏览器的视频创作工作台：管理真实素材，编写脚本与分镜，检索可用镜头，编辑项目主时间线，再通过 FFmpeg 导出成片。
+VideoX 是以脚本驱动的视频创作工作台，在桌面浏览器中将创作意图逐步变为可编辑、可导出的成片。
 
-代码仓库现为 [VideoX](https://github.com/WowCoder/VideoX)，应用沿用 OpenVMA 名称。
+**脚本即创作规格（Script as Spec）。** 借鉴规格驱动开发（Spec-Driven Development）的思路，先将创作目标写成可编辑的场景、镜头、台词/旁白、画面与时长要求，再以此组织素材检索、媒体生成、配音、主成片编排和导出。这里的脚本指视频创作脚本。
 
-AI 能力是可选组件。项目把模型输出、用户选择和确定性媒体处理分开：模型负责搜索规划、结构化草稿、语义候选与媒体生成；用户决定使用哪些镜头；后端负责版本校验、任务调度、主成片编排和导出。
+AI 能力是可选组件。模型负责搜索规划、结构化草稿、语义候选与媒体生成；创作者可持续修改脚本、选择素材和调整声音；后端负责版本校验、任务调度、主成片编排和确定性媒体处理。人工创作与导出可独立运行。
 
 仓库包含 React/TypeScript 前端、FastAPI 后端、Celery Worker/Beat，以及 PostgreSQL/pgvector、Redis、MinIO 和可选本地模型服务。代码采用 [MIT](LICENSE)；模型、外部服务及第三方素材的许可另见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-![OpenVMA 实际项目工作区](docs/assets/workspace-smoke.jpg)
+![VideoX 实际项目工作区](docs/assets/workspace-smoke.jpg)
 
 实际工作区截图：3 秒原创测试视频、手动分镜和离线导出，未调用 AI 服务。验证范围见 [开源准备记录](docs/open-source-readiness.md)。
 
@@ -31,16 +31,19 @@ AI 能力是可选组件。项目把模型输出、用户选择和确定性媒�
 
 会员、账单、支付适配器与发票申请属于仓库中的业务模块；正式收款和税务服务需要部署者配置外部服务。当前不提供多人实时协作。详见 [当前边界](docs/limitations.md)。
 
-## 从素材到成片
+## 从创作意图到成片
 
 ```text
-上传自己的素材 → FFmpeg 处理 → 建立项目和分镜
-                                      │
-                  可选：语义匹配 → 候选 → 用户选择
-                  可选：生图/视频 → 素材版本
-                                      │
-                       主成片编排 → 编辑 → FFmpeg 导出
+创作意图
+   ↓ 手动编写 / 导入 / 可选 AI 草稿
+可编辑脚本：场景、镜头、台词/旁白、画面与时长要求
+   ↓
+素材检索与选择 / 可选媒体生成、配音
+   ↓
+项目主成片编排 → 预览与调整 → FFmpeg 导出
 ```
+
+脚本与分镜是后续任务共同读取的项目数据：修改镜头描述影响检索与生成输入，台词为字幕与配音提供文本，镜头顺序、时长和所选媒体进入渲染计划。项目修订号用于检查任务是否仍对应当前编辑状态。
 
 素材匹配不会自动替你采用第一个候选，也不会自动对缺失镜头发起付费生成。生成媒体可能在镜头未继续编辑时成为当前选中版本；镜头已经变化时，结果保留在版本历史中供用户复核。
 
@@ -57,6 +60,8 @@ cp .env.example .env
 ```
 
 新复制的示例关闭全部 `AI_*_PROVIDER`，首次运行不会下载模型或调用付费 AI。若已有 `.env`，启动前明确检查所有 AI Provider 为 `disabled`；复制操作不要覆盖你已有的配置。
+
+已有部署升级时，须显式衔接旧配置与既有数据卷、数据库、bucket 和任务队列；新默认名称不会自动迁移资源，切换后需重新登录。见[配置迁移说明](docs/configuration.md#既有部署切换)。
 
 ```bash
 docker compose config --quiet
@@ -129,6 +134,7 @@ React / Vite ── REST + WebSocket ── FastAPI
 
 可从以下源码入口检查实际行为：
 
+- [脚本生成](backend/app/tasks/script_tasks.py)、[场景/镜头模型](backend/app/models/script.py)与[脚本工作台](frontend/src/views/MvpScriptComposer.tsx)：将创作输入归一化为可编辑的脚本结构，连接下游媒体任务。
 - [灵感任务](backend/app/tasks/inspiration_tasks.py)：搜索查询规划、抓取候选、真实来源引用白名单、JSON 校验与一次修复重试；链接监测先做确定性 Diff，再总结变化。
 - [素材匹配](backend/app/tasks/match_tasks.py)：匹配当前 Embedding 模型的素材向量，逐镜头写入候选，写入前检查项目版本。
 - [项目工作区](backend/app/services/workspace.py)：`expected_revision` 乐观并发控制、素材选择和项目修订记录。

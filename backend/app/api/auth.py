@@ -418,7 +418,7 @@ async def login_with_phone(
         db,
         provider=PHONE_PROVIDER,
         identifier=phone_identifier,
-        legacy_email=f"{phone}@openvma.cn",
+        legacy_email=f"{phone}@videox.cn",
         name=req.name or f"用户{phone[-4:]}",
     )
 
@@ -480,7 +480,7 @@ async def wechat_callback(
         db,
         provider=WECHAT_PROVIDER,
         identifier=identity_identifier,
-        legacy_email=f"wx_{openid}@openvma.cn",
+        legacy_email=f"wx_{openid}@videox.cn",
         name=nickname,
         provider_app_id=wechat_app_id,
         provider_openid=openid,

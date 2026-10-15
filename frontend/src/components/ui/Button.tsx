@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - Button 组件
+// VideoX - Button 组件
 // variant: primary / secondary / ghost / danger
 // size: sm / md / lg
 // ──────────────────────────────────────────────

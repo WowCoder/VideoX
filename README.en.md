@@ -1,16 +1,30 @@
-# OpenVMA
+# VideoX
 
 [中文](README.md) · [Getting started](docs/getting-started.md) · [Architecture](docs/architecture.md)
 
-The repository is now [VideoX](https://github.com/WowCoder/VideoX); the application retains the OpenVMA name.
+VideoX is a script-driven video workspace that turns creative intent into an editable film in a desktop browser.
 
-OpenVMA is a desktop-browser video workspace for real media assets, scripts, storyboards, material selection, a project's main timeline, and FFmpeg export. It includes a React/TypeScript frontend, FastAPI backend, Celery workers, PostgreSQL/pgvector, Redis, MinIO, and optional local AI services.
+**Script as Spec.** Inspired by Spec-Driven Development, VideoX makes the screenplay an editable creative specification: scenes, shots, narration, visual descriptions, and timing guide asset retrieval, media generation, voiceover, composition, and export. “Script” means a video screenplay here. The stack includes React/TypeScript, FastAPI, Celery, PostgreSQL/pgvector, Redis, MinIO, and optional local AI services.
 
-AI is optional. Models produce structured drafts, search plans, matching candidates, and generated media. Users select material; backend code validates revisions, schedules jobs, compiles the composition, and renders it.
+AI is optional. Models produce structured drafts, search plans, matching candidates, and generated media. Creators can keep editing the script, selecting media, and adjusting sound; backend code validates revisions, schedules jobs, compiles the composition, and renders it. Manual editing and export work without AI.
 
-![Actual OpenVMA project workspace](docs/assets/workspace-smoke.jpg)
+![Actual VideoX project workspace](docs/assets/workspace-smoke.jpg)
 
 Actual workspace: a three-second original test clip, manual storyboard, and offline export with AI services disabled. See [verification scope](docs/open-source-readiness.md).
+
+## From creative intent to film
+
+```text
+Creative intent
+   ↓ Write / import / optional AI draft
+Editable script: scenes, shots, narration, visuals, timing
+   ↓
+Asset retrieval and selection / optional generation and voiceover
+   ↓
+Main composition → Preview and edit → FFmpeg export
+```
+
+The [script model](backend/app/models/script.py) connects these stages: shot descriptions guide retrieval and generation, narration supplies subtitle and voiceover text, and shot order, timing, and selected media feed the [render plan](backend/app/services/composition_render_plan.py). Project revision checks protect ongoing edits. Matching leaves candidates for selection; generated media may become the selected version when its shot has not changed, while stale results stay in version history.
 
 Available workflows include:
 
@@ -35,6 +49,8 @@ docker compose up -d --build
 ```
 
 The example disables all AI providers, so this baseline neither downloads models nor invokes paid AI. Check existing environment files before starting. Visit [localhost:5273](http://localhost:5273), register with email, create a blank project, upload your own short video, add scenes/shots, select media, compile the main composition, and export MP4.
+
+Existing deployments need an explicit transition for configuration, volumes, database, bucket, and queues. New defaults do not migrate resources; sign in again after switching. See the [configuration transition notes](docs/configuration.md#既有部署切换).
 
 API documentation is at [localhost:8000/docs](http://localhost:8000/docs). Check jobs with `docker compose logs -f backend celery-worker celery-beat`. For admin development, use `npm run dev:admin` in `frontend/`, at [localhost:5274/admin.html](http://localhost:5274/admin.html), with a separate administrator account and TOTP. The regular Vite dev server also serves `/admin.html`; production separation uses distinct builds and gateway configuration.
 

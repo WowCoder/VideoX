@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - 个人中心
+// VideoX - 个人中心
 // 页签：账户概览 / 会员方案 / V-Credits / 账单与发票 / 账户设置
 // ──────────────────────────────────────────────
 
@@ -417,7 +417,7 @@ function OverviewSection({
         <div className="mt-5 rounded-xl border border-blue/20 bg-blue-soft/30 p-4">
           <div className="flex items-center gap-2">
             <Crown size={16} className="text-amber" />
-            <strong className="text-sm text-text">查看 OpenVMA 会员方案</strong>
+            <strong className="text-sm text-text">查看 VideoX 会员方案</strong>
           </div>
           <p className="mt-1.5 text-xs text-muted">
             Creator、Pro、Studio 和 Team 提供更多 V-Credits、存储空间与协作权益。
@@ -604,7 +604,7 @@ function MembershipSection({
                 </li>
                 <li className="flex items-center gap-1.5">
                   <Check size={13} className="text-teal" />
-                  {plan.watermarkRequired ? "导出含 OpenVMA 水印" : "无水印导出"}
+                  {plan.watermarkRequired ? "导出含 VideoX 水印" : "无水印导出"}
                 </li>
                 <li className="flex items-center gap-1.5">
                   <Check size={13} className="text-teal" />

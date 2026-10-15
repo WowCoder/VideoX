@@ -1,4 +1,4 @@
-# OpenVMA 恢复演练与灾难恢复
+# VideoX 恢复演练与灾难恢复
 
 恢复会覆盖真实数据，因此仓库不提供自动执行的 destructive restore 脚本。以下步骤必须由运维人员确认备份、目标环境和停机窗口后人工执行，优先在隔离环境演练。
 
@@ -7,7 +7,7 @@
 选择一个完整备份目录，检查 `manifest.txt`。如果存在 `SHA256SUMS`：
 
 ```bash
-cd /srv/openvma/backups/<timestamp>
+cd /srv/videox/backups/<timestamp>
 sha256sum --check SHA256SUMS
 ```
 
@@ -31,10 +31,10 @@ docker compose -f compose.prod.yml --env-file .env.production \
 
 ```bash
 docker compose -f compose.prod.yml --env-file .env.production \
-  exec -T db createdb -U openvma openvma_restore
+  exec -T db createdb -U videox videox_restore
 
 docker compose -f compose.prod.yml --env-file .env.production \
-  exec -T db pg_restore -U openvma -d openvma_restore --no-owner --no-privileges \
+  exec -T db pg_restore -U videox -d videox_restore --no-owner --no-privileges \
   < backups/<timestamp>/postgres.dump
 ```
 
@@ -42,14 +42,14 @@ docker compose -f compose.prod.yml --env-file .env.production \
 
 ## 4. MinIO 恢复策略
 
-优先恢复到新的 bucket，例如 `openvma-media-restore`，验证对象数量、抽样哈希、视频 Range 播放和预签名 URL，再切换配置。可以使用生产 Compose 中的 MinIO 镜像启动一次性 `mc`：
+优先恢复到新的 bucket，例如 `videox-media-restore`，验证对象数量、抽样哈希、视频 Range 播放和预签名 URL，再切换配置。可以使用生产 Compose 中的 MinIO 镜像启动一次性 `mc`：
 
 ```bash
 docker compose -f compose.prod.yml --env-file .env.production run --rm --no-deps \
   --entrypoint /bin/sh \
-  -v /srv/openvma/backups/<timestamp>:/backup:ro \
+  -v /srv/videox/backups/<timestamp>:/backup:ro \
   minio-init -c \
-  'mc alias set restore http://minio:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" && mc mb --ignore-existing restore/openvma-media-restore && mc mirror --overwrite /backup/minio restore/openvma-media-restore'
+  'mc alias set restore http://minio:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" && mc mb --ignore-existing restore/videox-media-restore && mc mirror --overwrite /backup/minio restore/videox-media-restore'
 ```
 
 不要在未确认的情况下对生产 bucket 使用 `mc mirror --remove`，它会删除备份中不存在的线上对象。
@@ -63,7 +63,7 @@ docker compose -f compose.prod.yml --env-file .env.production \
   up -d backend celery-worker celery-control celery-video celery-media celery-export \
   celery-beat gateway admin-gateway
 
-OPENVMA_ENV_FILE=/srv/openvma/.env.production ./deploy/healthcheck.sh
+VIDEOX_ENV_FILE=/srv/videox/.env.production ./deploy/healthcheck.sh
 ```
 
 ## 6. 业务验证与恢复流量

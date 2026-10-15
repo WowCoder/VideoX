@@ -56,7 +56,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         category, limit = _limit_for_path(request.url.path)
         client_host = request.client.host if request.client else "unknown"
         bucket = int(time.time() // 60)
-        key = f"openvma:rate:{category}:{client_host}:{bucket}"
+        key = f"videox:rate:{category}:{client_host}:{bucket}"
         try:
             redis_client = await _redis()
             count = await redis_client.incr(key)

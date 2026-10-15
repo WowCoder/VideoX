@@ -11,7 +11,7 @@ MODEL_NAME = os.getenv("OCR_MODEL", "PP-OCRv4-ONNX")
 API_KEY = os.getenv("LOCAL_AI_API_KEY", "")
 MAX_UPLOAD_MB = int(os.getenv("OCR_MAX_UPLOAD_MB", "20"))
 engine = RapidOCR()
-app = FastAPI(title="OpenVMA Local OCR")
+app = FastAPI(title="VideoX Local OCR")
 
 
 def authorize(authorization: str | None = Header(default=None)) -> None:
@@ -43,7 +43,7 @@ async def ocr(file: UploadFile = File(...), model: str = Form(default="PP-OCRv4-
     if model and model not in {MODEL_NAME, "PP-OCRv4", "PP-OCRv5"}:
         raise HTTPException(status_code=400, detail=f"model {model} is not loaded")
     suffix = Path(file.filename or "frame.jpg").suffix or ".jpg"
-    handle = tempfile.NamedTemporaryFile(prefix="openvma_ocr_", suffix=suffix, delete=False)
+    handle = tempfile.NamedTemporaryFile(prefix="videox_ocr_", suffix=suffix, delete=False)
     path = handle.name
     total = 0
     try:

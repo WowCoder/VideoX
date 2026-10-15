@@ -259,8 +259,8 @@ async def _generate_project_voiceover(job_id: str, project_id: str) -> None:
                 result = await provider.synthesize(TTSRequest(text=line.text, model=model, voice=voice, language=language, instruction=instruction, emotion=emotion, request_hash=request_hash))
                 content_type = result.content_type.lower()
                 suffix = ".mp3" if "mpeg" in content_type else ".wav" if "wav" in content_type else ".opus" if "opus" in content_type else ".audio"
-                raw_handle = tempfile.NamedTemporaryFile(prefix="openvma_tts_raw_", suffix=suffix, delete=False)
-                normalized_handle = tempfile.NamedTemporaryFile(prefix="openvma_tts_norm_", suffix=".wav", delete=False)
+                raw_handle = tempfile.NamedTemporaryFile(prefix="videox_tts_raw_", suffix=suffix, delete=False)
+                normalized_handle = tempfile.NamedTemporaryFile(prefix="videox_tts_norm_", suffix=".wav", delete=False)
                 raw_path, normalized_path = raw_handle.name, normalized_handle.name
                 raw_handle.write(result.audio_bytes)
                 raw_handle.close()
@@ -363,7 +363,7 @@ async def _generate_project_voiceover(job_id: str, project_id: str) -> None:
         asset_ids = [take.asset_id for take in takes]
         assets = (await session.execute(select(Asset).where(Asset.id.in_(asset_ids)))).scalars().all()
         assets_by_id = {asset.id: asset for asset in assets}
-        temp_dir = tempfile.mkdtemp(prefix="openvma_voice_master_")
+        temp_dir = tempfile.mkdtemp(prefix="videox_voice_master_")
         try:
             clips: list[tuple[str, int]] = []
             for clip_index, line in enumerate(all_lines):

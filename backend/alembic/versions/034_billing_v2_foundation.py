@@ -1,4 +1,4 @@
-"""Versioned OpenVMA commercial catalog and V-Credits wallet.
+"""Versioned VideoX commercial catalog and V-Credits wallet.
 
 Revision ID: 034_billing_v2_foundation
 Revises: 033_video_generation_queue
@@ -321,10 +321,11 @@ def upgrade() -> None:
         """
     )
 
+    # VideoX preserves this persisted catalog key so historical data keeps its identity.
     op.execute(
         """
         INSERT INTO billing_catalog_versions (id, version_key, status, effective_at, published_at, notes)
-        VALUES ('catalog-v1', 'openvma-2026-09-02-v1', 'published', now(), now(), 'Initial V-Credits catalog derived from OpenVMA commercial plan')
+        VALUES ('catalog-v1', 'openvma-2026-09-02-v1', 'published', now(), now(), 'Initial V-Credits catalog derived from VideoX commercial plan')
         ON CONFLICT (version_key) DO NOTHING
         """
     )

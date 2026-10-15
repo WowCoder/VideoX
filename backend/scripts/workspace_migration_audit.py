@@ -2,10 +2,10 @@
 
 在数据库副本上执行，不会运行 Alembic，也不会修改业务表：
 
-    python scripts/workspace_migration_audit.py before --output /tmp/openvma-before.json
+    python scripts/workspace_migration_audit.py before --output /tmp/videox-before.json
     # 单独执行 alembic upgrade head
     python scripts/workspace_migration_audit.py after \
-        --before /tmp/openvma-before.json --output /tmp/openvma-after.json
+        --before /tmp/videox-before.json --output /tmp/videox-after.json
 
 脚本使用应用的 DATABASE_URL，在 REPEATABLE READ、READ ONLY 事务中查询。
 """
@@ -275,7 +275,7 @@ async def run(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="只读清点并核对 OpenVMA 021 工作区迁移")
+    parser = argparse.ArgumentParser(description="只读清点并核对 VideoX 021 工作区迁移")
     parser.add_argument("phase", choices=("before", "after"))
     parser.add_argument("--before", help="迁移前 JSON 报告；after 阶段必填")
     parser.add_argument("--output", help="输出 JSON 文件；省略时写到 stdout")

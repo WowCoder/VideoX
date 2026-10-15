@@ -42,7 +42,7 @@ export class AppErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("OpenVMA UI error", error, info.componentStack);
+    console.error("VideoX UI error", error, info.componentStack);
   }
 
   render() {

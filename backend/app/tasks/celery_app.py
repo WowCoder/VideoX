@@ -9,7 +9,7 @@ from app.config import get_settings
 settings = get_settings()
 
 celery_app = Celery(
-    "openvma",
+    "videox",
     broker=settings.redis_url,
     backend=settings.redis_url,
     include=[
@@ -111,7 +111,7 @@ def _write_worker_heartbeat(sender=None, **_kwargs) -> None:
 
         hostname = str(getattr(sender, "hostname", None) or getattr(sender, "consumer", None) or "worker")
         client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
-        client.setex(f"openvma:heartbeat:worker:{hostname}", 90, datetime.now(timezone.utc).isoformat())
+        client.setex(f"videox:heartbeat:worker:{hostname}", 90, datetime.now(timezone.utc).isoformat())
         client.close()
     except Exception:
         return
@@ -128,7 +128,7 @@ def write_system_heartbeat() -> None:
         import redis
 
         client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
-        client.setex("openvma:heartbeat:beat-dispatch", 90, datetime.now(timezone.utc).isoformat())
+        client.setex("videox:heartbeat:beat-dispatch", 90, datetime.now(timezone.utc).isoformat())
         client.close()
     except Exception:
         return

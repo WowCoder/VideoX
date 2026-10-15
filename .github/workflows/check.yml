@@ -89,5 +89,5 @@ jobs:
 
       - name: Validate production example
         env:
-          OPENVMA_ENV_FILE: .env.production.example
+          VIDEOX_ENV_FILE: .env.production.example
         run: docker compose --env-file .env.production.example -f compose.prod.yml config --quiet

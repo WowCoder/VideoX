@@ -1,4 +1,4 @@
-title = "OpenVMA exact synthetic test fixtures"
+title = "VideoX exact synthetic test fixtures"
 
 [extend]
 useDefault = true

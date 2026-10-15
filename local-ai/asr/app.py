@@ -60,7 +60,7 @@ async def lifespan(_: FastAPI):
     model = None
 
 
-app = FastAPI(title="OpenVMA Local ASR", lifespan=lifespan)
+app = FastAPI(title="VideoX Local ASR", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -84,7 +84,7 @@ def run_transcription(path: str) -> str:
 async def transcribe(file: UploadFile = File(...), model_name: str = Form(default="paraformer-zh", alias="model")):
     del model_name
     suffix = Path(file.filename or "audio.wav").suffix or ".wav"
-    handle = tempfile.NamedTemporaryFile(prefix="openvma_asr_", suffix=suffix, delete=False)
+    handle = tempfile.NamedTemporaryFile(prefix="videox_asr_", suffix=suffix, delete=False)
     path = handle.name
     total = 0
     try:

@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - 组件 barrel 导出
+// VideoX - 组件 barrel 导出
 // ──────────────────────────────────────────────
 
 export { default as AppShell, Sidebar, Topbar, ToastContainer } from "./AppShell";

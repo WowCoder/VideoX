@@ -276,18 +276,18 @@ async def reset_ai_usage(email: str) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="OpenVMA 开发测试账号管理")
+    parser = argparse.ArgumentParser(description="VideoX 开发测试账号管理")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     create_parser = subparsers.add_parser("create", help="创建或检查测试账号")
     create_parser.add_argument(
-        "--email", default=os.getenv("OPENVMA_TEST_ACCOUNT_EMAIL")
+        "--email", default=os.getenv("VIDEOX_TEST_ACCOUNT_EMAIL")
     )
     create_parser.add_argument(
-        "--password", default=os.getenv("OPENVMA_TEST_ACCOUNT_PASSWORD")
+        "--password", default=os.getenv("VIDEOX_TEST_ACCOUNT_PASSWORD")
     )
     create_parser.add_argument(
-        "--name", default=os.getenv("OPENVMA_TEST_ACCOUNT_NAME", "测试账号")
+        "--name", default=os.getenv("VIDEOX_TEST_ACCOUNT_NAME", "测试账号")
     )
     create_parser.add_argument(
         "--reset-password",
@@ -297,7 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     reset_parser = subparsers.add_parser("reset-ai-usage", help="重置 AI 生图/视频用量")
     reset_parser.add_argument(
-        "--email", default=os.getenv("OPENVMA_TEST_ACCOUNT_EMAIL")
+        "--email", default=os.getenv("VIDEOX_TEST_ACCOUNT_EMAIL")
     )
     return parser
 

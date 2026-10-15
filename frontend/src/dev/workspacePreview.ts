@@ -5,8 +5,8 @@ export function workspacePreviewFixture(): Workspace {
   return {
     project: {
       id: "__preview__",
-      name: "OpenVMA 产品发布片",
-      initial: "O",
+      name: "VideoX 产品发布片",
+      initial: "V",
       type: "AI 科技 / 产品讲解",
       description: "工作台视觉验收数据",
       status: "editing",
@@ -27,7 +27,7 @@ export function workspacePreviewFixture(): Workspace {
       schemaVersion: 1,
       revision: 7,
       settings: {
-        title: "OpenVMA 产品发布片",
+        title: "VideoX 产品发布片",
         summary: "",
         status: "editing",
         targetDurationSeconds: 30,
@@ -51,10 +51,10 @@ export function workspacePreviewFixture(): Workspace {
             ],
           },
           {
-            id: "scene-preview-2", index: 1, outline: "统一创作工作台", narrationText: "OpenVMA 让脚本、素材、时间线与 AI 围绕同一支影片协作。", intent: "展示方案", status: "editing", estimatedDurationMs: 14000, notes: "", revision: 1,
+            id: "scene-preview-2", index: 1, outline: "统一创作工作台", narrationText: "VideoX 让脚本、素材、时间线与 AI 围绕同一支影片协作。", intent: "展示方案", status: "editing", estimatedDurationMs: 14000, notes: "", revision: 1,
             shots: [
               { id: "shot-preview-3", index: 0, description: "统一工作台界面由远及近", status: "ready", visualMode: "image", assetId: "asset-preview-image", sourceStartMs: 0, sourceEndMs: 8000, durationMs: 8000, locked: false, transform: {}, adjust: { filterPreset: "vivid", brightness: 4 }, audioSettings: {}, subtitleSettings: { position: "bottom", fontSize: 17 }, transition: { type: "zoom", durationMs: 700 }, motion: { type: "pull", strength: 25 }, subtitleText: "一支影片，一份可以持续演进的项目文档。", subtitleOverridden: true, subtitleSourceRevision: 1, subtitleOutdated: false, notes: "", revision: 1, candidates: [], mediaVersions: [] },
-              { id: "shot-preview-4", index: 1, description: "品牌标志与产品口号收尾", status: "editing", sourceStartMs: 0, sourceEndMs: 6000, durationMs: 6000, locked: false, transform: {}, adjust: {}, audioSettings: {}, subtitleSettings: {}, transition: {}, motion: {}, subtitleText: "OpenVMA，让创作真正连成一体。", subtitleOverridden: true, subtitleSourceRevision: 1, subtitleOutdated: false, notes: "", revision: 1, candidates: [], mediaVersions: [] },
+              { id: "shot-preview-4", index: 1, description: "品牌标志与产品口号收尾", status: "editing", sourceStartMs: 0, sourceEndMs: 6000, durationMs: 6000, locked: false, transform: {}, adjust: {}, audioSettings: {}, subtitleSettings: {}, transition: {}, motion: {}, subtitleText: "VideoX，让创作真正连成一体。", subtitleOverridden: true, subtitleSourceRevision: 1, subtitleOutdated: false, notes: "", revision: 1, candidates: [], mediaVersions: [] },
             ],
           },
         ],

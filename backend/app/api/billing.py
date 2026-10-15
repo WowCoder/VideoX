@@ -553,7 +553,7 @@ def _invoice_application_pdf(invoice: Invoice, order: Order) -> bytes:
     paid_at = order.paid_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if order.paid_at else "-"
     requested_at = invoice.requested_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
-        "OpenVMA 开票申请单",
+        "VideoX 开票申请单",
         "重要声明：本文件仅记录开票申请，不是增值税发票或电子发票，",
         "不具备报销、入账或税务抵扣效力。正式发票需由税务开票服务另行签发。",
         "",
@@ -608,7 +608,7 @@ async def download_invoice_application(
         content = _invoice_application_pdf(invoice, order)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-    filename = quote(f"OpenVMA-开票申请单-{invoice.id}.pdf")
+    filename = quote(f"VideoX-开票申请单-{invoice.id}.pdf")
     return StreamingResponse(
         io.BytesIO(content),
         media_type="application/pdf",

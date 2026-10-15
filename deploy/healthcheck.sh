@@ -3,13 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE:-${PROJECT_DIR}/.env.production}"
-COMPOSE_FILE="${OPENVMA_COMPOSE_FILE:-${PROJECT_DIR}/compose.prod.yml}"
-HEALTH_RETRIES="${OPENVMA_HEALTH_RETRIES:-20}"
-HEALTH_RETRY_DELAY="${OPENVMA_HEALTH_RETRY_DELAY:-3}"
+VIDEOX_ENV_FILE="${VIDEOX_ENV_FILE:-${PROJECT_DIR}/.env.production}"
+COMPOSE_FILE="${VIDEOX_COMPOSE_FILE:-${PROJECT_DIR}/compose.prod.yml}"
+HEALTH_RETRIES="${VIDEOX_HEALTH_RETRIES:-20}"
+HEALTH_RETRY_DELAY="${VIDEOX_HEALTH_RETRY_DELAY:-3}"
 
-if [[ ! -f "${OPENVMA_ENV_FILE}" ]]; then
-    echo "生产环境文件不存在：${OPENVMA_ENV_FILE}" >&2
+if [[ ! -f "${VIDEOX_ENV_FILE}" ]]; then
+    echo "生产环境文件不存在：${VIDEOX_ENV_FILE}" >&2
     exit 1
 fi
 
@@ -21,12 +21,12 @@ command -v docker >/dev/null 2>&1 || {
     echo "未找到 docker" >&2
     exit 1
 }
-export OPENVMA_ENV_FILE
-compose=(docker compose -f "${COMPOSE_FILE}" --env-file "${OPENVMA_ENV_FILE}")
+export VIDEOX_ENV_FILE
+compose=(docker compose -f "${COMPOSE_FILE}" --env-file "${VIDEOX_ENV_FILE}")
 
 read_env_value() {
     local key="$1"
-    awk -F= -v expected="${key}" '$1 == expected {sub(/^[^=]*=/, ""); print; exit}' "${OPENVMA_ENV_FILE}"
+    awk -F= -v expected="${key}" '$1 == expected {sub(/^[^=]*=/, ""); print; exit}' "${VIDEOX_ENV_FILE}"
 }
 
 app_domain="${APP_DOMAIN:-$(read_env_value APP_DOMAIN)}"
@@ -124,7 +124,7 @@ done
 celery_heartbeat_ready=0
 for ((attempt = 1; attempt <= HEALTH_RETRIES; attempt += 1)); do
     if "${compose[@]}" exec -T celery-control python -c \
-        'import os, redis, sys; client = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True); workers = sum(1 for _ in client.scan_iter(match="openvma:heartbeat:worker:*")); beat = client.get("openvma:heartbeat:beat-dispatch"); sys.exit(0 if workers >= 5 and beat else 1)'; then
+        'import os, redis, sys; client = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True); workers = sum(1 for _ in client.scan_iter(match="videox:heartbeat:worker:*")); beat = client.get("videox:heartbeat:beat-dispatch"); sys.exit(0 if workers >= 5 and beat else 1)'; then
         celery_heartbeat_ready=1
         break
     fi
@@ -138,10 +138,10 @@ if [[ "${celery_heartbeat_ready}" != "1" ]]; then
 fi
 echo "通过：5 个 Celery Worker 与 Beat 调度心跳"
 
-if [[ "${OPENVMA_PUBLIC_CHECK:-0}" == "1" ]]; then
+if [[ "${VIDEOX_PUBLIC_CHECK:-0}" == "1" ]]; then
     request_with_retry "雷池后的公网应用" "${app_domain}" "https://${app_domain}/api/health/ready"
     request_with_retry "雷池后的公网媒体" "${media_domain}" "https://${media_domain}/minio/health/live"
     request_with_retry "雷池后的公网运营后台" "${admin_domain}" "https://${admin_domain}/"
 fi
 
-echo "OpenVMA 健康检查全部通过"
+echo "VideoX 健康检查全部通过"

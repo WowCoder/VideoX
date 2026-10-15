@@ -40,7 +40,7 @@ interface RouterValue {
   registerBlocker: (blocker: NavigationBlocker) => () => void;
 }
 
-interface OpenVMAHistoryMeta {
+interface VideoXHistoryMeta {
   sessionId: string;
   index: number;
   key: string;
@@ -48,14 +48,14 @@ interface OpenVMAHistoryMeta {
 }
 
 type HistoryState = Record<string, unknown> & {
-  __openvma?: OpenVMAHistoryMeta;
+  __videox?: VideoXHistoryMeta;
 };
 
 const RouterContext = createContext<RouterValue | null>(null);
 const ParamsContext = createContext<Record<string, string>>({});
-const HISTORY_META_KEY = "__openvma";
-const SESSION_ID_KEY = "openvma:navigation-session";
-const SCROLL_STORAGE_PREFIX = "openvma:scroll:";
+const HISTORY_META_KEY = "__videox";
+const SESSION_ID_KEY = "videox:navigation-session";
+const SCROLL_STORAGE_PREFIX = "videox:scroll:";
 
 function createKey(): string {
   return temporaryId("navigation");
@@ -76,13 +76,13 @@ function historyState(): HistoryState {
     : {};
 }
 
-function getHistoryMeta(state: unknown = window.history.state): OpenVMAHistoryMeta | null {
+function getHistoryMeta(state: unknown = window.history.state): VideoXHistoryMeta | null {
   if (!state || typeof state !== "object" || Array.isArray(state)) return null;
   const meta = (state as HistoryState)[HISTORY_META_KEY];
   return meta && typeof meta === "object" ? meta : null;
 }
 
-function withHistoryMeta(state: unknown, meta: OpenVMAHistoryMeta): HistoryState {
+function withHistoryMeta(state: unknown, meta: VideoXHistoryMeta): HistoryState {
   const base = state && typeof state === "object" && !Array.isArray(state)
     ? state as Record<string, unknown>
     : state == null
@@ -151,11 +151,11 @@ function scrollToLocationHash(hash: string): boolean {
 
 export function RouterProvider({ children }: { children: ReactNode }) {
   const [sessionId] = useState(getSessionId);
-  const [normalizedMeta] = useState<OpenVMAHistoryMeta>(() => {
+  const [normalizedMeta] = useState<VideoXHistoryMeta>(() => {
     const initialState = historyState();
     const initialMeta = getHistoryMeta(initialState);
     if (initialMeta?.sessionId === sessionId) return initialMeta;
-    const nextMeta: OpenVMAHistoryMeta = {
+    const nextMeta: VideoXHistoryMeta = {
       sessionId,
       index: 0,
       key: createKey(),
@@ -236,7 +236,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     const previousMeta = metaRef.current;
     saveScrollPosition(previousMeta.key);
 
-    const nextMeta: OpenVMAHistoryMeta = options.replace
+    const nextMeta: VideoXHistoryMeta = options.replace
       ? { ...previousMeta }
       : {
           sessionId,

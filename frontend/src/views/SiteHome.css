@@ -59,7 +59,7 @@
 
 .ltx-site-logo-button { justify-self: start; border: 0; padding: 0; background: transparent; }
 .ltx-site .ltx-site-brand { display: inline-flex; align-items: center; }
-.ltx-site .ltx-site-brand.openvma-brand > img { object-fit: contain !important; }
+.ltx-site .ltx-site-brand.videox-brand > img { object-fit: contain !important; }
 .ltx-site-nav { display: flex; align-items: center; justify-content: center; gap: clamp(18px, 2vw, 34px); }
 .ltx-site-nav a { padding: 10px 0; color: #474744; font-size: 12px; font-weight: 540; white-space: nowrap; transition: color 160ms ease; }
 .ltx-site-nav a:hover { color: #000; }

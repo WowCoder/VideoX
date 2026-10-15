@@ -4,32 +4,32 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 RELEASES_DIR="$(cd -- "${PROJECT_DIR}/.." && pwd)"
-COMPOSE_FILE="${OPENVMA_COMPOSE_FILE:-${PROJECT_DIR}/compose.prod.yml}"
-OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE:-${PROJECT_DIR}/.env.production}"
-STATE_DIR="${OPENVMA_STATE_DIR:-${PROJECT_DIR}/.deploy-state}"
-OPENVMA_BACKUP_PATH="${OPENVMA_BACKUP_PATH:-}"
-OPENVMA_MIGRATION_MODE="${OPENVMA_MIGRATION_MODE:-auto}"
-OPENVMA_APT_MIRROR="${OPENVMA_APT_MIRROR:-mirrors.aliyun.com}"
-OPENVMA_PIP_INDEX_URL="${OPENVMA_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
-OPENVMA_NPM_REGISTRY="${OPENVMA_NPM_REGISTRY:-https://registry.npmmirror.com}"
+COMPOSE_FILE="${VIDEOX_COMPOSE_FILE:-${PROJECT_DIR}/compose.prod.yml}"
+VIDEOX_ENV_FILE="${VIDEOX_ENV_FILE:-${PROJECT_DIR}/.env.production}"
+STATE_DIR="${VIDEOX_STATE_DIR:-${PROJECT_DIR}/.deploy-state}"
+VIDEOX_BACKUP_PATH="${VIDEOX_BACKUP_PATH:-}"
+VIDEOX_MIGRATION_MODE="${VIDEOX_MIGRATION_MODE:-auto}"
+VIDEOX_APT_MIRROR="${VIDEOX_APT_MIRROR:-mirrors.aliyun.com}"
+VIDEOX_PIP_INDEX_URL="${VIDEOX_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
+VIDEOX_NPM_REGISTRY="${VIDEOX_NPM_REGISTRY:-https://registry.npmmirror.com}"
 
-if [[ ! -f "${OPENVMA_ENV_FILE}" ]]; then
-    echo "生产环境文件不存在：${OPENVMA_ENV_FILE}" >&2
+if [[ ! -f "${VIDEOX_ENV_FILE}" ]]; then
+    echo "生产环境文件不存在：${VIDEOX_ENV_FILE}" >&2
     exit 1
 fi
 
 read_env_value() {
     local key="$1"
-    awk -F= -v expected="${key}" '$1 == expected {sub(/^[^=]*=/, ""); print; exit}' "${OPENVMA_ENV_FILE}"
+    awk -F= -v expected="${key}" '$1 == expected {sub(/^[^=]*=/, ""); print; exit}' "${VIDEOX_ENV_FILE}"
 }
 
-deploy_tag="${OPENVMA_IMAGE_TAG:-$(read_env_value OPENVMA_IMAGE_TAG)}"
+deploy_tag="${VIDEOX_IMAGE_TAG:-$(read_env_value VIDEOX_IMAGE_TAG)}"
 if [[ -z "${deploy_tag}" || "${deploy_tag}" == "latest" ]]; then
-    echo "请通过 OPENVMA_IMAGE_TAG 指定不可变版本号，例如 Git commit SHA；生产发布不接受 latest" >&2
+    echo "请通过 VIDEOX_IMAGE_TAG 指定不可变版本号，例如 Git commit SHA；生产发布不接受 latest" >&2
     exit 1
 fi
 if [[ ! "${deploy_tag}" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    echo "OPENVMA_IMAGE_TAG 包含非法字符：${deploy_tag}" >&2
+    echo "VIDEOX_IMAGE_TAG 包含非法字符：${deploy_tag}" >&2
     exit 1
 fi
 
@@ -47,39 +47,39 @@ command -v docker >/dev/null 2>&1 || {
 }
 command -v curl >/dev/null 2>&1 || { echo "未找到 curl，无法预检构建镜像源" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "未找到 python3，无法创建 MinIO 快照" >&2; exit 1; }
-case "${OPENVMA_MIGRATION_MODE}" in auto|always) ;; *) echo "OPENVMA_MIGRATION_MODE 必须是 auto 或 always" >&2; exit 1 ;; esac
+case "${VIDEOX_MIGRATION_MODE}" in auto|always) ;; *) echo "VIDEOX_MIGRATION_MODE 必须是 auto 或 always" >&2; exit 1 ;; esac
 
 echo "预检 apt/PyPI/npm 镜像..."
-apt_mirror_url="${OPENVMA_APT_MIRROR}"
+apt_mirror_url="${VIDEOX_APT_MIRROR}"
 if [[ "${apt_mirror_url}" != http://* && "${apt_mirror_url}" != https://* ]]; then
     apt_mirror_url="https://${apt_mirror_url}"
 fi
 curl --fail --silent --show-error --location --max-time 10 "${apt_mirror_url}/debian/dists/bookworm/InRelease" -o /dev/null
-curl --fail --silent --show-error --location --max-time 10 "${OPENVMA_PIP_INDEX_URL}" -o /dev/null
-curl --fail --silent --show-error --location --max-time 10 "${OPENVMA_NPM_REGISTRY%/}/-/ping" -o /dev/null
+curl --fail --silent --show-error --location --max-time 10 "${VIDEOX_PIP_INDEX_URL}" -o /dev/null
+curl --fail --silent --show-error --location --max-time 10 "${VIDEOX_NPM_REGISTRY%/}/-/ping" -o /dev/null
 
-export OPENVMA_ENV_FILE
-export OPENVMA_IMAGE_TAG="${deploy_tag}"
-export OPENVMA_APT_MIRROR OPENVMA_PIP_INDEX_URL OPENVMA_NPM_REGISTRY DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
-compose=(docker compose -f "${COMPOSE_FILE}" --env-file "${OPENVMA_ENV_FILE}")
+export VIDEOX_ENV_FILE
+export VIDEOX_IMAGE_TAG="${deploy_tag}"
+export VIDEOX_APT_MIRROR VIDEOX_PIP_INDEX_URL VIDEOX_NPM_REGISTRY DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
+compose=(docker compose -f "${COMPOSE_FILE}" --env-file "${VIDEOX_ENV_FILE}")
 
 "${compose[@]}" config --quiet
 
 if [[ -n "$("${compose[@]}" ps -q db)" ]]; then
-    if [[ -n "${OPENVMA_BACKUP_PATH}" ]]; then
+    if [[ -n "${VIDEOX_BACKUP_PATH}" ]]; then
         echo "校验并复用已创建的发布备份..."
-        [[ -d "${OPENVMA_BACKUP_PATH}" && -s "${OPENVMA_BACKUP_PATH}/postgres.dump" && -d "${OPENVMA_BACKUP_PATH}/minio" && -s "${OPENVMA_BACKUP_PATH}/manifest.txt" ]] || { echo "复用备份不完整：${OPENVMA_BACKUP_PATH}" >&2; exit 1; }
-        backup_source="$(awk -F= '$1 == "source_image_tag" {print $2; exit}' "${OPENVMA_BACKUP_PATH}/manifest.txt")"
-        backup_target="$(awk -F= '$1 == "target_image_tag" {print $2; exit}' "${OPENVMA_BACKUP_PATH}/manifest.txt")"
+        [[ -d "${VIDEOX_BACKUP_PATH}" && -s "${VIDEOX_BACKUP_PATH}/postgres.dump" && -d "${VIDEOX_BACKUP_PATH}/minio" && -s "${VIDEOX_BACKUP_PATH}/manifest.txt" ]] || { echo "复用备份不完整：${VIDEOX_BACKUP_PATH}" >&2; exit 1; }
+        backup_source="$(awk -F= '$1 == "source_image_tag" {print $2; exit}' "${VIDEOX_BACKUP_PATH}/manifest.txt")"
+        backup_target="$(awk -F= '$1 == "target_image_tag" {print $2; exit}' "${VIDEOX_BACKUP_PATH}/manifest.txt")"
         [[ "${backup_source}" == "${source_tag}" && "${backup_target}" == "${deploy_tag}" ]] || { echo "复用备份版本不匹配" >&2; exit 1; }
-        [[ ! -s "${OPENVMA_BACKUP_PATH}/SHA256SUMS" ]] || (cd "${OPENVMA_BACKUP_PATH}" && sha256sum --ignore-missing --check SHA256SUMS)
+        [[ ! -s "${VIDEOX_BACKUP_PATH}/SHA256SUMS" ]] || (cd "${VIDEOX_BACKUP_PATH}" && sha256sum --ignore-missing --check SHA256SUMS)
     else
     echo "发布前创建数据备份..."
-    OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE}" \
-        OPENVMA_COMPOSE_FILE="${COMPOSE_FILE}" \
-        OPENVMA_IMAGE_TAG="${source_tag}" \
-        OPENVMA_SOURCE_IMAGE_TAG="${source_tag}" \
-        OPENVMA_TARGET_IMAGE_TAG="${deploy_tag}" \
+    VIDEOX_ENV_FILE="${VIDEOX_ENV_FILE}" \
+        VIDEOX_COMPOSE_FILE="${COMPOSE_FILE}" \
+        VIDEOX_IMAGE_TAG="${source_tag}" \
+        VIDEOX_SOURCE_IMAGE_TAG="${source_tag}" \
+        VIDEOX_TARGET_IMAGE_TAG="${deploy_tag}" \
         "${SCRIPT_DIR}/backup.sh"
     fi
 else
@@ -94,7 +94,7 @@ echo "启动数据服务并初始化 bucket..."
 "${compose[@]}" run --rm minio-init
 
 should_migrate=1
-if [[ "${OPENVMA_MIGRATION_MODE}" == "auto" && "${source_tag}" != "unknown" ]]; then
+if [[ "${VIDEOX_MIGRATION_MODE}" == "auto" && "${source_tag}" != "unknown" ]]; then
     source_migrations="${RELEASES_DIR}/${source_tag}/backend/alembic/versions"
     target_migrations="${PROJECT_DIR}/backend/alembic/versions"
     db_version="$("${compose[@]}" exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select version_num from alembic_version limit 1"' 2>/dev/null || true)"
@@ -119,7 +119,7 @@ echo "更新 API 与任务进程..."
 echo "更新内部 Nginx 网关..."
 "${compose[@]}" up -d --no-deps --force-recreate gateway admin-gateway
 
-OPENVMA_ENV_FILE="${OPENVMA_ENV_FILE}" "${SCRIPT_DIR}/healthcheck.sh"
+VIDEOX_ENV_FILE="${VIDEOX_ENV_FILE}" "${SCRIPT_DIR}/healthcheck.sh"
 
 mkdir -p "${STATE_DIR}"
 if [[ -f "${STATE_DIR}/current_tag" ]]; then
@@ -130,4 +130,4 @@ if [[ -f "${STATE_DIR}/current_tag" ]]; then
 fi
 printf '%s\n' "${deploy_tag}" > "${STATE_DIR}/current_tag"
 
-echo "OpenVMA ${deploy_tag} 发布完成"
+echo "VideoX ${deploy_tag} 发布完成"

@@ -16,11 +16,11 @@ from app.config import get_settings
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-CODE_KEY_PREFIX = "openvma:sms-code:"
-ATTEMPT_KEY_PREFIX = "openvma:sms-attempts:"
-COOLDOWN_KEY_PREFIX = "openvma:sms-cooldown:"
-HOURLY_KEY_PREFIX = "openvma:sms-hourly:"
-DAILY_KEY_PREFIX = "openvma:sms-daily:"
+CODE_KEY_PREFIX = "videox:sms-code:"
+ATTEMPT_KEY_PREFIX = "videox:sms-attempts:"
+COOLDOWN_KEY_PREFIX = "videox:sms-cooldown:"
+HOURLY_KEY_PREFIX = "videox:sms-hourly:"
+DAILY_KEY_PREFIX = "videox:sms-daily:"
 CHINA_TIMEZONE = timezone(timedelta(hours=8))
 
 

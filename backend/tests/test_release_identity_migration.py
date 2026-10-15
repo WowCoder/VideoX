@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
 from scripts.release_identity_migration import (
+    PHONE_PLACEHOLDER_EMAIL_PATTERN,
     ReleaseIdentityError,
     _compare_with_baseline,
     _load_mapping,
@@ -48,6 +50,14 @@ def _snapshot(*, version: str, phone_count: int = 0) -> dict:
 
 
 class ReleaseIdentityMigrationTests(unittest.TestCase):
+    def test_phone_placeholder_guard_covers_historical_and_current_addresses(self):
+        for address in ("18888888888@openvma.cn", "18888888888@videox.cn"):
+            with self.subTest(address=address):
+                self.assertIsNotNone(re.fullmatch(PHONE_PLACEHOLDER_EMAIL_PATTERN, address))
+        for address in ("user@videox.cn", "18888888888@example.com", "18888888888@videoxXcn"):
+            with self.subTest(address=address):
+                self.assertIsNone(re.fullmatch(PHONE_PLACEHOLDER_EMAIL_PATTERN, address))
+
     def test_mapping_requires_private_file_and_unique_users_and_phones(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "bindings.json"

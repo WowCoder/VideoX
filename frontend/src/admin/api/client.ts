@@ -1,4 +1,4 @@
-const TOKEN_KEY = "openvma_admin_access";
+const TOKEN_KEY = "videox_admin_access";
 
 export type AdminProfile = {
   id: string;

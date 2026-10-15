@@ -304,9 +304,9 @@ export function Sidebar() {
       />
       <aside className={`fixed left-0 top-0 z-50 flex h-screen flex-col border-r border-line bg-[#f7f7f8] text-text transition-all duration-200 lg:static lg:z-auto ${sidebarCollapsed ? "w-[72px]" : "w-[248px]"} ${mobileNavOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}`}>
         <div className="flex h-[68px] items-center justify-between px-4">
-          <button className={`flex items-center gap-2.5 ${sidebarCollapsed ? "mx-auto" : ""}`} onClick={() => navigate("/")} aria-label="返回 OpenVMA 官网" type="button">
+          <button className={`flex items-center gap-2.5 ${sidebarCollapsed ? "mx-auto" : ""}`} onClick={() => navigate("/")} aria-label="返回 VideoX 官网" type="button">
             <BrandMark />
-            {!sidebarCollapsed && <span className="text-[16px] font-semibold tracking-[-0.03em]">OpenVMA</span>}
+            {!sidebarCollapsed && <span className="text-[16px] font-semibold tracking-[-0.03em]">VideoX</span>}
           </button>
           <button className="text-muted hover:text-text lg:hidden" onClick={() => setMobileNavOpen(false)} aria-label="关闭导航" type="button"><X size={18} /></button>
         </div>

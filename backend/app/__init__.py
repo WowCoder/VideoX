@@ -1,1 +1,1 @@
-# OpenVMA Backend
+# VideoX Backend

@@ -1,4 +1,4 @@
-# OpenVMA Open Source Preparation Implementation Plan
+# Original Repository Open Source Preparation Implementation Plan
 
 > Historical preparation plan for the original repository. The subsequent independent private-repository migration is recorded in [the VideoX migration plan](2026-10-15-videox-migration.md).
 
@@ -26,7 +26,7 @@
 - Email login and registration preserve the pending creation action; invalid inputs and server errors remain visible.
 - Container API/WebSocket proxy targets backend, while host development keeps localhost; no secret enters the static build.
 - Root environment loading remains deterministic for host and Docker usage; production credential validation stays strict.
-- Pages works under `/OpenVMA/`, has no account/API dependency, no paid membership UI, and uses only redistributable assets.
+- Pages works under the original repository project path, has no account/API dependency, no paid membership UI, and uses only redistributable assets.
 - Sanitization excludes account data across publishable history; private recovery material stays outside the repository and remote remains unchanged.
 
 ## Task 1: Local onboarding
@@ -45,7 +45,7 @@
 
 **Files:** `frontend/pages/index.html`, `frontend/src/pagesMain.tsx`, `frontend/src/pages/*`, `frontend/vite.pages.config.ts`, `frontend/package.json`, `.github/workflows/pages.yml`; shared brand paths only where necessary.
 
-**Interfaces:** `npm run build:pages` emits `frontend/dist-pages/index.html`; base is `/OpenVMA/`. Source/docs links target `WowCoder/OpenVMA`. Showcase avoids App, auth stores and API clients.
+**Interfaces:** `npm run build:pages` emits `frontend/dist-pages/index.html`; base uses the original repository project path. Source/docs links target the legacy private repository. Showcase avoids App, auth stores and API clients.
 
 - [ ] Build a standalone project landing page using existing styling/branding and evidence-backed capabilities.
 - [ ] Use local first-party visuals; exclude images lacking verified reuse permission from Pages artifacts.

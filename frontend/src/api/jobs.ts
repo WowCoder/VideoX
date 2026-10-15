@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────
-// OpenVMA - 异步任务 API
+// VideoX - 异步任务 API
 // 后端返回 snake_case，前端映射为 camelCase
 // ──────────────────────────────────────────────
 
@@ -100,7 +100,7 @@ export async function downloadResult(id: string): Promise<void> {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = filename ?? `OpenVMA-${id}.mp4`;
+  anchor.download = filename ?? `VideoX-${id}.mp4`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();

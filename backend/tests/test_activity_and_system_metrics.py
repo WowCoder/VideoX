@@ -56,7 +56,7 @@ class SystemMetricContractTests(unittest.TestCase):
     def test_collector_rejects_missing_disk_monitor_directory(self):
         with self.assertRaisesRegex(RuntimeError, "磁盘监控目录不可用"):
             collect_system_metrics(
-                disk_path="/definitely/not/an/openvma/metrics/path",
+                disk_path="/definitely/not/an/videox/metrics/path",
                 metric_scope="host",
             )
 

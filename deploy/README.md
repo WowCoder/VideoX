@@ -1,6 +1,8 @@
-# OpenVMA 生产部署手册
+# VideoX 生产部署手册
 
-生产链路固定为：公网用户 → 雷池 SafeLine → OpenVMA 内部 Nginx → FastAPI / React / MinIO。PostgreSQL、Redis、Backend、MinIO Console 和本地 AI 服务均不直接暴露公网。
+生产链路固定为：公网用户 → 雷池 SafeLine → VideoX 内部 Nginx → FastAPI / React / MinIO。PostgreSQL、Redis、Backend、MinIO Console 和本地 AI 服务均不直接暴露公网。
+
+现有安装升级前必须单独规划命名切换。本次代码更名不会修改服务器环境文件、数据库、bucket、队列或数据卷。`VIDEOX_*` 已替代原发布变量；Compose 项目名为 `videox-production`，数据卷键也使用 `videox_` 前缀，直接启动会选择新的卷。应先备份并明确复用或迁移现有卷、数据库角色与数据库、MinIO bucket，再配置连接；仅修改 `POSTGRES_USER` 或 `POSTGRES_DB` 不会改名已有 PostgreSQL 数据。队列切换前应排空旧任务并协调全部 Worker 和 Beat。Redis 临时命名空间会重置短信验证码、限流及心跳状态；后台 cookie 与 JWT audience 更名后需要重新登录。`/srv/videox` 是新的目录示例，不会自动移动现有配置或备份。
 
 ## 1. 服务器准备
 
@@ -8,16 +10,16 @@
 
 ```text
 /data/safeline       雷池官方安装目录
-/srv/openvma         OpenVMA 代码与生产配置
-/srv/openvma/backups 数据备份（建议再同步到异机或对象存储）
+/srv/videox         VideoX 代码与生产配置
+/srv/videox/backups 数据备份（建议再同步到异机或对象存储）
 ```
 
-服务器需要 Docker Engine、Docker Compose v2、Git、curl，并开放公网 80/443 给雷池。OpenVMA 网关默认只监听 `127.0.0.1:8080`；如果雷池容器无法访问宿主机回环地址，请改成服务器内网 IP，并通过云安全组或主机防火墙只允许雷池访问该端口。
+服务器需要 Docker Engine、Docker Compose v2、Git、curl，并开放公网 80/443 给雷池。VideoX 网关默认只监听 `127.0.0.1:8080`；如果雷池容器无法访问宿主机回环地址，请改成服务器内网 IP，并通过云安全组或主机防火墙只允许雷池访问该端口。
 
 ## 2. 创建生产配置
 
 ```bash
-cd /srv/openvma
+cd /srv/videox
 cp .env.production.example .env.production
 chmod 600 .env.production
 ```
@@ -29,7 +31,7 @@ chmod 600 .env.production
 - `REDIS_PASSWORD` 和对应 `REDIS_URL`
 - `MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_PUBLIC_ENDPOINT`
 - `JWT_SECRET`、与其不同的 `ADMIN_JWT_SECRET`、`ADMIN_MFA_ENCRYPTION_KEY`
-- `HOST_METRICS_PATH`；应指向 OpenVMA 数据所在磁盘上的专用空目录
+- `HOST_METRICS_PATH`；应指向 VideoX 数据所在磁盘上的专用空目录
 - 实际启用的 AI、微信、短信、支付宝凭证
 
 密码建议使用 `openssl rand -hex 24` 或更长的十六进制字符串。这样写入 `DATABASE_URL`、`REDIS_URL` 时不需要额外 URL 编码。不要把真实 `.env.production` 提交到 Git。
@@ -37,14 +39,14 @@ chmod 600 .env.production
 服务器资源指标每小时采集一次，并支持后台手动刷新。首次部署前创建专用空目录；后台只通过该目录读取所在文件系统的容量，不挂载宿主机根目录，也不接入 Docker Socket：
 
 ```bash
-mkdir -p /srv/openvma/.host-metrics
-chmod 755 /srv/openvma/.host-metrics
+mkdir -p /srv/videox/.host-metrics
+chmod 755 /srv/videox/.host-metrics
 ```
 
 对应生产配置为：
 
 ```dotenv
-HOST_METRICS_PATH=/srv/openvma/.host-metrics
+HOST_METRICS_PATH=/srv/videox/.host-metrics
 SYSTEM_METRICS_DISK_PATH=/host-metrics-disk
 SYSTEM_METRICS_SCOPE=host
 SYSTEM_METRICS_RETENTION_DAYS=30
@@ -61,9 +63,9 @@ SYSTEM_METRICS_RETENTION_DAYS=30
 每次发布都必须使用不可变镜像标签，推荐 Git commit SHA：
 
 ```bash
-cd /srv/openvma
-export OPENVMA_ENV_FILE=/srv/openvma/.env.production
-export OPENVMA_IMAGE_TAG="$(git rev-parse --short=12 HEAD)"
+cd /srv/videox
+export VIDEOX_ENV_FILE=/srv/videox/.env.production
+export VIDEOX_IMAGE_TAG="$(git rev-parse --short=12 HEAD)"
 ./deploy/deploy.sh
 ```
 
@@ -126,8 +128,8 @@ docker compose -f compose.prod.yml --env-file .env.production \
 按照 [safeline.md](safeline.md) 创建应用域名和媒体域名、配置证书、上游、WebSocket 与来源 IP。雷池配置完成后运行公网检查：
 
 ```bash
-OPENVMA_ENV_FILE=/srv/openvma/.env.production \
-OPENVMA_PUBLIC_CHECK=1 \
+VIDEOX_ENV_FILE=/srv/videox/.env.production \
+VIDEOX_PUBLIC_CHECK=1 \
 ./deploy/healthcheck.sh
 ```
 
@@ -150,7 +152,7 @@ docker compose \
 手动备份：
 
 ```bash
-OPENVMA_ENV_FILE=/srv/openvma/.env.production ./deploy/backup.sh
+VIDEOX_ENV_FILE=/srv/videox/.env.production ./deploy/backup.sh
 ```
 
 每个备份目录包含 PostgreSQL custom-format dump、MinIO bucket 镜像、manifest，以及 Linux 环境下的 SHA256 校验文件。发布脚本创建的 manifest 会分别记录 `source_image_tag` 和 `target_image_tag`，避免把迁移前数据误标为目标版本。在线备份中的 PostgreSQL dump 自身一致，但数据库与 MinIO mirror 之间不是跨服务原子快照；关键发布或灾难恢复前应进入维护窗口、停止写入后再备份。至少保留日备份、周备份和一个异机副本；只存在同一服务器磁盘上的备份不能覆盖磁盘或整机故障。
@@ -162,7 +164,7 @@ OPENVMA_ENV_FILE=/srv/openvma/.env.production ./deploy/backup.sh
 应用回滚不会自动执行 Alembic downgrade。只有确认旧版本兼容当前数据库 schema 时才能运行：
 
 ```bash
-OPENVMA_ENV_FILE=/srv/openvma/.env.production \
+VIDEOX_ENV_FILE=/srv/videox/.env.production \
 ROLLBACK_IMAGE_TAG=<previous-commit-tag> \
 CONFIRM_SCHEMA_COMPATIBLE=1 \
 ./deploy/rollback.sh

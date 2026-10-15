@@ -211,7 +211,7 @@ def _probe_upload_stream(upload: UploadFile) -> dict:
     duration = float((data.get("format") or {}).get("duration") or 0)
     if duration <= 0:
         raise HTTPException(status_code=415, detail="媒体时长无效或文件尚未完整写入")
-    data["openvma"] = {
+    data["videox"] = {
         "media_type": "video" if has_video else "audio",
         "has_audio": has_audio,
         "duration_ms": max(1, round(duration * 1000)),
@@ -500,7 +500,7 @@ async def upload_asset(
             raise HTTPException(status_code=415, detail="仅支持真实图片、视频和常见音频文件")
         if Path(safe_name).suffix.lower() not in _CONTAINER_EXTENSIONS[container]:
             raise HTTPException(status_code=415, detail="文件扩展名与真实媒体容器不一致")
-        media_info = (await asyncio.to_thread(_probe_upload_stream, file))["openvma"]
+        media_info = (await asyncio.to_thread(_probe_upload_stream, file))["videox"]
         content_type = (
             "audio/mp4"
             if media_info["media_type"] == "audio" and container == "mp4"
