@@ -5,14 +5,16 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgomp1 libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-ARG TORCH_VERSION=2.11.0
+ARG TORCH_VERSION=2.13.0
 ARG TORCHAUDIO_VERSION=2.11.0
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
     "torch==${TORCH_VERSION}" \
     "torchaudio==${TORCHAUDIO_VERSION}"
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip check \
+    && python -c "import torch, torchaudio; assert torch.version.cuda is None, 'Expected CPU-only PyTorch'"
 
 COPY app.py .
 

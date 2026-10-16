@@ -4,7 +4,7 @@
 
 2026-10-10 完成本地准备与验收，2026-10-14 补充原图来源比对、实际 Gitleaks 扫描、远端历史复查与 GitHub 设置。本记录描述实际检查范围，不代表仓库或展示站已经公开。
 
-2026-10-15 的迁移目标为独立私有仓库 `WowCoder/VideoX`，仅迁入清理后的主分支历史；旧私有仓库继续保持 Private。下述 2026-10-14 GitHub 平台结果均属于原仓库，不能替代新仓库的独立复核。新仓库公开须得到维护者确认，见 [迁移计划](superpowers/plans/2026-10-15-videox-migration.md)。
+2026-10-15 的迁移目标为独立私有仓库 `WowCoder/VideoX`，仅迁入清理后的主分支历史；旧私有仓库继续保持 Private。下述 2026-10-14 GitHub 平台结果均属于原仓库，不能替代新仓库的独立复核。本轮公开授权与待验证项见下文；迁移边界见 [迁移计划](superpowers/plans/2026-10-15-videox-migration.md)。
 
 ## 源码与文档
 
@@ -16,6 +16,8 @@
 
 ## 实际验证
 
+下表保留 2026-10-10 至 15 的历史验收；2026-10-16 的新鲜复核另列于后。
+
 | 检查 | 环境与结果 |
 | --- | --- |
 | 后端单元测试 | 新建 Python 3.12 依赖环境，274 项通过；Python 3.11 也通过 |
@@ -23,7 +25,7 @@
 | 静态检查 | 前端 lint、后端 compileall、Alembic 单一迁移头通过 |
 | 构建 | 用户应用、管理端、Pages 构建通过；Pages 项目路径和根路径均验证 |
 | 配置 | 开发和生产示例 Compose 校验通过；未读取真实生产配置 |
-| 依赖审计 | 2026-10-14 npm audit 零告警；pip-audit 2.10.1 完整解析当前 requirements 的 97 个包，零漏洞、零跳过、无忽略项 |
+| 依赖审计 | 2026-10-14 npm audit 零告警；pip-audit 2.10.1 完整解析当时后端 requirements 的 97 个包，零漏洞、零跳过、无忽略项 |
 | 密钥扫描 | Gitleaks 8.30.1 在 `c148060` 检查点扫描全部本地引用的 29 个提交和 374 个可发布文件，精确排除两项已核实的测试值后零命中；例外边界反向验证通过 |
 | 原仓库远端历史 | 2026-10-14，独立私密 mirror 核查 `main` 的 `d9fdb6c` 及全部 46 个向已认证客户端提供的引用，共 60 个可达提交；Gitleaks 零命中，已移除的身份脚本零可达对象、零相关历史提交，提交邮箱均为 GitHub noreply，清理前的旧主分支提交不可达 |
 | 原仓库 GitHub CI | 2026-10-14，`main` 的 `c148060`、后续文档提交 `d9fdb6c`、`9535ebe` 均实际通过 Check 和 Security 工作流 |
@@ -46,6 +48,16 @@ Security 工作流固定同一 Gitleaks 版本和配置，增量检查后扫描�
 
 云端模型真实推理、支付交易、生产负载与灾难恢复不属于这次离线验收范围。
 
+## 2026-10-16 公开前复核
+
+- **远端基线 `ee0fa4b`**：独立核查 55 个远端引用、71 个可达提交（主分支 35 个）、1063 个可达 blob。历史、全部可达 blob、当前主分支快照与提交元数据四类 Gitleaks 扫描均零命中；作者与提交者邮箱均为 GitHub noreply，旧私密脚本及未清理提交均不可达。该结果对应此基线，修复分支推送后仍需核对最终提交。
+- **本地工程检查**：前端 27 项测试、lint、应用/管理端/Pages 三个构建全部通过，包含开发依赖的完整 npm audit 零漏洞；后端 275 项测试、compileall、Alembic 单一迁移头 `037` 及开发/生产示例 Compose 校验通过。全新 Python 3.12 后端环境完整审计 99 个包（含临时工具 pip 26.2.1），零漏洞。
+- **可选服务修复**：四个 local-ai 原 requirements 的完整审计发现真实已知漏洞；本轮修复分支更新四份清单及三个 Dockerfile 的 CPU 包约束，补上 Python 3.11 四服务安全审计矩阵和五个 Python 目录的每周 Dependabot 更新。修复后四份清单在 macOS ARM / Python 3.11 下均以默认 PyPI 完整解析并审计为零漏洞；最终采用的 `transformers==5.10.4` 未被撤回（非 yanked）。
+- **CPU 兼容检查**：Linux aarch64 / Python 3.11 干净合并 venv 中，`torch==2.13.0+cpu`、`torchaudio==2.11.0+cpu` 与修复后的相关包真实导入成功，四服务模型入口导入通过；16 kHz → 8 kHz 重采样、Mel 计算、`pip check` 均通过，CUDA 为 `None`。
+- **Linux 依赖复审**：Linux aarch64 / Python 3.11 的默认 PyPI 完整依赖图审计通过，ASR 99、OCR 31、embedding 75、reranker 100 个包均零漏洞、零跳过，包含三个 Torch 服务额外的 CUDA/NVIDIA/triton 依赖。
+
+规范 PyPI requirements 依赖图的审计不等于 CPU 镜像所有层或系统库的检查；上述 CPU 验证使用单一合并环境，未下载模型或进行真实推理，不是四个镜像各自的全量验收。本轮 GitHub 云端 x86_64 CI 和 19 条平台告警尚未重新核实，不能据此声称已经通过或清空。仓库仍为 **Private**，维护者已明确授权在审查无阻塞后公开，当前尚未执行该动作。
+
 ## 仓库迁移与公开前确认
 
 2026-10-14 完成三张原图的直接来源比对：NASA 概念图像素一致，月球照片与 NASA ISS038e037342 逐字节一致，银河图与作者 Commons 原图在缩放、转码后匹配。原图全部保留，修正先前错误的 ESA 月球署名；保留 NASA 使用说明和银河图的 CC BY-SA 4.0 署名、来源及变换说明，见 [第三方说明](../THIRD_PARTY_NOTICES.md)。
@@ -54,13 +66,13 @@ Security 工作流固定同一 Gitleaks 版本和配置，增量检查后扫描�
 
 `WowCoder/VideoX` 使用独立的新仓库，仅迁入清理后的主分支及其祖先，不采用 Fork 或仓库转移。原仓库的服务器缓存、Actions 日志、附件和未审计引用不属于此次迁移内容。原仓库继续保持 Private，其缓存清除工单不作为独立新仓库公开的前置条件。
 
-新仓库保持 **Private**，Website 留空，等待维护者确认后再公开。源码、克隆、Issue、安全反馈链接和 Pages 默认项目路径使用 VideoX。迁移检查点保留了当时的应用标识；后续品牌统一为 VideoX，原有图片保留。Pages 工作流需要仓库为 Public、`PAGES_ENABLED=true` 且分支为 `main` 才会发布，普通 Check 中的静态站构建不发布站点。
+新仓库目前仍为 **Private**，Website 留空；完成本轮待验证项并确认无阻塞后，可执行已获授权的公开动作。源码、克隆、Issue、安全反馈链接和 Pages 默认项目路径使用 VideoX。迁移检查点保留了当时的应用标识；后续品牌统一为 VideoX，原有图片保留。Pages 工作流需要仓库为 Public、`PAGES_ENABLED=true` 且分支为 `main` 才会发布，普通 Check 中的静态站构建不发布站点。
 
-新仓库的 Description、8 个 Topics 已保存；Dependency graph、Dependabot alerts 和 Dependabot security updates 已独立确认开启。当前 15 个 Dependabot 依赖 PR 由新仓库配置自动创建，没有从原仓库迁入或自动合并。本地默认 `origin` 指向 VideoX，旧私有仓库远端继续保留。
+2026-10-15 已独立确认新仓库的 Description、8 个 Topics 及 Dependency graph、Dependabot alerts、Dependabot security updates 设置；当时有 15 个由新仓库配置自动创建的 Dependabot 依赖 PR，没有从原仓库迁入或自动合并。这是历史记录，不代表本轮 PR 或告警数量。本地默认 `origin` 指向 VideoX，旧私有仓库远端继续保留。
 
 1. 核对新仓库为独立的 Private 仓库，远端主分支与已审核的迁移提交完全一致；检查全部提供的分支、标签、PR 引用及提交元数据，确认没有清理前身份脚本或私人邮箱。
 2. 在新仓库运行 Check 和 Security，以新仓库实际结果为准；独立检查其 Description、Topics 和依赖保护设置。不得用原仓库的设置或 CI 结果代替。
-3. 得到维护者明确公开确认后，将新仓库设为 Public；按届时可用功能配置私密漏洞报告、Secret scanning / Push protection 与主分支保护。
+3. 本轮待验证项、云端 CI 和平台告警核实无阻塞后，将新仓库设为 Public；按届时可用功能配置私密漏洞报告、Secret scanning / Push protection 与主分支保护。
 4. 按 [Pages 指南](github-pages.md)显式设置发布变量、启用 Pages，核对实际站点后再填写 Website URL。当前预计项目路径为 `/VideoX/`，不声称站点已上线。
 5. 只从已检查的干净源码构建公开镜像或发布包，不上传环境文件、原始备份、私人媒体或旧部署产物。首个版本的演示与验证说明应使用自有素材，并标明实际验证范围。
 

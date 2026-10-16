@@ -10,7 +10,9 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
     "torch==${TORCH_VERSION}"
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip check \
+    && python -c "import torch; assert torch.version.cuda is None, 'Expected CPU-only PyTorch'"
 
 COPY app.py .
 

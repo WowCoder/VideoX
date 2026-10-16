@@ -5,7 +5,12 @@ updates:
     schedule:
       interval: weekly
   - package-ecosystem: pip
-    directory: /backend
+    directories:
+      - /backend
+      - /local-ai/embedding
+      - /local-ai/reranker
+      - /local-ai/asr
+      - /local-ai/ocr
     schedule:
       interval: weekly
   - package-ecosystem: github-actions
