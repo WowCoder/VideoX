@@ -28,7 +28,7 @@ ffmpeg-python==0.2.0
 Pillow==12.3.0
 
 # ── AI / LLM ──
-openai==1.58.1
+openai==3.29.0
 httpx==0.28.1
 
 # ── 短信服务（阿里云）──
