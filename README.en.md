@@ -1,44 +1,79 @@
-# VideoX
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="frontend/public/branding/videox-mark-minimal-light.svg">
+    <img src="frontend/public/branding/videox-mark-minimal-dark.svg" alt="VideoX" width="64" height="64">
+  </picture>
+</p>
+<h1 align="center">VideoX</h1>
+<p align="center"><strong>A script-driven AI video workspace</strong><br>Turn creative intent into an editable screenplay that connects scenes, shots, media, and the final cut.</p>
+<p align="center">
+  <a href="README.md">中文</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="docs/configuration.md">Configuration</a> ·
+  <a href="docs/github-pages.md">Showcase</a>
+</p>
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href=".github/workflows/check.yml"><img src="https://img.shields.io/badge/Checks-GitHub_Actions-2088FF?logo=githubactions&amp;logoColor=white" alt="GitHub Actions checks"></a>
+</p>
 
-[中文](README.md) · [Getting started](docs/getting-started.md) · [Architecture](docs/architecture.md)
+![VideoX script and storyboard workspace](docs/assets/videox-workspace.jpg)
 
-VideoX is a script-driven video workspace that turns creative intent into an editable film in a desktop browser.
+Actual local workspace: three scenes, three shots, a twelve-second manually authored script, and a real offline export. Visuals use NASA references and an original title card, with AI disabled. See [asset credits](THIRD_PARTY_NOTICES.md).
 
-**Script as Spec.** Inspired by Spec-Driven Development, VideoX makes the screenplay an editable creative specification: scenes, shots, narration, visual descriptions, and timing guide asset retrieval, media generation, voiceover, composition, and export. “Script” means a video screenplay here. The stack includes React/TypeScript, FastAPI, Celery, PostgreSQL/pgvector, Redis, MinIO, and optional local AI services.
+## Script as Spec
 
-AI is optional. Models produce structured drafts, search plans, matching candidates, and generated media. Creators can keep editing the script, selecting media, and adjusting sound; backend code validates revisions, schedules jobs, compiles the composition, and renders it. Manual editing and export work without AI.
+Inspired by **Spec-Driven Development**, VideoX treats the editable screenplay as a creative specification: scenes, shots, narration, visual direction, and timing guide retrieval, generation, voiceover, and rendering. “Script” means a video screenplay here.
 
-![Actual VideoX project workspace](docs/assets/workspace-smoke.jpg)
-
-Actual workspace: a three-second original test clip, manual storyboard, and offline export with AI services disabled. See [verification scope](docs/open-source-readiness.md).
-
-## From creative intent to film
-
-```text
-Creative intent
-   ↓ Write / import / optional AI draft
-Editable script: scenes, shots, narration, visuals, timing
-   ↓
-Asset retrieval and selection / optional generation and voiceover
-   ↓
-Main composition → Preview and edit → FFmpeg export
+```mermaid
+flowchart LR
+  A[Creative intent] --> B[Editable script]
+  B --> C[Shot media and sound]
+  C --> D[Main composition]
+  D --> E[FFmpeg export]
 ```
 
-The [script model](backend/app/models/script.py) connects these stages: shot descriptions guide retrieval and generation, narration supplies subtitle and voiceover text, and shot order, timing, and selected media feed the [render plan](backend/app/services/composition_render_plan.py). Project revision checks protect ongoing edits. Matching leaves candidates for selection; generated media may become the selected version when its shot has not changed, while stale results stay in version history.
+Creators keep editing the script, selecting media, and adjusting sound. Models supply drafts, candidates, or generated media; backend code validates revisions, schedules jobs, and executes deterministic media processing. **Manual editing and export work without AI.**
 
-Available workflows include:
+## From script to film
 
-- Upload and process video/audio, create thumbnails and shot segments, edit scenes and shots, mix audio, and export MP4.
-- Retrieve semantic candidates with Embedding and optional reranking; matching does not automatically select a candidate.
-- Discover topics from fetched sources and monitor source changes with deterministic diffs and validated citations.
-- Generate storyboard images/video with explicit DashScope or Agnes configuration; sketch effects and TTS currently use DashScope only.
-- Persist video submission, polling, and media transfer separately, with queue and in-flight limits and protection against duplicate paid submissions.
+- **Write the script**: author scenes and shots, import a script table, or configure a text model for editable drafts.
+- **Find the visuals**: upload your media; optionally enable semantic retrieval, reranking, image generation, text-to-video, or image-to-video.
+- **Shape the film**: choose media versions, adjust narration, subtitles, sound, and the main timeline. AI voiceover has its own provider setting.
+- **Export**: compile selected media into the main composition and render MP4 through background FFmpeg jobs with persisted status.
 
-Each project has one script and main composition. Revision checks protect edits; stale generated results are retained as media versions rather than replacing a newer selection. Multiplayer collaboration is not available. See [limitations](docs/limitations.md).
+<details>
+<summary><strong>More real screens: media library and export</strong></summary>
 
-## Start without AI credentials
+### Media library
 
-Install Docker Engine/Desktop and Compose v2, then:
+![Actual VideoX media library](docs/assets/videox-assets.jpg)
+
+Uploaded clips go through real media processing. The pictured references were made from NASA images, not generated by AI.
+
+### Composition and jobs
+
+![Actual VideoX composition and export](docs/assets/videox-export.jpg)
+
+The script, selected media, and main composition belong to the same project. Export status comes from the actual background job.
+
+</details>
+
+## Engineering design
+
+| Design | Problem addressed | Source |
+| --- | --- | --- |
+| **Unified project document and revision guards** | Saves validate `expected_revision`; async results recheck revisions, and stale generated media remains in version history to protect newer edits | [Workspace](backend/app/services/workspace.py) · [Result persistence](backend/app/tasks/generate_tasks.py) |
+| **Source-constrained inspiration workflow** | Query planning, refetching, citation allowlists, JSON validation, and one repair attempt; source monitoring computes diffs before summarizing changes | [Inspiration jobs](backend/app/tasks/inspiration_tasks.py) |
+| **Persistent generation jobs** | Separate queue capacity from provider in-flight limits; delayed polling and media recovery; unknown submission outcomes are not blindly resubmitted | [Queue](backend/app/services/video_queue.py) · [State machine](backend/app/tasks/video_tasks.py) |
+| **Deterministic composition execution** | Project data becomes a render plan; export succeeds only after FFmpeg finishes and output is persisted. Composition does not implicitly call a model | [Render plan](backend/app/services/composition_render_plan.py) · [Export](backend/app/tasks/export_tasks.py) |
+
+Stack: **React 19 / TypeScript / FastAPI / Celery / PostgreSQL + pgvector / Redis / MinIO / FFmpeg**. Start with the [script and shot model](backend/app/models/script.py), then see [architecture](docs/architecture.md) for data flow and failure boundaries.
+
+## Quick start
+
+Install Docker Engine/Desktop and Compose v2. Run in a controlled local environment:
 
 ```bash
 git clone https://github.com/WowCoder/VideoX.git
@@ -48,28 +83,21 @@ docker compose config --quiet
 docker compose up -d --build
 ```
 
-The example disables all AI providers, so this baseline neither downloads models nor invokes paid AI. Check existing environment files before starting. Visit [localhost:5273](http://localhost:5273), register with email, create a blank project, upload your own short video, add scenes/shots, select media, compile the main composition, and export MP4.
+Open [localhost:5273](http://localhost:5273) and register with email. Try: **upload your short video → add scenes and shots → select media → compile the composition → export MP4**. API docs: [localhost:8000/docs](http://localhost:8000/docs).
 
-Existing deployments need an explicit transition for configuration, volumes, database, bucket, and queues. New defaults do not migrate resources; sign in again after switching. See the [configuration transition notes](docs/configuration.md#既有部署切换).
+The example disables all AI providers, so it downloads no models and invokes no paid AI. Preserve existing `.env` files and check configuration before starting. Composition does not launch paid generation for missing shots. See [getting started](docs/getting-started.md) and [provider configuration](docs/configuration.md).
 
-API documentation is at [localhost:8000/docs](http://localhost:8000/docs). Check jobs with `docker compose logs -f backend celery-worker celery-beat`. For admin development, use `npm run dev:admin` in `frontend/`, at [localhost:5274/admin.html](http://localhost:5274/admin.html), with a separate administrator account and TOTP. The regular Vite dev server also serves `/admin.html`; production separation uses distinct builds and gateway configuration.
+Existing deployments require explicit mapping or migration of configuration, volumes, database, bucket, and queues; new defaults do not migrate data. See [transition notes](docs/configuration.md#既有部署切换). Root Compose is for development; use the [deployment guide](deploy/README.md) for production.
 
-For local AI, explicitly set the four core providers to `local` in `.env` before running `docker compose --profile local-ai up -d --build`. Cloud capabilities require their explicit provider setting, credentials, enabled models, and a service account that may incur charges. There is no silent local-to-paid fallback. See [configuration](docs/configuration.md).
+## Documentation and contributing
 
-The root Compose file is a development environment. Use the [production deployment guide](deploy/README.md) for protected gateways, immutable images, backups, migrations, and rollback.
+| Get started | Understand the implementation | Run and deploy |
+| --- | --- | --- |
+| [Getting started](docs/getting-started.md) | [Architecture and AI workflows](docs/architecture.md) | [Configuration and providers](docs/configuration.md) |
+| [Capabilities and limitations](docs/limitations.md) | [Development and checks](docs/development.md) | [Production](deploy/README.md) · [Pages showcase](docs/github-pages.md) |
 
-## Development and showcase
+Real-time multiplayer collaboration is not available. AI features require the relevant provider, account access, and service charges. Matching leaves candidates for selection; generated media may become selected when its shot has not changed. See [limitations](docs/limitations.md) and [verification scope](docs/open-source-readiness.md).
 
-Node 22 and Python 3.12 are used for host development. `make check` runs checks through the running development containers. See [development](docs/development.md) for host workers, migrations, and separate app/admin builds.
+Reproducible issues and verified improvements are welcome: [Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md).
 
-The Pages showcase reuses the existing homepage design through an independent build, with no application API or account dependency:
-
-```bash
-cd frontend
-npm ci
-npm run build:pages
-```
-
-Output: `frontend/dist-pages/`; default base: `/VideoX/`. Deployment requires a public repository and an explicit `PAGES_ENABLED=true` repository variable; the migration remains private until maintainer approval. `https://WowCoder.github.io/VideoX/` is the expected URL after deployment. See the [Pages setup guide](docs/github-pages.md).
-
-Code is licensed under [MIT](LICENSE). Third-party assets, model weights, and hosted services have their own terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Security reporting: [SECURITY.md](SECURITY.md).
+Code: [MIT](LICENSE). Model weights, third-party assets, and external services retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md).

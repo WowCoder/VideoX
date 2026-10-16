@@ -1,192 +1,103 @@
-# VideoX
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="frontend/public/branding/videox-mark-minimal-light.svg">
+    <img src="frontend/public/branding/videox-mark-minimal-dark.svg" alt="VideoX" width="64" height="64">
+  </picture>
+</p>
+<h1 align="center">VideoX</h1>
+<p align="center"><strong>脚本驱动的 AI 视频创作工作台</strong><br>把创作意图写成脚本，让场景、镜头、素材与成片围绕同一份项目数据协作。</p>
+<p align="center">
+  <a href="README.en.md">English</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="docs/architecture.md">架构</a> ·
+  <a href="docs/configuration.md">配置</a> ·
+  <a href="docs/github-pages.md">展示站</a>
+</p>
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href=".github/workflows/check.yml"><img src="https://img.shields.io/badge/Checks-GitHub_Actions-2088FF?logo=githubactions&amp;logoColor=white" alt="GitHub Actions checks"></a>
+</p>
 
-[English](README.en.md) · [快速开始](docs/getting-started.md) · [架构](docs/architecture.md) · [配置](docs/configuration.md)
+![VideoX 脚本与分镜工作区](docs/assets/videox-workspace.jpg)
 
-VideoX 是以脚本驱动的视频创作工作台，在桌面浏览器中将创作意图逐步变为可编辑、可导出的成片。
+真实本地工作区：3 个场景、3 个镜头、12 秒，手工编写脚本并完成离线导出。画面使用 NASA 视觉参考和原创标题卡，未调用 AI，素材署名见[第三方说明](THIRD_PARTY_NOTICES.md)。
 
-**脚本即创作规格（Script as Spec）。** 借鉴规格驱动开发（Spec-Driven Development）的思路，先将创作目标写成可编辑的场景、镜头、台词/旁白、画面与时长要求，再以此组织素材检索、媒体生成、配音、主成片编排和导出。这里的脚本指视频创作脚本。
+## 脚本即创作规格 · Script as Spec
 
-AI 能力是可选组件。模型负责搜索规划、结构化草稿、语义候选与媒体生成；创作者可持续修改脚本、选择素材和调整声音；后端负责版本校验、任务调度、主成片编排和确定性媒体处理。人工创作与导出可独立运行。
+借鉴**规格驱动开发（Spec-Driven Development）**：先把创作目标落实为可编辑的场景、镜头、台词/旁白、画面与时长要求，再以这份创作规格组织检索、生成、配音与渲染。这里的脚本指视频创作脚本。
 
-仓库包含 React/TypeScript 前端、FastAPI 后端、Celery Worker/Beat，以及 PostgreSQL/pgvector、Redis、MinIO 和可选本地模型服务。代码采用 [MIT](LICENSE)；模型、外部服务及第三方素材的许可另见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
-![VideoX 实际项目工作区](docs/assets/workspace-smoke.jpg)
-
-实际工作区截图：3 秒原创测试视频、手动分镜和离线导出，未调用 AI 服务。验证范围见 [开源准备记录](docs/open-source-readiness.md)。
-
-## 能做什么
-
-| 能力 | 当前实现 | 前提 |
-| --- | --- | --- |
-| 邮箱账号与项目 | 邮箱注册/登录、个人项目、项目素材关联 | 基础服务 |
-| 素材管理 | 视频/音频上传，FFprobe 校验，缩略图、镜头切分、试听代理 | FFmpeg、MinIO |
-| 人工创作 | 场景、镜头、台词、素材选择、声音、字幕与主时间线 | 基础服务 |
-| 语义匹配 | 向量召回、可选重排序、逐镜头候选及匹配理由 | Embedding；Reranker 可选 |
-| 脚本与视觉分析 | 结构化脚本、镜头描述补全、人物/物品/场景识别 | 显式启用文本/视觉 Provider |
-| 灵感任务 | 联网选题发现、来源更新监测、引用和变化证据 | 搜索；生成结果还需文本模型 |
-| 分镜媒体生成 | 生图、文生视频、图生视频、草图动效、素材版本历史 | 对应 Provider、账号权限和费用 |
-| AI 配音 | 分段合成、归一化、时长适配与音频回收 | 单独启用 DashScope TTS |
-| 主成片与导出 | 唯一项目主成片编排，多轨音频、字幕、FFmpeg 导出 | 已选素材；基础服务 |
-| 任务与运营后台 | 持久化任务、状态查询、独立管理员账号和 TOTP | Worker/Beat；后台单独启动 |
-
-会员、账单、支付适配器与发票申请属于仓库中的业务模块；正式收款和税务服务需要部署者配置外部服务。当前不提供多人实时协作。详见 [当前边界](docs/limitations.md)。
-
-## 从创作意图到成片
-
-```text
-创作意图
-   ↓ 手动编写 / 导入 / 可选 AI 草稿
-可编辑脚本：场景、镜头、台词/旁白、画面与时长要求
-   ↓
-素材检索与选择 / 可选媒体生成、配音
-   ↓
-项目主成片编排 → 预览与调整 → FFmpeg 导出
+```mermaid
+flowchart LR
+  A[创作意图] --> B[可编辑脚本]
+  B --> C[镜头素材与声音]
+  C --> D[主成片编排]
+  D --> E[FFmpeg 导出]
 ```
 
-脚本与分镜是后续任务共同读取的项目数据：修改镜头描述影响检索与生成输入，台词为字幕与配音提供文本，镜头顺序、时长和所选媒体进入渲染计划。项目修订号用于检查任务是否仍对应当前编辑状态。
+创作者可以持续修改脚本、选择素材和调整声音；模型提供草稿、候选或生成媒体，后端负责版本校验、任务调度和确定性媒体处理。**人工编辑与导出可以独立于 AI 运行。**
 
-素材匹配不会自动替你采用第一个候选，也不会自动对缺失镜头发起付费生成。生成媒体可能在镜头未继续编辑时成为当前选中版本；镜头已经变化时，结果保留在版本历史中供用户复核。
+## 从脚本到成片
 
-主成片编排消费项目已有的场景、镜头、选中媒体与声音设置。未补齐镜头会保留缺失状态；编排成功也不等于导出已完成。
+- **写脚本**：手动编写、导入脚本表格，或接入文本模型生成可编辑的场景与镜头。
+- **补画面**：上传自己的媒体；按需启用语义检索、重排序、生图、文生视频或图生视频。
+- **调成片**：选择镜头媒体版本，调整旁白、字幕、声音和项目主时间线；AI 配音单独启用。
+- **导出视频**：把已选媒体编排为主成片，通过后台 FFmpeg 任务导出 MP4，查看真实处理状态。
 
-## 快速启动：先跑通人工媒体流程
+<details>
+<summary><strong>查看更多真实界面：素材管理与导出结果</strong></summary>
 
-需要 Docker Engine/Desktop 和 Compose v2。Docker 路径不要求宿主机安装 Node、Python 或 FFmpeg；宿主机开发和 Pages 构建使用 Node 22、Python 3.12。
+### 素材管理
+
+![VideoX 实际素材库](docs/assets/videox-assets.jpg)
+
+上传的短视频经过真实媒体处理；截图中的参考画面由 NASA 图片制作，不是 AI 生成结果。
+
+### 成片与任务
+
+![VideoX 实际成片与导出结果](docs/assets/videox-export.jpg)
+
+同一项目中的脚本、选中媒体与主成片关联，导出状态来自实际后台任务。
+
+</details>
+
+## 工程设计
+
+| 设计 | 解决的问题 | 源码入口 |
+| --- | --- | --- |
+| **统一项目文档与修订保护** | 保存校验 `expected_revision`；异步结果再次检查版本，过期生成结果保留为媒体历史，保护后续编辑 | [工作区](backend/app/services/workspace.py) · [结果写回](backend/app/tasks/generate_tasks.py) |
+| **有来源约束的灵感工作流** | 查询规划、重新抓取、引用白名单、JSON 校验与一次修复；链接监测先计算 Diff，再总结变化 | [灵感任务](backend/app/tasks/inspiration_tasks.py) |
+| **持久化生成任务** | 排队容量与供应商在途并发分开限制；延迟轮询与媒体回收；提交结果未知时不盲目重提，避免重复付费 | [队列](backend/app/services/video_queue.py) · [状态机](backend/app/tasks/video_tasks.py) |
+| **确定性成片执行** | 项目数据编译为渲染计划，FFmpeg 完成并持久化结果后才确认导出成功；编排阶段不隐式调用模型 | [渲染计划](backend/app/services/composition_render_plan.py) · [导出](backend/app/tasks/export_tasks.py) |
+
+技术栈：**React 19 / TypeScript / FastAPI / Celery / PostgreSQL + pgvector / Redis / MinIO / FFmpeg**。脚本与镜头的数据结构见[模型](backend/app/models/script.py)，完整数据流与失败边界见[架构说明](docs/architecture.md)。
+
+## 快速开始
+
+需要 Docker Engine/Desktop 和 Compose v2。在受控本地环境运行：
 
 ```bash
 git clone https://github.com/WowCoder/VideoX.git
 cd VideoX
 cp .env.example .env
-```
-
-新复制的示例关闭全部 `AI_*_PROVIDER`，首次运行不会下载模型或调用付费 AI。若已有 `.env`，启动前明确检查所有 AI Provider 为 `disabled`；复制操作不要覆盖你已有的配置。
-
-已有部署升级时，须显式衔接旧配置与既有数据卷、数据库、bucket 和任务队列；新默认名称不会自动迁移资源，切换后需重新登录。见[配置迁移说明](docs/configuration.md#既有部署切换)。
-
-```bash
 docker compose config --quiet
 docker compose up -d --build
-docker compose ps
 ```
 
-| 服务 | 本地地址 |
-| --- | --- |
-| 用户前端 | [localhost:5273](http://localhost:5273) |
-| API 文档 | [localhost:8000/docs](http://localhost:8000/docs) |
-| MinIO Console | [localhost:9001](http://localhost:9001) |
+打开 [localhost:5273](http://localhost:5273)，使用邮箱注册。首次建议：**上传自己的短视频 → 建立场景和镜头 → 选择素材 → 编排主成片 → 导出 MP4**。API 文档位于 [localhost:8000/docs](http://localhost:8000/docs)。
 
-打开用户前端，使用邮箱注册，无需短信或微信凭证。创建空白项目，上传一个自己拥有使用权的小型视频，建立场景和镜头，选择素材，编排主成片并导出 MP4。建议先测试数秒媒体，再增加素材规模。
+示例关闭所有 AI Provider，不会下载模型或调用付费 AI；已有 `.env` 时保留原文件，并在启动前检查配置。主成片编排不会自动为缺失镜头发起付费生成。完整步骤见[快速开始](docs/getting-started.md)，按需接入模型见[配置说明](docs/configuration.md)。
 
-AI 全部关闭时，FFmpeg 元数据、镜头切分、缩略图、人工编辑和导出仍可使用；ASR、OCR、视觉分析、语义匹配和 AI 生成不可用。页面不会为缺失能力填充模型结果。
+已有部署升级须显式衔接既有数据卷、数据库、bucket 和队列，新默认名称不会自动迁移资源，见[切换说明](docs/configuration.md#既有部署切换)。根目录 Compose 用于本地开发；生产环境使用[部署手册](deploy/README.md)。
 
-检查应用和任务：
+## 文档与参与
 
-```bash
-docker compose logs -f backend celery-worker celery-beat
-curl --fail --show-error http://localhost:8000/api/health
-```
+| 开始使用 | 了解实现 | 运行与部署 |
+| --- | --- | --- |
+| [快速开始](docs/getting-started.md) | [架构与 AI 工作流](docs/architecture.md) | [配置与 Provider](docs/configuration.md) |
+| [当前能力与边界](docs/limitations.md) | [开发与检查](docs/development.md) | [生产部署](deploy/README.md) · [Pages 展示站](docs/github-pages.md) |
 
-完整步骤、故障排查和非 Docker 启动见 [快速开始](docs/getting-started.md)。根目录开发 Compose 包含源码挂载、开发凭证和服务端口，应在受控本地环境使用。生产部署从 [deploy/README.md](deploy/README.md) 开始。
+当前不提供多人实时协作；AI 能力需要相应 Provider、账号权限及费用。素材匹配保留候选供选择；生成媒体在镜头未继续编辑时可能成为选中版本。更多行为与验证范围见[当前边界](docs/limitations.md)和[开源准备记录](docs/open-source-readiness.md)。
 
-## 按需启用 AI
+欢迎提交可复现的问题和有验证结果的改进：[贡献指南](CONTRIBUTING.md) · [安全报告](SECURITY.md)。
 
-启用本地模型前，先编辑根目录 `.env`：
-
-```dotenv
-AI_EMBEDDING_PROVIDER=local
-AI_RERANK_PROVIDER=local
-AI_ASR_PROVIDER=local
-AI_OCR_PROVIDER=local
-LOCAL_AI_API_KEY=replace-with-a-random-token-at-least-24-characters
-```
-
-然后启动并重新创建应用服务，使新环境变量生效：
-
-```bash
-docker compose --profile local-ai up -d --build
-docker compose logs -f local-embedding local-reranker local-asr local-ocr
-```
-
-模型首次启动会下载权重并占用内存/磁盘。CPU 可运行，具体速度取决于硬件、输入和并发；仓库没有公布速度或质量基准。模型数据保存在 Docker Volume。
-
-| 可选本地服务 | 用途 |
-| --- | --- |
-| BGE-M3 | 1024 维 Embedding |
-| BGE Reranker | 候选重排序 |
-| FunASR | 语音识别 |
-| RapidOCR / PP-OCR ONNX | 抽帧文字识别 |
-
-云端文本、视觉、生图、文生视频和图生视频支持 DashScope 或 Agnes；草图动效与 TTS 当前仅支持 DashScope。TTS 有独立开关。Provider 不会从本地失败静默回退到线上付费服务。
-
-云端能力必须同时配置对应 Provider、密钥和已开通模型；密钥本身不会启用示例中关闭的能力。模型可用性、额度、地域、费用和输出限制以你的服务账号为准，配置矩阵见 [配置说明](docs/configuration.md)。
-
-## 工程实现
-
-```text
-React / Vite ── REST + WebSocket ── FastAPI
-                                    ├── PostgreSQL / pgvector
-                                    ├── MinIO（媒体与导出文件）
-                                    └── Redis / Celery / Beat
-                                          ├── FFmpeg / FFprobe
-                                          ├── 可选本地 AI
-                                          └── 显式配置的云端 Provider
-```
-
-可从以下源码入口检查实际行为：
-
-- [脚本生成](backend/app/tasks/script_tasks.py)、[场景/镜头模型](backend/app/models/script.py)与[脚本工作台](frontend/src/views/MvpScriptComposer.tsx)：将创作输入归一化为可编辑的脚本结构，连接下游媒体任务。
-- [灵感任务](backend/app/tasks/inspiration_tasks.py)：搜索查询规划、抓取候选、真实来源引用白名单、JSON 校验与一次修复重试；链接监测先做确定性 Diff，再总结变化。
-- [素材匹配](backend/app/tasks/match_tasks.py)：匹配当前 Embedding 模型的素材向量，逐镜头写入候选，写入前检查项目版本。
-- [项目工作区](backend/app/services/workspace.py)：`expected_revision` 乐观并发控制、素材选择和项目修订记录。
-- [视频队列](backend/app/services/video_queue.py)与[视频任务](backend/app/tasks/video_tasks.py)：排队容量和供应商在途并发分别限制，持久化提交、轮询和媒体回收。
-- [主成片任务](backend/app/tasks/roughcut_tasks.py)、[渲染计划](backend/app/services/composition_render_plan.py)与[导出](backend/app/tasks/export_tasks.py)：把已选项目数据编译为可执行媒体计划。
-
-视频等待供应商生成时使用延迟轮询，不长期占用 Worker 执行槽。供应商提交结果无法确认时不会盲目自动重提；已知供应商任务的查询或媒体回收失败可进入可恢复状态。更完整的状态与失败边界见 [架构说明](docs/architecture.md)。
-
-## 开发与检查
-
-```bash
-make help
-make check
-```
-
-`make check` 使用已运行的开发容器，执行 Compose 校验、后端测试/编译、前端测试、lint 和应用构建。独立管理端与 Pages 构建见 [开发指南](docs/development.md)。
-
-前端 Vite 代理使用服务端环境变量 `API_PROXY_TARGET`：宿主机开发默认访问 `http://localhost:8000`，Compose 前端访问 `http://backend:8000`。它不作为浏览器构建配置注入静态页面。
-
-管理端开发建议使用独立的 5274 端口。在另一终端中：
-
-```bash
-cd frontend
-npm ci
-npm run dev:admin
-```
-
-访问 [localhost:5274/admin.html](http://localhost:5274/admin.html)。管理员需通过 `backend/scripts/manage_admin.py` 单独创建并配置 TOTP；普通邮箱用户不是管理员。
-
-普通 Vite 开发服务也能直接访问 `/admin.html`；生产隔离由独立构建和网关配置提供。
-
-## GitHub Pages 展示站
-
-展示站复用原官网的设计，通过独立入口构建，不连接应用 API，也不要求登录。仓库提供源码、配置和发布工作流；以下地址是部署后预期地址，不表示已上线：
-
-`https://WowCoder.github.io/VideoX/`
-
-```bash
-cd frontend
-npm ci
-npm run build:pages
-```
-
-产物位于 `frontend/dist-pages/`，默认 base 为 `/VideoX/`。远端发布需仓库为 Public 且显式设置 `PAGES_ENABLED=true`；当前迁移阶段保持 Private。完整操作见 [Pages 指南](docs/github-pages.md)。
-
-## 文档与贡献
-
-- [快速开始](docs/getting-started.md)：邮箱注册、人工媒体流程、宿主机启动和后台。
-- [架构说明](docs/architecture.md)：数据模型、AI 边界、任务恢复和确定性渲染。
-- [配置说明](docs/configuration.md)：Provider、队列、存储、身份与生产配置。
-- [开发指南](docs/development.md)：目录、检查、迁移与向量重建。
-- [当前边界](docs/limitations.md)：未提供能力、外部依赖和验收范围。
-- [生产部署](deploy/README.md)、[发布](deploy/release.md)、[恢复](deploy/restore.md)。
-
-欢迎提交可复现的问题和有验证结果的改进。参与方式见 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题处理见 [SECURITY.md](SECURITY.md)。
+代码采用 [MIT](LICENSE)；模型、第三方素材与外部服务遵循各自条款，详见[第三方说明](THIRD_PARTY_NOTICES.md)。
