@@ -2,9 +2,9 @@
 
 [返回 README](../README.md) · [Pages 发布](github-pages.md)
 
-2026-10-10 完成本地准备与验收，2026-10-14 补充原图来源比对、实际 Gitleaks 扫描、远端历史复查与 GitHub 设置。本记录描述实际检查范围，不代表仓库或展示站已经公开。
+2026-10-10 完成本地准备与验收，2026-10-14 补充原图来源比对、实际 Gitleaks 扫描、远端历史复查与 GitHub 设置。2026-10-16 仓库已公开，匿名访问验证通过；Pages 展示站尚未启用。本记录描述各检查点的实际验证范围。
 
-2026-10-15 的迁移目标为独立私有仓库 `WowCoder/VideoX`，仅迁入清理后的主分支历史；旧私有仓库继续保持 Private。下述 2026-10-14 GitHub 平台结果均属于原仓库，不能替代新仓库的独立复核。本轮公开授权与待验证项见下文；迁移边界见 [迁移计划](superpowers/plans/2026-10-15-videox-migration.md)。
+2026-10-15 的迁移目标为独立私有仓库 `WowCoder/VideoX`，仅迁入清理后的主分支历史；旧私有仓库继续保持 Private。下述 2026-10-14 GitHub 平台结果均属于原仓库，不能替代新仓库的独立复核。本轮公开结果见下文；迁移边界见 [迁移计划](superpowers/plans/2026-10-15-videox-migration.md)。
 
 ## 源码与文档
 
@@ -50,15 +50,17 @@ Security 工作流固定同一 Gitleaks 版本和配置，增量检查后扫描�
 
 ## 2026-10-16 公开前复核
 
-- **远端基线 `ee0fa4b`**：独立核查 55 个远端引用、71 个可达提交（主分支 35 个）、1063 个可达 blob。历史、全部可达 blob、当前主分支快照与提交元数据四类 Gitleaks 扫描均零命中；作者与提交者邮箱均为 GitHub noreply，旧私密脚本及未清理提交均不可达。该结果对应此基线，修复分支推送后仍需核对最终提交。
+- **远端基线 `ee0fa4b`**：独立核查 55 个远端引用、71 个可达提交（主分支 35 个）、1063 个可达 blob。历史、全部可达 blob、当前主分支快照与提交元数据四类 Gitleaks 扫描均零命中；作者与提交者邮箱均为 GitHub noreply，旧私密脚本及未清理提交均不可达。
 - **本地工程检查**：前端 27 项测试、lint、应用/管理端/Pages 三个构建全部通过，包含开发依赖的完整 npm audit 零漏洞；后端 275 项测试、compileall、Alembic 单一迁移头 `037` 及开发/生产示例 Compose 校验通过。全新 Python 3.12 后端环境完整审计 99 个包（含临时工具 pip 26.2.1），零漏洞。
 - **可选服务修复**：四个 local-ai 原 requirements 的完整审计发现真实已知漏洞；本轮修复分支更新四份清单及三个 Dockerfile 的 CPU 包约束，补上 Python 3.11 四服务安全审计矩阵和五个 Python 目录的每周 Dependabot 更新。修复后四份清单在 macOS ARM / Python 3.11 下均以默认 PyPI 完整解析并审计为零漏洞；最终采用的 `transformers==5.10.4` 未被撤回（非 yanked）。
 - **CPU 兼容检查**：Linux aarch64 / Python 3.11 干净合并 venv 中，`torch==2.13.0+cpu`、`torchaudio==2.11.0+cpu` 与修复后的相关包真实导入成功，四服务模型入口导入通过；16 kHz → 8 kHz 重采样、Mel 计算、`pip check` 均通过，CUDA 为 `None`。
 - **Linux 依赖复审**：Linux aarch64 / Python 3.11 的默认 PyPI 完整依赖图审计通过，ASR 99、OCR 31、embedding 75、reranker 100 个包均零漏洞、零跳过，包含三个 Torch 服务额外的 CUDA/NVIDIA/triton 依赖。
+- **修复后远端与云端检查**：`d3eb7cc` 的远端固定快照包含主分支 36 个提交、58 个引用及 75 个可达提交，历史与新增元数据 Gitleaks 零命中。该提交的 GitHub [Check](https://github.com/WowCoder/VideoX/actions/runs/38884130867) 和 [Security](https://github.com/WowCoder/VideoX/actions/runs/38884131067) 均已实际成功，包含新增的四服务审计矩阵。机器人引用会继续更新，扫描结论对应已记录快照。
+- **公开结果**：维护者确认平台检查通过并将仓库设为 Public；随后无认证 GitHub API 返回 `visibility=public`、`private=false`，README 可读取，禁用凭据助手的 HTTPS Git 读取成功，主分支为 `d3eb7cc`。平台告警由维护者在公开前核对。
 
-规范 PyPI requirements 依赖图的审计不等于 CPU 镜像所有层或系统库的检查；上述 CPU 验证使用单一合并环境，未下载模型或进行真实推理，不是四个镜像各自的全量验收。本轮 GitHub 云端 x86_64 CI 和 19 条平台告警尚未重新核实，不能据此声称已经通过或清空。仓库仍为 **Private**，维护者已明确授权在审查无阻塞后公开，当前尚未执行该动作。
+规范 PyPI requirements 依赖图的审计不等于 CPU 镜像所有层或系统库的检查；上述 CPU 验证使用单一合并环境，未下载模型或进行真实推理，不是四个镜像各自的全量验收。
 
-## 仓库迁移与公开前确认
+## 仓库迁移与发布流程
 
 2026-10-14 完成三张原图的直接来源比对：NASA 概念图像素一致，月球照片与 NASA ISS038e037342 逐字节一致，银河图与作者 Commons 原图在缩放、转码后匹配。原图全部保留，修正先前错误的 ESA 月球署名；保留 NASA 使用说明和银河图的 CC BY-SA 4.0 署名、来源及变换说明，见 [第三方说明](../THIRD_PARTY_NOTICES.md)。
 
@@ -66,11 +68,13 @@ Security 工作流固定同一 Gitleaks 版本和配置，增量检查后扫描�
 
 `WowCoder/VideoX` 使用独立的新仓库，仅迁入清理后的主分支及其祖先，不采用 Fork 或仓库转移。原仓库的服务器缓存、Actions 日志、附件和未审计引用不属于此次迁移内容。原仓库继续保持 Private，其缓存清除工单不作为独立新仓库公开的前置条件。
 
-新仓库目前仍为 **Private**，Website 留空；完成本轮待验证项并确认无阻塞后，可执行已获授权的公开动作。源码、克隆、Issue、安全反馈链接和 Pages 默认项目路径使用 VideoX。迁移检查点保留了当时的应用标识；后续品牌统一为 VideoX，原有图片保留。Pages 工作流需要仓库为 Public、`PAGES_ENABLED=true` 且分支为 `main` 才会发布，普通 Check 中的静态站构建不发布站点。
+新仓库已为 **Public**，Website 仍留空，Pages 尚未发布。源码、克隆、Issue、安全反馈链接和 Pages 默认项目路径使用 VideoX。迁移检查点保留了当时的应用标识；后续品牌统一为 VideoX，原有图片保留。Pages 工作流需要仓库为 Public、`PAGES_ENABLED=true` 且分支为 `main` 才会发布，普通 Check 中的静态站构建不发布站点。
 
 2026-10-15 已独立确认新仓库的 Description、8 个 Topics 及 Dependency graph、Dependabot alerts、Dependabot security updates 设置；当时有 15 个由新仓库配置自动创建的 Dependabot 依赖 PR，没有从原仓库迁入或自动合并。这是历史记录，不代表本轮 PR 或告警数量。本地默认 `origin` 指向 VideoX，旧私有仓库远端继续保留。
 
-1. 核对新仓库为独立的 Private 仓库，远端主分支与已审核的迁移提交完全一致；检查全部提供的分支、标签、PR 引用及提交元数据，确认没有清理前身份脚本或私人邮箱。
+后续维护或再次迁移时，沿用以下流程：
+
+1. 迁移时先使用独立的 Private 仓库，核对远端主分支与已审核的迁移提交完全一致；检查全部提供的分支、标签、PR 引用及提交元数据，确认没有清理前身份脚本或私人邮箱。
 2. 在新仓库运行 Check 和 Security，以新仓库实际结果为准；独立检查其 Description、Topics 和依赖保护设置。不得用原仓库的设置或 CI 结果代替。
 3. 本轮待验证项、云端 CI 和平台告警核实无阻塞后，将新仓库设为 Public；按届时可用功能配置私密漏洞报告、Secret scanning / Push protection 与主分支保护。
 4. 按 [Pages 指南](github-pages.md)显式设置发布变量、启用 Pages，核对实际站点后再填写 Website URL。当前预计项目路径为 `/VideoX/`，不声称站点已上线。
