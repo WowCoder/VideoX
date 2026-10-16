@@ -40,7 +40,7 @@ jobs:
         working-directory: frontend
       - run: npm run build:pages
         working-directory: frontend
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: frontend/dist-pages
   deploy:
