@@ -30,7 +30,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event.repository.private == false && vars.PAGES_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
