@@ -7,5 +7,5 @@ transformers==5.10.4
 datasets==5.0.1
 fsspec==2026.6.0
 modelscope==1.27.0
-setuptools==83.0.0
+setuptools==84.1.0
 torch==2.13.0
